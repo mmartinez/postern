@@ -1,6 +1,6 @@
 module github.com/mmartinez/postern
 
-go 1.23
+go 1.26.3
 
 require (
 	github.com/google/go-cmp v0.7.0

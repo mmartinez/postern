@@ -1,67 +1,70 @@
-# golangci-lint v1.62 config — full analyzer set per SPEC §5.
+# golangci-lint v2 config — full analyzer set per SPEC §5.
 # Build fails on any finding from any enabled linter.
-
+# Migrated from v1.62 by `golangci-lint migrate` on Go 1.26 bump.
+version: "2"
 run:
-  timeout: 5m
+  go: "1.26"
   tests: true
-  go: "1.23"
-
-linters:
-  disable-all: true
-  enable:
-    - errcheck      # unchecked errors
-    - govet         # stdlib analyzers
-    - staticcheck   # high-quality static analysis
-    - ineffassign   # ineffective assignments
-    - unused        # unused identifiers
-    - gosec         # security issues
-    - gocritic      # opinionated style + correctness
-    - revive        # extensible style linter (replacement for golint)
-    - gofumpt       # stricter gofmt
-    - nilerr        # nil checks against returned errors
-    - bodyclose     # http response body closed
-
-linters-settings:
-  gofumpt:
-    extra-rules: true
-  gosec:
-    # G101 is the hardcoded-credentials check; we want it loud since this
-    # repo handles tokens. No exclusions for now.
-    excludes: []
-  revive:
-    rules:
-      - name: package-comments
-      - name: exported
-      - name: var-naming
-      - name: error-return
-      - name: error-strings
-      - name: errorf
-      - name: receiver-naming
-      - name: range-val-in-closure
-      - name: unused-parameter
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-      - style
-    disabled-checks:
-      # The cobra/viper idiom uses single-letter package-level vars in CLI files;
-      # disable hugeParam complaints since cobra.Command is intentionally passed
-      # by pointer everywhere.
-      - hugeParam
-
-issues:
-  exclude-rules:
-    # Tests can be more liberal — assertion patterns shouldn't trip gosec/errcheck.
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
-        - gocritic
-  exclude-use-default: false
-  max-issues-per-linter: 0
-  max-same-issues: 0
-
 output:
   formats:
-    - format: colored-line-number
+    text:
+      path: stdout
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - nilerr
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    gocritic:
+      disabled-checks:
+        - hugeParam
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+    revive:
+      rules:
+        - name: package-comments
+        - name: exported
+        - name: var-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: receiver-naming
+        - name: range-val-in-closure
+        - name: unused-parameter
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - errcheck
+          - gocritic
+          - gosec
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
