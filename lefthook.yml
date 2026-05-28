@@ -25,20 +25,7 @@ pre-commit:
       run: gitleaks protect --staged --redact --config .gitleaks.toml
 
     banned-strings:
-      # PRD §13.8 hard rule: no vendor brand literals (the marks live elsewhere
-      # — see NOTICE) in source/config files. Case-insensitive.
-      # The gate's own config files are exempt: they enumerate the very strings
-      # they exclude, so they must list them verbatim.
-      run: |
-        if grep -REn -i --include='*.go' --include='*.yaml' --include='*.yml' \
-            --exclude-dir=docs \
-            --exclude='NOTICE' --exclude='README.md' \
-            --exclude='lefthook.yml' --exclude='.gitleaks.toml' \
-            -e '1[ -]?password' -e 'infisical' -e 'agent[ -]?vault' \
-            {staged_files} 2>/dev/null; then
-          echo "banned brand strings found in staged files — see PRD §13.8"
-          exit 1
-        fi
+      run: bash scripts/check-banned-strings.sh {staged_files}
 
 commit-msg:
   commands:

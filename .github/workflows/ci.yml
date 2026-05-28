@@ -1,0 +1,238 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_op_live:
+        description: "Run live SDK contract test against the credential vendor (op-live job)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.23"
+  GOLANGCI_VERSION: "v1.62.2"
+  GITLEAKS_VERSION: "8.21.4"
+  GOFUMPT_VERSION: "v0.7.0"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install gofumpt
+        run: go install mvdan.cc/gofumpt@${{ env.GOFUMPT_VERSION }}
+      - name: gofumpt check
+        run: |
+          out=$(gofumpt -l .)
+          if [ -n "$out" ]; then
+            echo "gofumpt would reformat:"
+            echo "$out"
+            exit 1
+          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: ${{ env.GOLANGCI_VERSION }}
+          args: --timeout=5m
+      - name: banned strings
+        run: bash scripts/check-banned-strings.sh
+
+  typecheck:
+    name: typecheck (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.23.x", "1.24.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  vuln:
+    name: vuln
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
+  licenses:
+    name: licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when generator absent
+        id: gate
+        run: |
+          if [ -f scripts/gen-third-party-notices.sh ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::scripts/gen-third-party-notices.sh not present yet; deferred to slice 6"
+          fi
+      - name: install go-licenses
+        if: steps.gate.outputs.ready == 'true'
+        run: go install github.com/google/go-licenses@latest
+      - name: regenerate + diff
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          bash scripts/gen-third-party-notices.sh
+          if ! git diff --exit-code -- THIRD_PARTY_NOTICES.md; then
+            echo "THIRD_PARTY_NOTICES.md is stale; regenerate locally with 'make licenses' and commit"
+            exit 1
+          fi
+      - name: fail on GPL/AGPL/LGPL
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          if go-licenses report ./... 2>/dev/null | grep -Ei '(^|,)(GPL|AGPL|LGPL)' ; then
+            echo "copyleft license detected; PRD §13.8 hard rule"
+            exit 1
+          fi
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when e2e suite absent
+        id: gate
+        run: |
+          if [ -d test/e2e ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::test/e2e/ not present yet; e2e tests land with T4/T5"
+          fi
+      - name: run e2e
+        if: steps.gate.outputs.ready == 'true'
+        run: go test -tags=e2e ./test/e2e/...
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: install gitleaks
+        run: |
+          curl -fsSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+      - run: gitleaks detect --redact --no-banner --log-opts="--all" --config .gitleaks.toml
+
+  token-keyring-e2e:
+    name: token-keyring-e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when internal/token absent
+        id: gate
+        run: |
+          if [ -d internal/token ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::internal/token not present yet; arrives in T2"
+          fi
+      - name: install keyring deps
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring dbus-x11 libsecret-tools libsecret-1-dev
+      - name: run keyring tests under dbus session
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          dbus-run-session -- bash -lc '
+            echo -n "" | gnome-keyring-daemon --unlock --components=secrets
+            eval "$(echo -n "" | gnome-keyring-daemon --start --components=secrets)"
+            export GNOME_KEYRING_CONTROL DBUS_SESSION_BUS_ADDRESS
+            go test -race -tags=keyring ./internal/token/...
+          '
+
+  devcontainer-build:
+    name: devcontainer-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build devcontainer image
+        run: docker build -f .devcontainer/Dockerfile .
+
+  op-live:
+    name: 1p-live
+    if: github.event_name == 'workflow_dispatch' && inputs.run_op_live == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when internal/onepassword absent
+        id: gate
+        run: |
+          if [ -d internal/onepassword ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::internal/onepassword not present yet; arrives in T2/T5"
+          fi
+      - name: run live SDK contract test
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          OP_E2E: "1"
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: go test -run TestLive ./internal/onepassword/...
