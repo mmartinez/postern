@@ -21,12 +21,13 @@ pre-commit:
       glob: "*.go"
       # golangci-lint accepts package paths, not arbitrary file lists. Derive
       # the unique set of changed package dirs from the staged file list and
-      # pass those to --fast, restricted to new findings (--new-from-rev=HEAD).
+      # pass those to --fast-only (v2 replacement for --fast), restricted to
+      # new findings (--new-from-rev=HEAD).
       run: |
         dirs=$(printf '%s\n' {staged_files} | xargs -n1 dirname | sort -u | sed 's|^|./|')
         if [ -z "$dirs" ]; then exit 0; fi
         # shellcheck disable=SC2086 # word-split intended
-        golangci-lint run --fast --new-from-rev=HEAD $dirs
+        golangci-lint run --fast-only --new-from-rev=HEAD $dirs
 
     secret-scan:
       run: gitleaks protect --staged --redact --config .gitleaks.toml
