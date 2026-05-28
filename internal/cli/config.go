@@ -31,6 +31,7 @@ func NewConfigCmd() *cobra.Command {
 		Short: "Manage postern configuration",
 	}
 	cmd.AddCommand(newConfigInitCmd())
+	cmd.AddCommand(newConfigValidateCmd())
 	return cmd
 }
 
@@ -59,5 +60,39 @@ func newConfigInitCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&path, "config", "", "Path to the config file (default: ~/.postern/config.yaml)")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing config file")
+	return cmd
+}
+
+func newConfigValidateCmd() *cobra.Command {
+	var path string
+	cmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Parse the config and report schema errors with line numbers",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			target := path
+			if target == "" {
+				target = defaultConfigPath()
+			}
+			_, lints, err := config.LoadFile(target)
+			if err != nil {
+				return err
+			}
+
+			var fatal int
+			out := cmd.OutOrStdout()
+			for _, l := range lints {
+				_, _ = fmt.Fprintf(out, "%s: %s\n", target, l.Error())
+				if l.Severity == config.SeverityError {
+					fatal++
+				}
+			}
+			if fatal > 0 {
+				return fmt.Errorf("%s: %d error(s) found", target, fatal)
+			}
+			_, _ = fmt.Fprintf(out, "%s: ok\n", target)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&path, "config", "", "Path to the config file (default: ~/.postern/config.yaml)")
 	return cmd
 }
