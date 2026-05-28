@@ -1,0 +1,67 @@
+# golangci-lint v1.62 config — full analyzer set per SPEC §5.
+# Build fails on any finding from any enabled linter.
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.23"
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck      # unchecked errors
+    - govet         # stdlib analyzers
+    - staticcheck   # high-quality static analysis
+    - ineffassign   # ineffective assignments
+    - unused        # unused identifiers
+    - gosec         # security issues
+    - gocritic      # opinionated style + correctness
+    - revive        # extensible style linter (replacement for golint)
+    - gofumpt       # stricter gofmt
+    - nilerr        # nil checks against returned errors
+    - bodyclose     # http response body closed
+
+linters-settings:
+  gofumpt:
+    extra-rules: true
+  gosec:
+    # G101 is the hardcoded-credentials check; we want it loud since this
+    # repo handles tokens. No exclusions for now.
+    excludes: []
+  revive:
+    rules:
+      - name: package-comments
+      - name: exported
+      - name: var-naming
+      - name: error-return
+      - name: error-strings
+      - name: errorf
+      - name: receiver-naming
+      - name: range-val-in-closure
+      - name: unused-parameter
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      # The cobra/viper idiom uses single-letter package-level vars in CLI files;
+      # disable hugeParam complaints since cobra.Command is intentionally passed
+      # by pointer everywhere.
+      - hugeParam
+
+issues:
+  exclude-rules:
+    # Tests can be more liberal — assertion patterns shouldn't trip gosec/errcheck.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - gocritic
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  formats:
+    - format: colored-line-number

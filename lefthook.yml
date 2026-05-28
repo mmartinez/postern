@@ -1,0 +1,67 @@
+# Local git hooks — runs inside the devcontainer (where lefthook + go tooling live).
+# Installed automatically by .devcontainer/post-create.sh -> `lefthook install`.
+# Never bypass with --no-verify (PRD §13.8 hard rule).
+
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.go"
+      run: |
+        out=$(gofumpt -l -d {staged_files})
+        if [ -n "$out" ]; then
+          echo "gofumpt would reformat these files:"
+          echo "$out"
+          echo
+          echo "run 'make fmt' to fix"
+          exit 1
+        fi
+
+    quick-lint:
+      glob: "*.go"
+      run: golangci-lint run --fast --new-from-rev=HEAD {staged_files}
+
+    secret-scan:
+      run: gitleaks protect --staged --redact --config .gitleaks.toml
+
+    banned-strings:
+      # PRD §13.8 hard rule: no vendor brand literals (the marks live elsewhere
+      # — see NOTICE) in source/config files. Case-insensitive.
+      # The gate's own config files are exempt: they enumerate the very strings
+      # they exclude, so they must list them verbatim.
+      run: |
+        if grep -REn -i --include='*.go' --include='*.yaml' --include='*.yml' \
+            --exclude-dir=docs \
+            --exclude='NOTICE' --exclude='README.md' \
+            --exclude='lefthook.yml' --exclude='.gitleaks.toml' \
+            -e '1[ -]?password' -e 'infisical' -e 'agent[ -]?vault' \
+            {staged_files} 2>/dev/null; then
+          echo "banned brand strings found in staged files — see PRD §13.8"
+          exit 1
+        fi
+
+commit-msg:
+  commands:
+    conventional:
+      # Conventional Commits: type(scope?): subject. Allowed types per SPEC §7.1.
+      run: |
+        head -1 {1} | grep -Eq '^(feat|fix|chore|docs|test|refactor|build|ci|perf)(\([^)]+\))?: .+' || {
+          echo "commit message must follow Conventional Commits:"
+          echo "  <type>(<scope>)?: <subject>"
+          echo "allowed types: feat|fix|chore|docs|test|refactor|build|ci|perf"
+          exit 1
+        }
+
+pre-push:
+  parallel: false
+  commands:
+    full-lint:
+      run: golangci-lint run ./...
+    typecheck:
+      run: go build ./...
+    vet:
+      run: go vet ./...
+    test:
+      run: go test -race -short ./...
+    vuln:
+      run: govulncheck ./...

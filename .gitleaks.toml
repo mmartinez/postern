@@ -1,0 +1,19 @@
+# gitleaks configuration for postern.
+# Inherits the gitleaks default ruleset and adds project-specific allowlist
+# entries for known false positives (NOTICE, README marketing copy, etc).
+
+# Pull in upstream default rules.
+[extend]
+useDefault = true
+
+# Project-specific allowlist (very conservative — anything we add here must
+# be reviewed and justified).
+[[allowlists]]
+description = "Documentation files where brand/secret-shaped marketing copy is intentional"
+paths = [
+    '''^NOTICE$''',
+    '''^LICENSE$''',
+    '''^README\.md$''',
+    '''^THIRD_PARTY_NOTICES\.md$''',
+    '''^docs/.*''',
+]
