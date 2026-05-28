@@ -196,13 +196,14 @@ jobs:
       - name: run keyring tests under dbus session
         if: steps.gate.outputs.ready == 'true'
         run: |
-          # Single-shot daemon start: --daemonize + --login (not --unlock) so
-          # an empty password from stdin both creates the login keyring file
-          # (if absent) and unlocks it without ever invoking the GUI prompter.
-          # The eval pulls in the env vars (GNOME_KEYRING_CONTROL,
-          # SSH_AUTH_SOCK) the daemon prints to stdout.
+          # gnome-keyring-daemon --unlock reads a password from stdin and
+          # creates the default keyring with that password if none exists.
+          # An empty string causes the daemon to fall through to the
+          # graphical SystemPrompter (which crashes on a headless runner —
+          # "Gtk-WARNING: cannot open display"), so we feed a non-empty
+          # throwaway password. The recipe matches aws-vault / pdm CI.
           dbus-run-session -- bash -lc '
-            eval "$(echo -n "" | gnome-keyring-daemon --daemonize --login --components=secrets)"
+            echo "postern-ci-password" | gnome-keyring-daemon --unlock
             go test -race -tags=keyring ./internal/token/...
           '
 
