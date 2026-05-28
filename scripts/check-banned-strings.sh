@@ -2,7 +2,9 @@
 # PRD §13.8 hard rule: no vendor brand literals in source/config files.
 # Files that define the gate (this script, lefthook config, gitleaks config,
 # CI workflows) necessarily contain those strings and are exempt — so are
-# user-facing docs (NOTICE, LICENSE, README, docs/).
+# user-facing docs (NOTICE, LICENSE, README, docs/) and the internal SDK
+# wrapper directory whose entire purpose is to encapsulate the vendor brand
+# coupling (internal/onepassword/).
 #
 # Usage:
 #   scripts/check-banned-strings.sh [file ...]
@@ -18,6 +20,7 @@ is_exempt() {
         NOTICE|LICENSE|README.md|THIRD_PARTY_NOTICES.md) return 0 ;;
         lefthook.yml|.gitleaks.toml) return 0 ;;
         docs/*|.github/*|scripts/check-banned-strings.sh) return 0 ;;
+        internal/onepassword/*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -34,6 +37,7 @@ if [ $# -eq 0 ]; then
     # Whole-tree scan (CI mode). grep -R does its own dir walk.
     if grep -REIn -i --include='*.go' --include='*.yaml' --include='*.yml' \
         --exclude-dir=docs --exclude-dir=.github --exclude-dir=.git \
+        --exclude-dir=onepassword \
         --exclude=NOTICE --exclude=LICENSE --exclude=README.md \
         --exclude=THIRD_PARTY_NOTICES.md \
         --exclude=lefthook.yml --exclude=.gitleaks.toml \
