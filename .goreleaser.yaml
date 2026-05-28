@@ -1,0 +1,99 @@
+# goreleaser v2 config — declared here, not invoked until T8.
+#
+# Scope for M1: linux only (per SPEC §10 / todo T0). macOS support is
+# deferred until there is demand; revisit at M3.
+#
+# Signing + SBOMs are wired up so T8 can flip them on without changing
+# the build matrix.
+
+version: 2
+
+project_name: postern
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: postern
+    main: ./cmd/postern
+    binary: postern
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/mmartinez/postern/internal/version.Version={{.Version}}
+      - -X github.com/mmartinez/postern/internal/version.Commit={{.Commit}}
+      - -X github.com/mmartinez/postern/internal/version.BuildDate={{.Date}}
+
+archives:
+  - id: postern
+    name_template: "postern_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - THIRD_PARTY_NOTICES.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - Merge pull request
+      - Merge branch
+
+# === Signing (declared, activated at T8) ===
+# Keyless OIDC via cosign — runs in CI under GitHub Actions identity.
+# Commented until T8 to avoid surprising snapshot builds; uncomment when
+# the tag pipeline is wired.
+#
+# signs:
+#   - cmd: cosign
+#     args:
+#       - sign-blob
+#       - "--yes"
+#       - "--output-signature=${signature}"
+#       - "${artifact}"
+#     artifacts: all
+#     env:
+#       - COSIGN_EXPERIMENTAL=1
+
+# === SBOM (declared, activated at T8) ===
+# syft produces an SPDX SBOM per artifact.
+#
+# sboms:
+#   - id: archive
+#     artifacts: archive
+#     documents:
+#       - "{{ .ArtifactName }}.sbom.spdx.json"
+
+# === Container image (declared, activated at T8) ===
+# Production image — distinct from .devcontainer/Dockerfile.
+#
+# dockers:
+#   - id: postern-linux-amd64
+#     image_templates:
+#       - "ghcr.io/mmartinez/postern:{{ .Version }}-amd64"
+#       - "ghcr.io/mmartinez/postern:latest-amd64"
+#     dockerfile: Dockerfile
+#     use: buildx
+#     build_flag_templates:
+#       - "--platform=linux/amd64"
