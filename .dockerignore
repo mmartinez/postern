@@ -1,0 +1,26 @@
+# Don't ship build output or local junk into the image build context.
+dist/
+coverage.out
+coverage.html
+*.test
+
+# Planning artifacts never enter the image.
+PRD-*.md
+SPEC.md
+tasks/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local env / secrets — never in image context
+.env
+.env.*
+
+# The git directory is large and not needed for the production image; keep
+# .gitignore visible for tooling that needs it.
+.git/objects
+.git/lfs
