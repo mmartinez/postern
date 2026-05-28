@@ -3,6 +3,7 @@ module github.com/mmartinez/postern
 go 1.26.3
 
 require (
+	github.com/1password/onepassword-sdk-go v0.4.0
 	github.com/99designs/keyring v1.2.2
 	github.com/google/go-cmp v0.7.0
 	github.com/spf13/cobra v1.10.2
@@ -11,11 +12,10 @@ require (
 )
 
 require (
-	github.com/1password/onepassword-sdk-go v0.4.0 // indirect
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/danieljoos/wincred v1.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/dvsekhvalnov/jose2go v1.5.0 // indirect
+	github.com/dvsekhvalnov/jose2go v1.8.0 // indirect
 	github.com/dylibso/observe-sdk/go v0.0.0-20240828172851-9145d8ad07e1 // indirect
 	github.com/extism/go-sdk v1.7.1 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect

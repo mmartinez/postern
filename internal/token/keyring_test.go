@@ -105,3 +105,73 @@ func TestKeyringStoreOverwrite(t *testing.T) {
 		t.Fatalf("Get = %q, want %q", got, "second")
 	}
 }
+
+// failingKeyring is a hand-written keyring.Keyring that returns the
+// configured error from every method. It exists to cover the non-ErrKeyNotFound
+// error-wrap branches in KeyringStore, which ArrayKeyring's happy path
+// can't exercise.
+type failingKeyring struct{ err error }
+
+func (f failingKeyring) Get(string) (keyringlib.Item, error) {
+	return keyringlib.Item{}, f.err
+}
+
+func (failingKeyring) GetMetadata(string) (keyringlib.Metadata, error) {
+	return keyringlib.Metadata{}, nil
+}
+
+func (f failingKeyring) Set(keyringlib.Item) error { return f.err }
+func (f failingKeyring) Remove(string) error       { return f.err }
+func (failingKeyring) Keys() ([]string, error)     { return nil, nil }
+
+func TestKeyringStoreSetWrapsBackendError(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("write protected")
+	s := token.NewKeyringStore(failingKeyring{err: sentinel}, "broken")
+
+	err := s.Set(context.Background(), "acct", "v")
+	if err == nil || !errors.Is(err, sentinel) {
+		t.Fatalf("Set err = %v, want wrap of %v", err, sentinel)
+	}
+}
+
+func TestKeyringStoreGetWrapsNonNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("connection refused")
+	s := token.NewKeyringStore(failingKeyring{err: sentinel}, "broken")
+
+	_, err := s.Get(context.Background(), "acct")
+	if err == nil {
+		t.Fatalf("Get returned nil error")
+	}
+	if errors.Is(err, token.ErrNotFound) {
+		t.Fatalf("Get err = %v should not match ErrNotFound for a non-not-found backend error", err)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Get err = %v should wrap %v", err, sentinel)
+	}
+}
+
+func TestKeyringStoreDeleteWrapsNonNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("backend gone")
+	s := token.NewKeyringStore(failingKeyring{err: sentinel}, "broken")
+
+	err := s.Delete(context.Background(), "acct")
+	if err == nil || !errors.Is(err, sentinel) {
+		t.Fatalf("Delete err = %v, want wrap of %v", err, sentinel)
+	}
+}
+
+func TestKeyringStoreDeleteMissingIsNoop(t *testing.T) {
+	t.Parallel()
+
+	// ErrKeyNotFound from the backend on a Remove must map to nil (idempotent).
+	s := token.NewKeyringStore(failingKeyring{err: keyringlib.ErrKeyNotFound}, "test")
+	if err := s.Delete(context.Background(), "missing"); err != nil {
+		t.Fatalf("Delete on ErrKeyNotFound backend = %v, want nil", err)
+	}
+}
