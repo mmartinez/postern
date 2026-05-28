@@ -3,7 +3,7 @@
 # Migrated from v1.62 by `golangci-lint migrate` on Go 1.26 bump.
 version: "2"
 run:
-  go: "1.25"
+  go: "1.26"
   tests: true
 output:
   formats:
