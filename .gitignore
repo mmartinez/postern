@@ -1,0 +1,27 @@
+# Planning artifacts (untracked per project policy)
+PRD-*.md
+SPEC.md
+tasks/
+
+# Go build output
+/postern
+/dist/
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go tooling
+vendor/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local env / secrets — never commit
+.env
+.env.*
+!.env.example
