@@ -196,10 +196,13 @@ jobs:
       - name: run keyring tests under dbus session
         if: steps.gate.outputs.ready == 'true'
         run: |
+          # Single-shot daemon start: --daemonize + --login (not --unlock) so
+          # an empty password from stdin both creates the login keyring file
+          # (if absent) and unlocks it without ever invoking the GUI prompter.
+          # The eval pulls in the env vars (GNOME_KEYRING_CONTROL,
+          # SSH_AUTH_SOCK) the daemon prints to stdout.
           dbus-run-session -- bash -lc '
-            echo -n "" | gnome-keyring-daemon --unlock --components=secrets
-            eval "$(echo -n "" | gnome-keyring-daemon --start --components=secrets)"
-            export GNOME_KEYRING_CONTROL DBUS_SESSION_BUS_ADDRESS
+            eval "$(echo -n "" | gnome-keyring-daemon --daemonize --login --components=secrets)"
             go test -race -tags=keyring ./internal/token/...
           '
 
