@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/mmartinez/postern/internal/cli"
 	"github.com/mmartinez/postern/internal/version"
 )
 
@@ -23,6 +24,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	cmd.AddCommand(cli.NewConfigCmd())
 	return cmd
 }
 

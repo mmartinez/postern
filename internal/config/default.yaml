@@ -1,0 +1,51 @@
+# postern configuration
+# ----------------------
+# Default config written by `postern config init`. Edit the rules: section
+# to broker credentials for the APIs your agent calls. The token: and
+# proxy: sections are usually fine as-is for local development.
+#
+# Schema reference (full validation rules): SPEC.md §8 (in the repo).
+#
+# Hot reload: postern watches this file (T7) and reloads on save. Bad
+# configs are rejected with line numbers; the running config keeps serving.
+
+token:
+  # auto | keychain | env | file. "auto" tries file → env → keychain in order.
+  source: auto
+  # Environment variable consulted when source is "auto" or "env".
+  env_var: OP_SERVICE_ACCOUNT_TOKEN
+  # Path to a 0600 token file (e.g. /run/secrets/op_token in container deployments).
+  file: ""
+  # Account label used when storing/retrieving from the OS keychain.
+  keychain_account: default
+
+proxy:
+  # host:port the proxy listens on. Set HTTPS_PROXY to this in your agent shell.
+  listen: 127.0.0.1:14321
+  # How long to cache a resolved credential before re-fetching.
+  cache_ttl: 5m
+  # What to do when no rule matches an outbound request.
+  # passthrough = forward unchanged. block = refuse with 502.
+  on_no_match: passthrough
+
+rules:
+  - host: api.anthropic.com
+    secret_ref: op://Agents/Anthropic/api_key
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+
+  - host: api.openai.com
+    secret_ref: op://Agents/OpenAI/api_key
+    inject:
+      type: header
+      name: authorization
+      template: "Bearer {{ CREDENTIAL }}"
+
+  - host: api.github.com
+    secret_ref: op://Agents/GitHub/pat
+    inject:
+      type: header
+      name: authorization
+      template: "Bearer {{ CREDENTIAL }}"
