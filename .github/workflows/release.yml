@@ -1,19 +1,23 @@
 name: release
 
-# Tag-triggered full release. Builds the CGO matrix with zig, signs the
-# checksums and the pushed manifests with keyless cosign, and pushes the
-# multi-arch image to ghcr.io. The snapshot CI job in ci.yml exercises the same
-# goreleaser config minus signing and push, so the only steps that first run for
-# real here are cosign (needs OIDC) and the ghcr push (needs a tag).
+# Release-please drives versioning. Conventional-commit pushes to main keep a
+# Release PR up to date (version bump + CHANGELOG); merging that PR creates the
+# tag and GitHub Release. The goreleaser job runs in the SAME workflow run,
+# gated on release_created — the default GITHUB_TOKEN cannot trigger a separate
+# tag-triggered workflow, so the build runs here rather than via on:push:tags.
+# release-please owns the release body (CHANGELOG); goreleaser uploads the
+# binaries, checksums, SBOMs, cosign bundle and image onto it
+# (release.mode: keep-existing in .goreleaser.yaml).
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
-  contents: write # create the GitHub release and upload assets
-  packages: write # push the image to ghcr.io
-  id-token: write # keyless cosign signing via GitHub OIDC
+  contents: write # release-please: open/update the Release PR and create the release/tag; goreleaser: upload assets
+  pull-requests: write # release-please: manage the Release PR
+  packages: write # goreleaser: push the image to ghcr.io
+  id-token: write # goreleaser: keyless cosign signing via GitHub OIDC
 
 env:
   GO_VERSION: "1.26"
@@ -23,12 +27,30 @@ env:
   ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
 
 jobs:
-  release:
-    name: release
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # config-file and manifest-file default to release-please-config.json
+          # and .release-please-manifest.json at the repo root.
+
+  goreleaser:
+    name: goreleaser
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
+          # Build the exact commit release-please tagged, not the branch head.
+          ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:

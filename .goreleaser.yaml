@@ -64,6 +64,14 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# release-please creates the GitHub Release (with CHANGELOG notes) when the
+# Release PR merges; the goreleaser job then uploads the archives, checksums,
+# SBOMs and cosign bundle onto that existing release. keep-existing is the
+# goreleaser default, pinned explicitly so a future default change can't
+# overwrite release-please's notes. See .github/workflows/release.yml.
+release:
+  mode: keep-existing
+
 snapshot:
   # `-` not `+`: this version becomes a docker image tag, and tags reject `+`.
   version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
