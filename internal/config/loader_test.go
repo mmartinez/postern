@@ -22,7 +22,7 @@ func TestLoadFile_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, lints)
 	require.NotNil(t, cfg)
-	require.Equal(t, "127.0.0.1:14321", cfg.Proxy.Listen)
+	require.Equal(t, "127.0.0.1:1701", cfg.Proxy.Listen)
 }
 
 func TestLoadFile_NotFound(t *testing.T) {
@@ -73,7 +73,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -96,7 +96,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -116,7 +116,7 @@ func TestValidate_MissingInjectType(t *testing.T) {
 	t.Parallel()
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:

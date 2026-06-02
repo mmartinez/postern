@@ -28,7 +28,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -58,7 +58,7 @@ func TestLoadAndValidateWithProviders_FlagsUnknownProvider(t *testing.T) {
 
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 credstores:
@@ -99,7 +99,7 @@ func TestLoadAndValidateWithProviders_FlagsRejectedSettingsWithLine(t *testing.T
 
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 credstores:
@@ -144,7 +144,7 @@ func TestLoadAndValidateWithProviders_AcceptsValidSettings(t *testing.T) {
 
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 credstores:
@@ -176,7 +176,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:

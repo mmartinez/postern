@@ -31,7 +31,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -68,7 +68,7 @@ credstores:
       source: env
       env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules: []
@@ -88,7 +88,7 @@ credstores:
       source: env
       env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -121,7 +121,7 @@ credstores:
       source: env
       env_var: B
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules: []
@@ -141,7 +141,7 @@ credstores:
       source: env
       env_var: A
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules: []
@@ -161,7 +161,7 @@ credstores:
       source: env
       env_var: A
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules: []
@@ -189,7 +189,7 @@ credstores:
       server_url: https://vault.example.com
       bws_path: /usr/local/bin/bws
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules: []
@@ -218,7 +218,7 @@ credstores:
       source: env
       env_var: BW_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -247,7 +247,7 @@ credstores:
       source: env
       env_var: A
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules: []
@@ -275,7 +275,7 @@ credstores:
       source: env
       env_var: B
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules: []
@@ -292,7 +292,7 @@ func TestValidate_RulesRequireCredStores(t *testing.T) {
 
 	_, lints, err := config.LoadAndValidate(strings.NewReader(`
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:

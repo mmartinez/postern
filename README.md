@@ -21,7 +21,7 @@ Your agent makes a normal request through the proxy, with **no `Authorization`
 header**:
 
 ```sh
-curl -x http://localhost:14321 \
+curl -x http://localhost:1701 \
   https://api.anthropic.com/v1/messages \
   -d '{ "model": "claude-sonnet-4-6", "messages": [ ... ] }'
 #  ↑ no API key anywhere in the agent's environment or request
@@ -119,7 +119,7 @@ credstores:
       env_var: OP_SERVICE_ACCOUNT_TOKEN
 
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
 
 rules:
@@ -147,7 +147,7 @@ secret and the CA mounted read-only. It expects two files alongside it:
     source: file
     file: /run/secrets/op_token
   proxy:
-    listen: 0.0.0.0:14321
+    listen: 0.0.0.0:1701
     cache_ttl: 5m
   rules:
     - host: api.anthropic.com
@@ -173,7 +173,7 @@ Distribute `./postern-ca/.postern/ca.pem` to your agents, point them at the
 proxy, and have them trust the CA:
 
 ```sh
-export HTTPS_PROXY=http://localhost:14321
+export HTTPS_PROXY=http://localhost:1701
 export SSL_CERT_FILE=/path/to/ca.pem                   # NODE_EXTRA_CA_CERTS for Node-based agents
 ```
 

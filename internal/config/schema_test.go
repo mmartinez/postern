@@ -26,7 +26,7 @@ func TestSchemaRoundTrip(t *testing.T) {
 			KeychainAccount: "default",
 		},
 		Proxy: config.Proxy{
-			Listen:    "127.0.0.1:14321",
+			Listen:    "127.0.0.1:1701",
 			CacheTTL:  5 * time.Minute,
 			OnNoMatch: config.OnNoMatchPassthrough,
 		},

@@ -72,7 +72,7 @@ distinction.
 
 ```yaml
 proxy:
-  listen: 127.0.0.1:14321     # host:port to listen on
+  listen: 127.0.0.1:1701     # host:port to listen on
   cache_ttl: 5m               # how long a resolved credential is cached
   on_no_match: passthrough    # passthrough | block
 ```
@@ -89,7 +89,7 @@ proxy:
 >
 > **Note — `listen`.** `postern bootstrap` reads `proxy.listen` when emitting
 > the agent's `HTTPS_PROXY` snippet. `postern server` currently also accepts an
-> `--addr` flag (default `127.0.0.1:14321`); aligning the server's bind to
+> `--addr` flag (default `127.0.0.1:1701`); aligning the server's bind to
 > `proxy.listen` is in progress, so keep the two in sync for now.
 
 ## `rules`

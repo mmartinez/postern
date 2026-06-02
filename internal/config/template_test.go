@@ -20,7 +20,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -52,7 +52,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -81,7 +81,7 @@ func TestTemplate_UnknownNameIsLintError(t *testing.T) {
 
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -111,7 +111,7 @@ func TestTemplate_StillRequiresSecretRef(t *testing.T) {
 
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -142,7 +142,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -170,7 +170,7 @@ func TestTemplate_UnknownNameMentionsValidNames(t *testing.T) {
 
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:

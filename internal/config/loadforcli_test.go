@@ -21,7 +21,7 @@ func TestLoadForCLI_ValidFile(t *testing.T) {
 	cfg, err := config.LoadForCLI(path, true)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
-	require.Equal(t, "127.0.0.1:14321", cfg.Proxy.Listen)
+	require.Equal(t, "127.0.0.1:1701", cfg.Proxy.Listen)
 }
 
 func TestLoadForCLI_MissingOptional(t *testing.T) {

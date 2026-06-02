@@ -227,7 +227,7 @@ func TestRunReloader_WarnsOnBaselineDrift(t *testing.T) {
 
 	baseline := &broker.Baseline{
 		Proxy: config.Proxy{
-			Listen:    "127.0.0.1:14321",
+			Listen:    "127.0.0.1:1701",
 			CacheTTL:  15 * time.Minute,
 			OnNoMatch: config.OnNoMatchPassthrough,
 		},
@@ -256,7 +256,7 @@ func TestRunReloader_WarnsOnBaselineDrift(t *testing.T) {
 	events <- config.Event{
 		New: &config.Config{
 			Proxy: config.Proxy{
-				Listen:    "127.0.0.1:14321",
+				Listen:    "127.0.0.1:1701",
 				CacheTTL:  1 * time.Hour,
 				OnNoMatch: config.OnNoMatchPassthrough,
 			},
@@ -287,7 +287,7 @@ func TestRunReloader_DoesNotWarnOnCredStoreReorder(t *testing.T) {
 	}
 	baseline := &broker.Baseline{
 		Proxy: config.Proxy{
-			Listen:    "127.0.0.1:14321",
+			Listen:    "127.0.0.1:1701",
 			CacheTTL:  15 * time.Minute,
 			OnNoMatch: config.OnNoMatchPassthrough,
 		},
@@ -339,7 +339,7 @@ func TestRunReloader_WarnsOnCredStoreSettingsDrift(t *testing.T) {
 
 	baseline := &broker.Baseline{
 		Proxy: config.Proxy{
-			Listen:    "127.0.0.1:14321",
+			Listen:    "127.0.0.1:1701",
 			CacheTTL:  15 * time.Minute,
 			OnNoMatch: config.OnNoMatchPassthrough,
 		},

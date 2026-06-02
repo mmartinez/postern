@@ -12,8 +12,8 @@ FROM gcr.io/distroless/base-debian12:nonroot
 COPY postern /usr/local/bin/postern
 
 # Default proxy port (proxy.listen in config.yaml). In container deployments set
-# proxy.listen to 0.0.0.0:14321 so the agent container can reach the proxy.
-EXPOSE 14321
+# proxy.listen to 0.0.0.0:1701 so the agent container can reach the proxy.
+EXPOSE 1701
 
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/postern"]

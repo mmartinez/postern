@@ -21,7 +21,7 @@ token:
 
 proxy:
   # host:port the proxy listens on. Set HTTPS_PROXY to this in your agent shell.
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   # How long to cache a resolved credential before re-fetching.
   cache_ttl: 5m
   # What to do when no rule matches an outbound request.

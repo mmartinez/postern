@@ -172,7 +172,7 @@ token:
   source: env
   env_var: OP_SERVICE_ACCOUNT_TOKEN
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:

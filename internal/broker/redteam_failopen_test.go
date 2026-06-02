@@ -27,7 +27,7 @@ func TestRedTeam_NoPlaceholderTemplate_FailsClosed(t *testing.T) {
 	// Layer 1 — config validation rejects it as a FATAL lint, so the proxy
 	// never boots (or hot-reloads) into the fail-open state.
 	lints := config.Validate(&config.Config{
-		Proxy:      config.Proxy{Listen: "127.0.0.1:14321", CacheTTL: 1, OnNoMatch: config.OnNoMatchPassthrough},
+		Proxy:      config.Proxy{Listen: "127.0.0.1:1701", CacheTTL: 1, OnNoMatch: config.OnNoMatchPassthrough},
 		CredStores: []config.CredStore{{Name: "d", Provider: "test-provider"}},
 		Rules: []config.Rule{{
 			Host:      "127.0.0.1",

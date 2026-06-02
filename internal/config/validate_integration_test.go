@@ -24,7 +24,7 @@ func TestPosternConfigValidateRejectsBadRuleWithLineNumber(t *testing.T) {
 	cfg := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(cfg, []byte(`
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:

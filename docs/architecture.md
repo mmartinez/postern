@@ -16,7 +16,7 @@ placeholder), and postern attaches the real credential on the way out.
 ## Request lifecycle
 
 ```
-agent                     postern (127.0.0.1:14321)                 upstream
+agent                     postern (127.0.0.1:1701)                 upstream
   │                              │                                     │
   │  CONNECT api.example.com:443 │                                     │
   ├─────────────────────────────▶                                     │

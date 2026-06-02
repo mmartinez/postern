@@ -25,7 +25,7 @@ token:
   file: ""
   keychain_account: default
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -57,7 +57,7 @@ func TestLoadAndValidate(t *testing.T) {
 			name: "missing rule host",
 			yaml: `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -95,7 +95,7 @@ rules:
 			name: "duplicate host",
 			yaml: `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -124,7 +124,7 @@ rules:
 		},
 		{
 			name: "bad listen address",
-			yaml: strings.Replace(validConfig, "127.0.0.1:14321", "no-port", 1),
+			yaml: strings.Replace(validConfig, "127.0.0.1:1701", "no-port", 1),
 			wantLints: func(t *testing.T, lints []config.LintError) {
 				requireLintContains(t, lints, "listen")
 			},
@@ -133,7 +133,7 @@ rules:
 			name: "header inject missing name",
 			yaml: `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -151,7 +151,7 @@ rules:
 			name: "placeholder inject missing name is fatal",
 			yaml: `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
@@ -237,7 +237,7 @@ func TestLintErrorIncludesLineNumber(t *testing.T) {
 	// Bad secret_ref is on a specific line — confirm we report it.
 	doc := `
 proxy:
-  listen: 127.0.0.1:14321
+  listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:

@@ -133,7 +133,7 @@ type Proxy struct {
 // is configured. It is the schema-level default for Proxy.Listen: the CLI
 // uses it as the --addr flag default and as bootstrap's fallback. The
 // embedded default.yaml carries the same literal as the YAML source of truth.
-const DefaultListenAddr = "127.0.0.1:14321"
+const DefaultListenAddr = "127.0.0.1:1701"
 
 // Rule is a single host-matching credential broker entry.
 //
