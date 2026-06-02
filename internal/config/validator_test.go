@@ -148,6 +148,31 @@ rules:
 			},
 		},
 		{
+			name: "placeholder inject missing name is fatal",
+			yaml: `
+proxy:
+  listen: 127.0.0.1:14321
+  cache_ttl: 5m
+  on_no_match: passthrough
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: placeholder
+      template: "{{ CREDENTIAL }}"
+`,
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				// Fatal: an empty placeholder token matches the empty substring
+				// in every header value and smears the credential across every
+				// header. Reject at validate time so the proxy never boots (or
+				// hot-reloads) into that state.
+				requireLintContains(t, lints, "name")
+				if !anyOfSeverity(lints, config.SeverityError) {
+					t.Errorf("expected severity=error; got %v", lints)
+				}
+			},
+		},
+		{
 			name: "template missing CREDENTIAL placeholder is fatal",
 			yaml: strings.Replace(validConfig,
 				`"{{ CREDENTIAL }}"`,

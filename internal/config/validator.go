@@ -186,7 +186,12 @@ func (v *validator) checkInject(base string, in Inject) {
 			v.add(base+".name", "name is required when inject.type=header", SeverityError)
 		}
 	case InjectTypePlaceholder:
-		// no name needed
+		if in.Name == "" {
+			// An empty placeholder token matches the empty substring in every
+			// header value, smearing the credential across every header. Reject
+			// it so the proxy never boots (or hot-reloads) into that state.
+			v.add(base+".name", "name (the placeholder token to replace) is required when inject.type=placeholder", SeverityError)
+		}
 	case "":
 		v.add(base+".type", "inject.type is required (header|placeholder)", SeverityError)
 	default:

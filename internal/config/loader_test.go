@@ -62,10 +62,12 @@ func TestLintError_Format(t *testing.T) {
 	}
 }
 
-func TestValidate_PlaceholderInjectAcceptsMissingName(t *testing.T) {
+func TestValidate_PlaceholderInjectRequiresName(t *testing.T) {
 	t.Parallel()
 
-	// inject.type=placeholder does not require a header name.
+	// inject.type=placeholder requires name: it is the token replaced in every
+	// header value. An empty token matches the empty substring everywhere and
+	// would smear the credential across every header, so it is rejected.
 	doc := `
 token:
   source: env
@@ -80,6 +82,30 @@ rules:
     inject:
       type: placeholder
       template: "__placeholder__ {{ CREDENTIAL }}"
+`
+	_, lints, err := config.LoadAndValidate(strings.NewReader(doc))
+	require.NoError(t, err)
+	requireLintContains(t, lints, "name")
+}
+
+func TestValidate_PlaceholderInjectWithNameIsValid(t *testing.T) {
+	t.Parallel()
+
+	doc := `
+token:
+  source: env
+  env_var: OP_SERVICE_ACCOUNT_TOKEN
+proxy:
+  listen: 127.0.0.1:14321
+  cache_ttl: 5m
+  on_no_match: passthrough
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: placeholder
+      name: __placeholder__
+      template: "{{ CREDENTIAL }}"
 `
 	_, lints, err := config.LoadAndValidate(strings.NewReader(doc))
 	require.NoError(t, err)

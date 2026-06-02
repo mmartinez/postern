@@ -151,6 +151,34 @@ func TestInjectPlaceholder_NoMatchReturnsErrNoPlaceholder(t *testing.T) {
 	}
 }
 
+// A placeholder rule whose token (Inject.Name) is empty must fail closed. An
+// empty token matches the empty substring in every header value, so the naive
+// strings.ReplaceAll would smear the credential across every header — including
+// agent-controlled, agent-readable ones. The request must be left unmutated so
+// nothing leaks.
+func TestInjectPlaceholder_EmptyTokenFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	r := broker.Rule{
+		Host: "api.example.com",
+		Injection: broker.InjectSpec{
+			Type:     broker.InjectPlaceholder,
+			Name:     "",
+			Template: "{{ CREDENTIAL }}",
+		},
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/v1/ping", http.NoBody)
+	req.Header.Set("user-agent", "agent/1.0")
+
+	err := r.Inject(req, "sk-real-secret")
+	if !errors.Is(err, broker.ErrEmptyPlaceholderToken) {
+		t.Fatalf("Inject with empty placeholder token: got %v, want ErrEmptyPlaceholderToken", err)
+	}
+	if got := req.Header.Get("user-agent"); got != "agent/1.0" {
+		t.Fatalf("user-agent mutated to %q; credential must not smear into headers", got)
+	}
+}
+
 func TestInject_UnknownTypeReturnsError(t *testing.T) {
 	t.Parallel()
 

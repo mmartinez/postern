@@ -22,6 +22,16 @@ var ErrNoPlaceholder = errors.New("broker: placeholder token not found in any he
 // symmetric with placeholder mode's ErrNoPlaceholder guard.
 var ErrNoCredentialPlaceholder = errors.New("broker: inject template contains no {{ CREDENTIAL }} placeholder")
 
+// ErrEmptyPlaceholderToken is returned by Inject in placeholder mode when the
+// placeholder token (InjectSpec.Name) is empty. An empty token is contained in
+// every header value, so the substitution would smear the credential across
+// every header — including agent-controlled, agent-readable ones — rather than
+// replace a single intended token. The broker fails closed instead. The config
+// validator rejects an empty placeholder name; this is the defense-in-depth
+// backstop for any path (a future caller, or a hot-reload edge) that reaches
+// Inject without that check.
+var ErrEmptyPlaceholderToken = errors.New("broker: empty placeholder token")
+
 // InjectType selects the strategy used by Rule.Inject. The zero value is
 // invalid and signals an unconfigured rule.
 type InjectType int
@@ -86,6 +96,12 @@ func (r Rule) Inject(req *http.Request, credential string) error {
 		req.Header.Set(r.Injection.Name, Render(r.Injection.Template, credential))
 		return nil
 	case InjectPlaceholder:
+		// An empty token matches the empty substring in every header value, so
+		// the substitution below would smear the credential across every header.
+		// Fail closed rather than leak it.
+		if r.Injection.Name == "" {
+			return ErrEmptyPlaceholderToken
+		}
 		value := Render(r.Injection.Template, credential)
 		substitutions := 0
 		for k, vs := range req.Header {
