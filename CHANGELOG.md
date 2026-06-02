@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/mmartinez/postern/compare/v0.1.0...v0.1.1) (2026-06-02)
+
+
+### Bug Fixes
+
+* **release:** publish release-please draft so assets survive immutable releases ([c58b010](https://github.com/mmartinez/postern/commit/c58b010fd60e26f015115b5a17b5e13d953d0b6d))
+
 ## [0.1.0](https://github.com/mmartinez/postern/compare/v0.0.1...v0.1.0) (2026-06-02)
 
 
