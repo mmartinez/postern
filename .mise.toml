@@ -7,7 +7,7 @@ golangci-lint  = "2.12"
 gofumpt        = "0.7"
 lefthook       = "1.10"
 gitleaks       = "8.21"
-goreleaser     = "2.4"
+goreleaser     = "2.16"
 # Release-only tooling. syft generates SBOMs during a goreleaser run; zig is
 # the C cross-compiler for the CGO build matrix — the credential SDK
 # (internal/credstore/onepassword) forces CGO_ENABLED=1, so a stock gcc cannot

@@ -31,7 +31,7 @@ env:
   # "2.4") because the config uses the 2.4-era `archives.format` field, which
   # newer goreleaser rejects in favor of `formats`. zig is the cross C compiler
   # for the CGO matrix (see .goreleaser.yaml); pinned with a checksum.
-  GORELEASER_VERSION: "v2.4.8"
+  GORELEASER_VERSION: "v2.16.0"
   ZIG_VERSION: "0.14.0"
   ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
 
@@ -273,7 +273,7 @@ jobs:
       - name: install syft (SBOM generation)
         uses: anchore/sbom-action/download-syft@v0
       - name: goreleaser snapshot
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: ${{ env.GORELEASER_VERSION }}
