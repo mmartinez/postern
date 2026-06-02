@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -143,7 +144,11 @@ func Load(dir string) (*CA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read ca cert: %w", err)
 	}
-	keyPEM, err := os.ReadFile(filepath.Join(dir, caKeyFile)) //nolint:gosec // user-supplied path is intentional
+	keyPath := filepath.Join(dir, caKeyFile)
+	if err := checkKeyPerms(keyPath); err != nil {
+		return nil, err
+	}
+	keyPEM, err := os.ReadFile(keyPath) //nolint:gosec // user-supplied path is intentional
 	if err != nil {
 		return nil, fmt.Errorf("read ca key: %w", err)
 	}
@@ -182,6 +187,25 @@ func DefaultDir() (string, error) {
 		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".postern"), nil
+}
+
+// checkKeyPerms refuses a CA key file readable by group or other. Save writes
+// the key 0600, so any looser mode signals tampering or a careless chmod; the
+// key is the root of postern's MITM trust, so Load fails closed rather than
+// use it. The check is skipped on Windows, where Go synthesizes Unix
+// permission bits that do not reflect the real ACL.
+func checkKeyPerms(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat ca key: %w", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("ca key %s has insecure permissions %#o: must be 0600 (no group or other access); run `chmod 600 %s`", path, perm, path)
+	}
+	return nil
 }
 
 // writeFileMode writes data to path with the given mode atomically enough for

@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -203,4 +204,26 @@ func TestLoad_WrongKeyPEMType(t *testing.T) {
 
 	_, err := ca.Load(dir)
 	require.Error(t, err)
+}
+
+// Load must refuse a CA key whose mode grants any group/other bit. Save writes
+// it 0600; a looser mode signals tampering or a careless chmod, and the key is
+// the root of postern's MITM trust, so Load fails closed rather than use it.
+// Skipped on Windows, where Go synthesizes Unix permission bits that don't
+// reflect the real ACL.
+func TestLoad_RejectsGroupReadableKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file permissions not enforced on windows")
+	}
+	t.Parallel()
+	dir := t.TempDir()
+	c := genFixed(t)
+	require.NoError(t, c.Save(dir))
+
+	// Loosen the key to group- and other-readable (0644).
+	require.NoError(t, os.Chmod(filepath.Join(dir, "ca.key"), 0o644))
+
+	_, err := ca.Load(dir)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "permission")
 }
