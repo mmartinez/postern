@@ -1,0 +1,46 @@
+{
+  "name": "postern",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "USERNAME": "dev",
+      "USER_UID": "1000",
+      "USER_GID": "1000"
+    }
+  },
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+  "workspaceFolder": "/workspaces/postern",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/postern,type=bind,consistency=cached",
+
+  "mounts": [
+    "source=postern-go-mod,target=/home/dev/go/pkg/mod,type=volume",
+    "source=postern-go-build,target=/home/dev/.cache/go-build,type=volume"
+  ],
+
+  "containerEnv": {
+    "GOPATH": "/home/dev/go",
+    "GOMODCACHE": "/home/dev/go/pkg/mod",
+    "GOCACHE": "/home/dev/.cache/go-build",
+    "PATH": "/home/dev/.local/share/mise/shims:/home/dev/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  "forwardPorts": [14321],
+  "portsAttributes": {
+    "14321": {
+      "label": "postern proxy",
+      "onAutoForward": "silent"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
+}

@@ -1,0 +1,160 @@
+# goreleaser v2 config.
+#
+# Scope: linux only. macOS support is deferred until there is demand.
+#
+# `make snapshot` and the snapshot CI job exercise everything below except
+# signing and ghcr push (those need a real tag run under GitHub OIDC — see
+# .github/workflows/release.yml). Container image: see Dockerfile + the
+# `dockers`/`docker_manifests` blocks.
+
+version: 2
+
+project_name: postern
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  # The credential SDK (internal/credstore/onepassword) forces CGO_ENABLED=1
+  # (its no-cgo path is a deliberate compile wall). A stock gcc only emits
+  # host-arch objects, so cross-compiling
+  # the C half of the matrix needs a cross C compiler: zig cc, pinned to a
+  # glibc 2.31 floor so the binaries run on the distroless/base runtime image
+  # (glibc 2.36) and on older hosts via the tarball install path.
+  - id: postern
+    main: ./cmd/postern
+    binary: postern
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    overrides:
+      - goos: linux
+        goarch: amd64
+        env:
+          - CC=zig cc -target x86_64-linux-gnu.2.31
+          - CXX=zig c++ -target x86_64-linux-gnu.2.31
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=zig cc -target aarch64-linux-gnu.2.31
+          - CXX=zig c++ -target aarch64-linux-gnu.2.31
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/mmartinez/postern/internal/version.Version={{.Version}}
+      - -X github.com/mmartinez/postern/internal/version.Commit={{.Commit}}
+      - -X github.com/mmartinez/postern/internal/version.BuildDate={{.Date}}
+
+archives:
+  - id: postern
+    name_template: "postern_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - THIRD_PARTY_NOTICES.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  # `-` not `+`: this version becomes a docker image tag, and tags reject `+`.
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - Merge pull request
+      - Merge branch
+
+# === Signing ===
+# Keyless cosign (OIDC via GitHub Actions; no private key). Signs the checksums
+# file into a sigstore bundle — verifying it covers every artifact by digest.
+# --snapshot does NOT imply skipping this, so snapshot/PR runs pass --skip=sign
+# (there is no OIDC token or cosign there); a real tag run signs for real.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+# === SBOM ===
+# syft produces an SPDX-JSON SBOM per archive. Runs in snapshot and release.
+sboms:
+  - id: archive
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.sbom.spdx.json"
+
+# === Container image ===
+# Production image (distroless/base, non-root, multi-arch). Built per-arch on
+# snapshot (no push) and pushed as a manifest to ghcr on a real tag (see
+# release.yml). Image signing (docker_signs, keyless) is wired in release.yml.
+dockers:
+  - id: postern-amd64
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/mmartinez/postern:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title=postern"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/mmartinez/postern"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: postern-arm64
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/mmartinez/postern:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title=postern"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/mmartinez/postern"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+docker_manifests:
+  - name_template: "ghcr.io/mmartinez/postern:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/mmartinez/postern:{{ .Version }}-amd64"
+      - "ghcr.io/mmartinez/postern:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/mmartinez/postern:latest"
+    image_templates:
+      - "ghcr.io/mmartinez/postern:{{ .Version }}-amd64"
+      - "ghcr.io/mmartinez/postern:{{ .Version }}-arm64"
+
+# Sign the pushed multi-arch manifests by digest with keyless cosign. Snapshot/
+# PR runs pass --skip=sign (which also covers this); only a real tag run, which
+# pushes the images, has a digest to sign.
+docker_signs:
+  - cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+    artifacts: manifests
+    output: true

@@ -1,0 +1,72 @@
+# golangci-lint v2 config — full analyzer set.
+# Build fails on any finding from any enabled linter.
+# Migrated from v1.62 by `golangci-lint migrate` on Go 1.26 bump.
+version: "2"
+run:
+  go: "1.26"
+  tests: true
+output:
+  formats:
+    text:
+      path: stdout
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - nilerr
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    gocritic:
+      disabled-checks:
+        - hugeParam
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+    revive:
+      rules:
+        - name: package-comments
+        - name: exported
+        - name: var-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: receiver-naming
+        - name: range-val-in-closure
+        - name: unused-parameter
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - errcheck
+          - gocritic
+          - gosec
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - internal/logging/tint
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - internal/logging/tint

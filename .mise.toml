@@ -1,0 +1,29 @@
+# Toolchain pins — single source of truth for the devcontainer and CI.
+# Bump versions deliberately; lockstep with .github/workflows/ci.yml matrix.
+
+[tools]
+go             = "1.26"
+golangci-lint  = "2.12"
+gofumpt        = "0.7"
+lefthook       = "1.10"
+gitleaks       = "8.21"
+goreleaser     = "2.4"
+# Release-only tooling. syft generates SBOMs during a goreleaser run; zig is
+# the C cross-compiler for the CGO build matrix — the credential SDK
+# (internal/credstore/onepassword) forces CGO_ENABLED=1, so a stock gcc cannot
+# target the non-host arch. See .goreleaser.yaml.
+syft           = "1.44"
+# Exact pin, not "0.14": zig 0.14.1 renamed its release tarball
+# (zig-linux-aarch64- -> zig-aarch64-linux-) and mise's core plugin builds
+# the old URL, so 0.14.1 fails to download. 0.14.0 installs cleanly.
+zig            = "0.14.0"
+
+# govulncheck and go-licenses are installed via `go install` in the devcontainer's
+# postCreateCommand. They aren't in the mise core registry and mise's go: backend
+# is still experimental.
+
+[env]
+# Honor caches inside the devcontainer's named volumes.
+GOPATH      = "/home/dev/go"
+GOMODCACHE  = "/home/dev/go/pkg/mod"
+GOCACHE     = "/home/dev/.cache/go-build"

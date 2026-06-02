@@ -1,0 +1,67 @@
+# Local git hooks — runs inside the devcontainer (where lefthook + go tooling live).
+# Installed automatically by .devcontainer/post-create.sh -> `lefthook install`.
+# Never bypass with --no-verify; the hooks exist to catch bugs and leaks early.
+
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.go"
+      run: |
+        out=$(gofumpt -l -d {staged_files})
+        if [ -n "$out" ]; then
+          echo "gofumpt would reformat these files:"
+          echo "$out"
+          echo
+          echo "run 'make fmt' to fix"
+          exit 1
+        fi
+
+    quick-lint:
+      glob: "*.go"
+      # golangci-lint accepts package paths, not arbitrary file lists. Derive
+      # the unique set of changed package dirs from the staged file list and
+      # pass those to --fast-only (v2 replacement for --fast), restricted to
+      # new findings (--new-from-rev=HEAD).
+      run: |
+        dirs=$(printf '%s\n' {staged_files} | xargs -n1 dirname | sort -u | sed 's|^|./|')
+        if [ -z "$dirs" ]; then exit 0; fi
+        # shellcheck disable=SC2086 # word-split intended
+        golangci-lint run --fast-only --new-from-rev=HEAD $dirs
+
+    secret-scan:
+      run: gitleaks protect --staged --redact --config .gitleaks.toml
+
+    banned-strings:
+      run: bash scripts/check-banned-strings.sh {staged_files}
+
+    internal-refs:
+      # Maintainer-local de-jargon gate; not tracked in the repo, so skip when
+      # absent (e.g. a fresh clone) but propagate its exit when present.
+      run: if [ -f scripts/check-internal-refs.sh ]; then bash scripts/check-internal-refs.sh; fi
+
+commit-msg:
+  commands:
+    conventional:
+      # Conventional Commits: type(scope?): subject.
+      run: |
+        head -1 {1} | grep -Eq '^(feat|fix|chore|docs|test|refactor|build|ci|perf)(\([^)]+\))?: .+' || {
+          echo "commit message must follow Conventional Commits:"
+          echo "  <type>(<scope>)?: <subject>"
+          echo "allowed types: feat|fix|chore|docs|test|refactor|build|ci|perf"
+          exit 1
+        }
+
+pre-push:
+  parallel: false
+  commands:
+    full-lint:
+      run: golangci-lint run ./...
+    typecheck:
+      run: go build ./...
+    vet:
+      run: go vet ./...
+    test:
+      run: go test -race -short ./...
+    vuln:
+      run: govulncheck ./...

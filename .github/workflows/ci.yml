@@ -1,0 +1,330 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_op_live:
+        description: "Run live SDK contract test against the credential vendor (op-live job)"
+        required: false
+        default: "false"
+      run_keyring_e2e:
+        description: "Run the Secret Service lifecycle test against gnome-keyring (token-keyring-e2e job, headless setup TBD)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+  GOLANGCI_VERSION: "v2.12.2"
+  GITLEAKS_VERSION: "8.21.4"
+  GOFUMPT_VERSION: "v0.7.0"
+  # Release tooling. goreleaser is pinned exactly (lockstep with .mise.toml's
+  # "2.4") because the config uses the 2.4-era `archives.format` field, which
+  # newer goreleaser rejects in favor of `formats`. zig is the cross C compiler
+  # for the CGO matrix (see .goreleaser.yaml); pinned with a checksum.
+  GORELEASER_VERSION: "v2.4.8"
+  ZIG_VERSION: "0.14.0"
+  ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install gofumpt
+        run: go install mvdan.cc/gofumpt@${{ env.GOFUMPT_VERSION }}
+      - name: gofumpt check
+        run: |
+          out=$(gofumpt -l .)
+          if [ -n "$out" ]; then
+            echo "gofumpt would reformat:"
+            echo "$out"
+            exit 1
+          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_VERSION }}
+          args: --timeout=5m
+      - name: banned strings
+        run: bash scripts/check-banned-strings.sh
+      - name: internal refs
+        run: |
+          if [ -f scripts/check-internal-refs.sh ]; then
+            bash scripts/check-internal-refs.sh
+          else
+            echo "::notice::internal-refs gate is maintainer-local tooling, not tracked in the repo; skipping"
+          fi
+
+  typecheck:
+    name: typecheck (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.26.x"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      # The bitwarden credstore provider is a skeleton behind a build tag.
+      # Compiling it on every PR keeps the Provider contract honest even
+      # though no Bitwarden tests run in the default suite.
+      - run: go build -tags bitwarden ./...
+      - run: go vet -tags bitwarden ./...
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+
+  vuln:
+    name: vuln
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
+  licenses:
+    name: licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when generator absent
+        id: gate
+        run: |
+          if [ -f scripts/gen-third-party-notices.sh ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::scripts/gen-third-party-notices.sh not present yet; deferred to slice 6"
+          fi
+      - name: install go-licenses
+        if: steps.gate.outputs.ready == 'true'
+        run: go install github.com/google/go-licenses@latest
+      - name: regenerate + diff
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          bash scripts/gen-third-party-notices.sh
+          if ! git diff --exit-code -- THIRD_PARTY_NOTICES.md; then
+            echo "THIRD_PARTY_NOTICES.md is stale; regenerate locally with 'make licenses' and commit"
+            exit 1
+          fi
+      - name: fail on GPL/AGPL/LGPL
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          if go-licenses report ./... 2>/dev/null | grep -Ei '(^|,)(GPL|AGPL|LGPL)' ; then
+            echo "copyleft license detected; not permitted"
+            exit 1
+          fi
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when e2e suite absent
+        id: gate
+        run: |
+          if [ -d test/e2e ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::test/e2e/ not present yet; skipping e2e"
+          fi
+      - name: run e2e
+        if: steps.gate.outputs.ready == 'true'
+        run: go test -tags=e2e ./test/e2e/...
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: install gitleaks
+        run: |
+          curl -fsSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+      - run: gitleaks detect --redact --no-banner --log-opts="--all" --config .gitleaks.toml
+
+  # Deferred: the headless gnome-keyring setup keeps falling through to the
+  # graphical SystemPrompter on ubuntu-latest runners (no display available),
+  # so this job sits behind workflow_dispatch until someone lands a reliable
+  # incantation. Token-vendor exposure in production is via env-source or
+  # file-source; the keyring backend is dev-environment polish.
+  # The test code (internal/token/secretservice_test.go) self-skips outside
+  # this job, so default `go test ./...` runs unaffected.
+  token-keyring-e2e:
+    name: token-keyring-e2e
+    if: github.event_name == 'workflow_dispatch' && inputs.run_keyring_e2e == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when internal/token absent
+        id: gate
+        run: |
+          if [ -d internal/token ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::internal/token not present yet; skipping"
+          fi
+      - name: install keyring deps
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring dbus-x11 libsecret-tools libsecret-1-dev
+      - name: run keyring tests under dbus session
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          # gnome-keyring-daemon --unlock reads a password from stdin and
+          # creates the default keyring with that password if none exists.
+          # An empty string causes the daemon to fall through to the
+          # graphical SystemPrompter (which crashes on a headless runner —
+          # "Gtk-WARNING: cannot open display"), so we feed a non-empty
+          # throwaway password. The recipe matches aws-vault / pdm CI.
+          dbus-run-session -- bash -lc '
+            echo "postern-ci-password" | gnome-keyring-daemon --unlock
+            go test -race -tags=keyring ./internal/token/...
+          '
+
+  devcontainer-build:
+    name: devcontainer-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: build devcontainer image
+        run: docker build -f .devcontainer/Dockerfile .
+
+  # Exercises the full release build on every PR — the same path `make snapshot`
+  # runs locally — minus signing and ghcr push (those need a real tag under
+  # OIDC; see release.yml). Catches release-build breakage early, e.g. the
+  # 1Password SDK's CGO requirement that a plain `go build` would never reveal.
+  snapshot:
+    name: snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: set up docker buildx
+        uses: docker/setup-buildx-action@v3
+      - name: install zig (cross C compiler for the CGO matrix)
+        run: |
+          curl -fsSL -o /tmp/zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
+          sudo tar -xf /tmp/zig.tar.xz -C /opt
+          echo "/opt/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - name: install syft (SBOM generation)
+        uses: anchore/sbom-action/download-syft@v0
+      - name: goreleaser snapshot
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          # --skip=sign: PRs have no OIDC token / cosign; the image still builds
+          # so the verify step below runs. Signing is exercised by release.yml.
+          args: release --snapshot --clean --skip=sign
+      - name: assert release artifacts (2 archives, checksums, 2 SBOMs)
+        run: |
+          set -euo pipefail
+          ls -la dist/*.tar.gz dist/checksums.txt dist/*.sbom.spdx.json
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 2
+          test "$(ls dist/*.sbom.spdx.json | wc -l)" -eq 2
+      - name: verify release image (uid 65532, entrypoint, no baked token)
+        run: |
+          amd64="$(docker images --filter=reference='ghcr.io/mmartinez/postern:*-amd64' --format '{{.Repository}}:{{.Tag}}' | head -1)"
+          arm64="$(docker images --filter=reference='ghcr.io/mmartinez/postern:*-arm64' --format '{{.Repository}}:{{.Tag}}' | head -1)"
+          test -n "$amd64" || { echo "no amd64 image built"; exit 1; }
+          test -n "$arm64" || { echo "no arm64 image built"; exit 1; }
+          bash scripts/verify-release-image.sh "$amd64"
+          bash scripts/verify-release-image.sh "$arm64" --no-run
+      - name: upload snapshot artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: snapshot-dist
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/*.sbom.spdx.json
+
+  op-live:
+    name: 1p-live
+    if: github.event_name == 'workflow_dispatch' && inputs.run_op_live == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: skip when internal/credstore/onepassword absent
+        id: gate
+        run: |
+          if [ -d internal/credstore/onepassword ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::internal/credstore/onepassword not present yet"
+          fi
+      - name: run live SDK contract test
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          OP_E2E: "1"
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: go test -run TestLive ./internal/credstore/onepassword/...

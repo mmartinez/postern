@@ -1,0 +1,63 @@
+name: release
+
+# Tag-triggered full release. Builds the CGO matrix with zig, signs the
+# checksums and the pushed manifests with keyless cosign, and pushes the
+# multi-arch image to ghcr.io. The snapshot CI job in ci.yml exercises the same
+# goreleaser config minus signing and push, so the only steps that first run for
+# real here are cosign (needs OIDC) and the ghcr push (needs a tag).
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the GitHub release and upload assets
+  packages: write # push the image to ghcr.io
+  id-token: write # keyless cosign signing via GitHub OIDC
+
+env:
+  GO_VERSION: "1.26"
+  # Kept in lockstep with .github/workflows/ci.yml and .mise.toml.
+  GORELEASER_VERSION: "v2.4.8"
+  ZIG_VERSION: "0.14.0"
+  ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: set up docker buildx
+        uses: docker/setup-buildx-action@v3
+      - name: install zig (cross C compiler for the CGO matrix)
+        run: |
+          curl -fsSL -o /tmp/zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
+          sudo tar -xf /tmp/zig.tar.xz -C /opt
+          echo "/opt/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - name: install syft (SBOM generation)
+        uses: anchore/sbom-action/download-syft@v0
+      - name: install cosign (keyless signing)
+        uses: sigstore/cosign-installer@v3
+      - name: log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: goreleaser release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

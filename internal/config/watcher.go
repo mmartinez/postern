@@ -1,0 +1,229 @@
+package config
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+)
+
+// debounceWindow coalesces bursty editor saves into a single reload. Most
+// editors emit a Rename → Create → Write sequence (atomic save) or several
+// Writes (in-place save); 100ms is long enough to merge those without
+// adding user-visible latency.
+const debounceWindow = 100 * time.Millisecond
+
+// ErrWatcherNotImplemented is retained for backwards compatibility with the
+// stub Watcher's signature. The fsnotify-backed implementation never
+// returns it, but consumers that conditionally branch on the sentinel keep
+// compiling.
+var ErrWatcherNotImplemented = errors.New("config watcher not implemented")
+
+// Event is published when the watched config file changes on disk. New is
+// the freshly-parsed config (nil only if the file became unreadable);
+// Lints is the slice of findings discovered alongside the reload. A
+// SeverityError entry in Lints tells the runtime to keep its prior config
+// — the watcher always emits so callers can log what was rejected.
+type Event struct {
+	New   *Config
+	Lints []LintError
+}
+
+// Watcher streams Event values as the watched file changes.
+type Watcher interface {
+	Watch(ctx context.Context) (<-chan Event, error)
+	Close() error
+}
+
+// NewWatcher returns a Watcher that observes path. The underlying fsnotify
+// watcher is bound to the parent directory (not the file) so atomic-save
+// flows (rename-over-target) survive without the watch dropping.
+//
+// path is absolutised eagerly so the watcher does not silently track CWD
+// drift if the process chdirs (or if the user passed a bare filename from
+// a busy directory). filepath.Abs failures fall back to the input verbatim
+// — the subsequent fsnotify.Add will surface the underlying error.
+func NewWatcher(path string) Watcher {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	return &fsWatcher{path: path}
+}
+
+type fsWatcher struct {
+	path string
+
+	mu       sync.Mutex
+	fsw      *fsnotify.Watcher
+	events   chan Event
+	cancel   context.CancelFunc
+	closed   bool
+	closeCh  chan struct{}
+	pumpDone chan struct{}
+}
+
+func (w *fsWatcher) Watch(parent context.Context) (<-chan Event, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fsw != nil {
+		return nil, errors.New("watcher already started")
+	}
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("create fsnotify watcher: %w", err)
+	}
+	if err := fsw.Add(filepath.Dir(w.path)); err != nil {
+		_ = fsw.Close()
+		return nil, fmt.Errorf("watch %s: %w", filepath.Dir(w.path), err)
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	out := make(chan Event, 1)
+	w.fsw = fsw
+	w.events = out
+	w.cancel = cancel
+	w.closeCh = make(chan struct{})
+	w.pumpDone = make(chan struct{})
+
+	go w.pump(ctx)
+	return out, nil
+}
+
+// pump is the long-lived goroutine that converts fsnotify events on the
+// parent directory into debounced Event values on the output channel. It
+// exits when the context is cancelled, Close is called, or the underlying
+// fsnotify watcher errors out fatally.
+func (w *fsWatcher) pump(ctx context.Context) {
+	defer close(w.pumpDone)
+	defer close(w.events)
+
+	target := filepath.Clean(w.path)
+	var timer *time.Timer
+	var timerCh <-chan time.Time
+	armDebounce := func() {
+		if timer == nil {
+			timer = time.NewTimer(debounceWindow)
+		} else {
+			if !timer.Stop() {
+				// Drain a stale firing if one is already buffered.
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(debounceWindow)
+		}
+		timerCh = timer.C
+	}
+	// Stop a pending debounce so we don't leak its timer slot into the
+	// runtime's wheel after the pump goroutine exits.
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.closeCh:
+			return
+		case ev, ok := <-w.fsw.Events:
+			if !ok {
+				return
+			}
+			if filepath.Clean(ev.Name) != target {
+				continue
+			}
+			// Any event that touches the file (Write, Create after atomic
+			// rename, Chmod from editors that bump perms on save) is a
+			// signal to debounce-and-reload.
+			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Chmod) != 0 {
+				armDebounce()
+			}
+		case err, ok := <-w.fsw.Errors:
+			if !ok {
+				return
+			}
+			// fsnotify Errors are usually transient (Linux inotify queue
+			// overflow under filesystem pressure). Logging them at debug
+			// would require a logger here; we don't have one, so we just
+			// drop. We deliberately do NOT arm the debounce: under
+			// sustained pressure a stream of errors could otherwise reset
+			// the timer indefinitely and starve a legitimate reload.
+			_ = err
+		case <-timerCh:
+			timerCh = nil
+			w.emitReload(ctx)
+		}
+	}
+}
+
+// emitReload reads the watched file, validates it, and pushes the result
+// onto the output channel. It is non-blocking: if the consumer is slow the
+// pending event is dropped in favour of the freshest one. That matches the
+// "reflect the file's current state" contract a hot-reload watcher must
+// honour; a stale event is worse than no event.
+func (w *fsWatcher) emitReload(ctx context.Context) {
+	cfg, lints, err := LoadFile(w.path)
+	if err != nil {
+		// Surface the read/parse error as a single fatal lint so the runtime
+		// can log it and keep the previous config without dereferencing nil.
+		lints = append(lints, LintError{
+			Severity: SeverityError,
+			Path:     "(file)",
+			Message:  fmt.Sprintf("reload %s: %v", w.path, err),
+		})
+	}
+	ev := Event{New: cfg, Lints: lints}
+
+	select {
+	case w.events <- ev:
+	default:
+		// Channel full — drop the previously buffered event and replace it
+		// so the consumer always sees the latest reload result.
+		select {
+		case <-w.events:
+		default:
+		}
+		select {
+		case w.events <- ev:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func (w *fsWatcher) Close() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	closeCh := w.closeCh
+	cancel := w.cancel
+	fsw := w.fsw
+	pumpDone := w.pumpDone
+	w.mu.Unlock()
+
+	if closeCh != nil {
+		close(closeCh)
+	}
+	if cancel != nil {
+		cancel()
+	}
+	var err error
+	if fsw != nil {
+		err = fsw.Close()
+	}
+	if pumpDone != nil {
+		<-pumpDone
+	}
+	return err
+}

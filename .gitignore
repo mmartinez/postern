@@ -1,0 +1,33 @@
+# Planning artifacts (untracked per project policy)
+PRD-*.md
+SPEC.md
+tasks/
+
+# Maintainer-local de-jargon gate — kept out of the repo because it enumerates
+# the internal planning-doc names it guards against. Runs locally via lefthook;
+# CI and the hook skip it when absent.
+scripts/check-internal-refs.sh
+scripts/internal-refs-allowlist.txt
+
+# Go build output
+/postern
+/dist/
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go tooling
+vendor/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local env / secrets — never commit
+.env
+.env.*
+!.env.example
