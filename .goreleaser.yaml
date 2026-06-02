@@ -64,16 +64,13 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-# release-please creates the GitHub Release as a DRAFT (with CHANGELOG notes)
-# when the Release PR merges; the goreleaser job then adopts that draft
-# (use_existing_draft), uploads the archives, checksums, SBOMs and cosign
-# bundle, and publishes it. Publishing a fully-populated draft is what makes
-# GitHub's immutable release immutable WITH the assets baked in — appending to
-# an already-published (immutable) release fails with HTTP 422. mode:
-# keep-existing preserves release-please's draft notes. See
-# .github/workflows/release.yml and release-please-config.json (draft: true).
+# release-please publishes the GitHub Release (with CHANGELOG notes) and creates
+# the tag when the Release PR merges; the goreleaser job then uploads the
+# archives, checksums, SBOMs and cosign bundle onto that existing release.
+# mode: keep-existing preserves release-please's notes and appends the assets.
+# This requires repository release immutability to stay OFF — an immutable
+# release rejects asset uploads with HTTP 422. See .github/workflows/release.yml.
 release:
-  use_existing_draft: true
   mode: keep-existing
 
 snapshot:
