@@ -2,13 +2,20 @@
 
 [![CI](https://github.com/mmartinez/postern/actions/workflows/ci.yml/badge.svg)](https://github.com/mmartinez/postern/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![1Password — supported](https://img.shields.io/badge/1Password-supported-0572EC?logo=1password&logoColor=white)](docs/providers.md)
+[![Bitwarden — supported](https://img.shields.io/badge/Bitwarden-supported-175DDC?logo=bitwarden&logoColor=white)](docs/providers.md)
 
 > **Your AI agents call authenticated APIs without ever holding the credentials.**
 
 Postern is a credential-brokering HTTPS proxy. Agents send requests with no API
 keys (or with harmless placeholders); postern matches the destination host
-against your rules, fetches the real secret from your vault at request time, and
-injects it on the way out. The agent only ever sees placeholders.
+against your rules, fetches the real secret from your **1Password or Bitwarden**
+vault at request time, and injects it on the way out. The agent only ever sees
+placeholders.
+
+**Works with [1Password](https://1password.com/) (Service Accounts) and
+[Bitwarden](https://bitwarden.com/products/secrets-manager/) Secrets Manager** —
+credential providers are [pluggable](docs/providers.md).
 
 **Why it matters:** an agent that can read a credential is a credential an
 attacker can exfiltrate through prompt injection or a compromised dependency.
@@ -40,9 +47,9 @@ resolves the matched rule's secret reference from a credential provider, injects
 the credential, and forwards the request. The full request lifecycle and trust
 boundary are in [docs/architecture.md](docs/architecture.md).
 
-**Credential providers are pluggable.** Postern ships with **1Password** (via
-Service Accounts) and **Bitwarden Secrets Manager**; adding a vendor is a single
-package. See [docs/providers.md](docs/providers.md).
+The matched rule's secret reference (`op://…` or `bw://…`) resolves from the
+configured provider; adding a new provider is a single package. See
+[docs/providers.md](docs/providers.md).
 
 > **Status:** early development. The proxy works end-to-end, and the release
 > pipeline (checksum-verified binaries, SBOMs, and a signed multi-arch container
