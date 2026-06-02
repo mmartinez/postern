@@ -1,0 +1,14 @@
+# Changelog
+
+## [0.1.0](https://github.com/mmartinez/postern/compare/v0.0.1...v0.1.0) (2026-06-02)
+
+
+### Features
+
+* initial public release ([e725ba3](https://github.com/mmartinez/postern/commit/e725ba33799bfa768168ba2aea22d7546713afc5))
+
+
+### Bug Fixes
+
+* **broker:** fail closed on empty placeholder token ([d733a93](https://github.com/mmartinez/postern/commit/d733a938bd1c6641830a9c4a1017646a2002d4f1))
+* **ca:** refuse CA key with group- or world-readable permissions ([052d777](https://github.com/mmartinez/postern/commit/052d7771adaae08c17607e9ef300914cb698f0dc))
