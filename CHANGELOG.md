@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/mmartinez/postern/compare/v0.2.0...v0.2.1) (2026-06-02)
+
+
+### Bug Fixes
+
+* **config:** change default proxy port to 1701 ([2217fa9](https://github.com/mmartinez/postern/commit/2217fa9820cec695e09ee50be24915c3bfd09781))
+
 ## [0.2.0](https://github.com/mmartinez/postern/compare/v0.1.1...v0.2.0) (2026-06-02)
 
 
