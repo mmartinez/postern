@@ -20,10 +20,11 @@ coverage.html
 # Go tooling
 vendor/
 
-# Editor / OS noise
+# Editor / OS / agent-tooling noise
 .DS_Store
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 
