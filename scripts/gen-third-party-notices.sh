@@ -48,9 +48,9 @@ go-licenses csv ./... 2>/dev/null | sort -u > "$CSV"
     # (the NN-name.md convention keeps the sort predictable).
     #
     # The directory must exist and contain at least one fragment: the
-    # vendored tint and Infisical attributions are license requirements
-    # (MIT). Silently rendering an empty section would ship a binary that
-    # fails to honor its third-party attributions.
+    # vendored tint attribution is a license requirement (MIT). Silently
+    # rendering an empty section would ship a binary that fails to honor
+    # its third-party attributions.
     shopt -s nullglob
     manual=(scripts/manual-licenses/*.md)
     shopt -u nullglob

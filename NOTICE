@@ -7,12 +7,7 @@ This product includes software developed by The Postern Authors.
 Third-party attributions
 ----------------------------------------------------------------------
 
-Portions of this software are derived from Infisical Agent Vault
-(https://github.com/Infisical/agent-vault), licensed under the MIT License.
-Copyright (c) 2022 Infisical Inc.
-
-The full text of the MIT License covering those portions, along with the
-licenses of all bundled third-party dependencies, is reproduced in
+The licenses of all bundled third-party dependencies are reproduced in
 THIRD_PARTY_NOTICES.md.
 
 ----------------------------------------------------------------------
@@ -21,7 +16,3 @@ Trademarks
 
 1Password is a registered trademark of AgileBits Inc. Postern is not
 affiliated with, endorsed by, or sponsored by AgileBits or 1Password.
-
-Infisical and Agent Vault are trademarks of Infisical Inc. Postern is an
-independent project and is not affiliated with, endorsed by, or sponsored
-by Infisical.

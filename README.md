@@ -226,24 +226,14 @@ To report a vulnerability, follow [SECURITY.md](SECURITY.md) — please do not o
 a public issue. The security model (what postern defends, what it does not, and
 how it handles keys and tokens) is documented in [docs/security.md](docs/security.md).
 
-## Acknowledgments
-
-Postern is inspired by [Infisical Agent Vault](https://github.com/Infisical/agent-vault),
-licensed under MIT. We are grateful to the Infisical team for open-sourcing their
-work on credential brokering for AI agents.
-
 ## Trademarks
 
 1Password is a registered trademark of AgileBits Inc. Bitwarden is a trademark of
 Bitwarden, Inc. Postern is not affiliated with, endorsed by, or sponsored by
 AgileBits, 1Password, or Bitwarden.
 
-Infisical and Agent Vault are trademarks of Infisical Inc. Postern is an
-independent project and is not affiliated with, endorsed by, or sponsored by
-Infisical.
-
 ## License
 
 Postern is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for
-details. Portions derived from Infisical Agent Vault are subject to its MIT
-license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (generated in CI).
+details. Bundled third-party dependencies and their licenses are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (generated in CI).
