@@ -90,8 +90,11 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 
 		// Body buffering happens before resolve so an oversized body is
 		// rejected (413) without spending a credential fetch. Only rules that
-		// rewrite the body buffer it; everything else streams untouched.
-		if rule.usesBodySurface() {
+		// rewrite the body buffer it; everything else streams untouched. A body
+		// the injector will skip (compressed or multipart) is never rewritten,
+		// so it must stream through uncapped — buffering it would 413 an
+		// oversized body the proxy is supposed to forward unchanged.
+		if rule.usesBodySurface() && !bodySkippable(req) {
 			bodyCap := effectiveBodyCap(maxBodyBytes, rule.Injection.MaxBodyBytes)
 			limited := http.MaxBytesReader(nil, req.Body, int64(bodyCap))
 			buf, rerr := io.ReadAll(limited)

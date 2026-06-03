@@ -9,7 +9,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 )
 
@@ -260,6 +259,19 @@ func substituteQuery(req *http.Request, token, value string) int {
 	return strings.Count(rq, token)
 }
 
+// bodySkippable reports whether substituteBody will forward req's body
+// untouched instead of rewriting it: a compressed body (Content-Encoding other
+// than identity) or a multipart body cannot be safely text-spliced. The hook
+// consults this so it skips buffering (and size-capping) a body it would only
+// stream through unchanged — otherwise an oversized skippable body would 413
+// instead of forwarding, contradicting the documented passthrough.
+func bodySkippable(req *http.Request) bool {
+	if ce := req.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
+		return true
+	}
+	return strings.HasPrefix(parseMediaType(req.Header.Get("Content-Type")), "multipart/")
+}
+
 // substituteBody replaces token in the request body with a value encoded for
 // the body's Content-Type, then rewrites req.Body and Content-Length. It
 // reports skipped=true (and leaves the body untouched) for bodies it must not
@@ -270,14 +282,10 @@ func substituteBody(req *http.Request, token, value string) (subs int, skipped b
 	if req.Body == nil || req.Body == http.NoBody {
 		return 0, false, nil
 	}
-	// A compressed body is opaque bytes; text substitution would corrupt it.
-	if ce := req.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
+	if bodySkippable(req) {
 		return 0, true, nil
 	}
 	mediaType := parseMediaType(req.Header.Get("Content-Type"))
-	if strings.HasPrefix(mediaType, "multipart/") {
-		return 0, true, nil
-	}
 
 	raw, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -294,7 +302,6 @@ func substituteBody(req *http.Request, token, value string) (subs int, skipped b
 	newBody := strings.ReplaceAll(body, token, encodeBodyValue(mediaType, value))
 	req.Body = io.NopCloser(strings.NewReader(newBody))
 	req.ContentLength = int64(len(newBody))
-	req.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
 	return strings.Count(body, token), false, nil
 }
 

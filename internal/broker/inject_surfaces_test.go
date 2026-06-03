@@ -84,7 +84,6 @@ func TestInjectPlaceholder_Body_JSONEscaped(t *testing.T) {
 	got := readBody(t, req)
 	require.Equal(t, `{"api_key":"he said \"hi\"\n"}`, got)
 	require.Equal(t, int64(len(got)), req.ContentLength)
-	require.Equal(t, "30", req.Header.Get("Content-Length"))
 }
 
 func TestInjectPlaceholder_Body_FormURLEncoded(t *testing.T) {
