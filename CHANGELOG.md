@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/mmartinez/postern/compare/v0.3.0...v0.3.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* **broker:** forward oversized compressed/multipart bodies instead of 413 ([#36](https://github.com/mmartinez/postern/issues/36)) ([6a9a3c8](https://github.com/mmartinez/postern/commit/6a9a3c82f68d7183a54b328d044210b6474215da))
+
 ## [0.3.0](https://github.com/mmartinez/postern/compare/v0.2.1...v0.3.0) (2026-06-03)
 
 
