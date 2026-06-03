@@ -8,8 +8,16 @@ import (
 // sdkResolver adapts the 1Password Go SDK's secrets API to broker.Resolver.
 // It is constructed via Client.Resolver(); tests in this package construct
 // it directly with a secretsResolver fake.
+//
+// keepAlive pins the owning *Client (and through it the *sdk.Client) for the
+// resolver's lifetime. The broker keeps the resolver alive for the whole
+// process, so this transitively keeps the SDK client reachable and prevents
+// its GC finalizer from calling ReleaseClient out from under the secrets
+// handle. Without it, a resolve after the client is finalized fails with
+// "invalid client id". It is nil in unit tests that exercise Resolve directly.
 type sdkResolver struct {
-	secrets secretsResolver
+	secrets   secretsResolver
+	keepAlive *Client
 }
 
 // Resolve delegates to the SDK with the secret reference unchanged. The
