@@ -1,0 +1,33 @@
+# EditorConfig — https://editorconfig.org
+# Editor-agnostic whitespace defaults so files stay consistent before any
+# formatter runs. gofmt/gofumpt remain authoritative for *.go; this only makes
+# editors use the right indentation in the first place.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Go is gofmt/gofumpt-formatted with tabs. indent_size is a display hint only.
+[*.go]
+indent_style = tab
+indent_size = 4
+
+[{go.mod,go.sum}]
+indent_style = tab
+indent_size = 4
+
+# Make recipes must begin with a literal tab.
+[Makefile]
+indent_style = tab
+
+[*.{mk,mak}]
+indent_style = tab
+
+# Markdown: two trailing spaces are a hard line break — preserve them.
+[*.md]
+trim_trailing_whitespace = false
