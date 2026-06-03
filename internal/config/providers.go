@@ -80,7 +80,8 @@ func ValidateProviders(cfg *Config, root *yaml.Node, facts ProviderFacts) []Lint
 	}
 
 	if facts.ConfiguredSchemes != nil {
-		for i, r := range cfg.Rules {
+		for i := range cfg.Rules {
+			r := cfg.Rules[i]
 			scheme, _, ok := strings.Cut(r.SecretRef, "://")
 			if !ok || scheme == "" {
 				// Malformed refs are already flagged by the schema validator;

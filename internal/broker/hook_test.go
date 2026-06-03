@@ -36,7 +36,7 @@ func (f *fakeResolver) Resolve(_ context.Context, vaultID, ref string) (string, 
 func newHookFixture(t *testing.T, rule broker.Rule, res broker.Resolver) func(*http.Request) *http.Response {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, logger) //nolint:bodyclose // hook is a closure; bodyclose can't trace ownership across return
+	return broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, logger) //nolint:bodyclose // hook is a closure; bodyclose can't trace ownership across return
 }
 
 // closeIfNonNil drains and closes the hook's response body so tests can
@@ -83,7 +83,7 @@ func TestHook_NoMatchBlocksWhenOnNoMatchBlock(t *testing.T) {
 		Host:      "api.anthropic.com",
 		SecretRef: "op://V/I/f",
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
-	}}), res, config.OnNoMatchBlock, nil)
+	}}), res, config.OnNoMatchBlock, 0, nil)
 
 	req, _ := http.NewRequest(http.MethodGet, "https://api.openai.com/v1/models", http.NoBody)
 	resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
@@ -227,7 +227,7 @@ func TestHook_NilLoggerDefaultsToNoop(t *testing.T) {
 		Host:      "api.example.com",
 		SecretRef: "op://V/I/f",
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
-	}}), res, config.OnNoMatchPassthrough, nil)
+	}}), res, config.OnNoMatchPassthrough, 0, nil)
 
 	req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/", http.NoBody)
 	resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch

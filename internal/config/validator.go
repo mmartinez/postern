@@ -48,6 +48,12 @@ func (e LintError) Error() string {
 // editing the config validator.
 var secretRefPattern = regexp.MustCompile(`^[a-z][a-z0-9+.\-]*://.+$`)
 
+// unreservedTokenPattern matches a placeholder token built only from RFC 3986
+// unreserved characters. Such a token survives URL path/query escaping
+// unchanged, so its encoded and decoded forms are identical — a prerequisite
+// for stable substitution outside header values.
+var unreservedTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+
 // Validate walks cfg and returns the slice of findings. Root is the AST from
 // Load and supplies line numbers; pass nil to skip location info.
 func Validate(cfg *Config, root *yaml.Node) []LintError {
@@ -112,6 +118,9 @@ func (v *validator) checkProxy(p *Proxy) {
 	default:
 		v.add("proxy.on_no_match", fmt.Sprintf("invalid on_no_match value %q (want passthrough|block)", p.OnNoMatch), SeverityError)
 	}
+	if p.MaxBodyBytes < 0 {
+		v.add("proxy.max_body_bytes", fmt.Sprintf("max_body_bytes must be >= 0 (got %d); 0 means use the default", p.MaxBodyBytes), SeverityError)
+	}
 }
 
 // checkCredStores enforces the multi-credstore form's structural rules:
@@ -147,7 +156,8 @@ func (v *validator) checkCredStores(cs []CredStore) {
 
 func (v *validator) checkRulesSkipping(rules []Rule, skip map[int]struct{}) {
 	seenHosts := make(map[string]int, len(rules))
-	for i, r := range rules {
+	for i := range rules {
+		r := rules[i]
 		if _, skipRule := skip[i]; skipRule {
 			continue
 		}
@@ -205,6 +215,48 @@ func (v *validator) checkInject(base string, in Inject) {
 		// unauthenticated — a silent fail-open. Reject it at validate time so the
 		// proxy never boots (or hot-reloads) into that state.
 		v.add(base+".template", "template must contain a {{ CREDENTIAL }} placeholder; without it the resolved credential is discarded and the request is forwarded unauthenticated", SeverityError)
+	}
+
+	v.checkInjectSurfaces(base, in)
+}
+
+// checkInjectSurfaces validates the per-rule substitution surface list and its
+// dependent fields. Surfaces are valid only in placeholder mode; substituting
+// outside headers tightens the token charset and brings the body-buffering cap
+// into play.
+func (v *validator) checkInjectSurfaces(base string, in Inject) {
+	if len(in.In) > 0 && in.Type != InjectTypePlaceholder {
+		v.add(base+".in", "inject.in is valid only with inject.type=placeholder", SeverityError)
+		return
+	}
+
+	hasNonHeader, hasBody := false, false
+	for _, s := range in.In {
+		switch s {
+		case InjectSurfaceHeader:
+		case InjectSurfaceBody:
+			hasNonHeader, hasBody = true, true
+		case InjectSurfacePath, InjectSurfaceQuery:
+			hasNonHeader = true
+		default:
+			v.add(base+".in", fmt.Sprintf("invalid surface %q (want any of header|body|path|query)", s), SeverityError)
+		}
+	}
+
+	// Outside header values the token is percent-escaped; a token containing
+	// reserved characters would not round-trip, so restrict it to the RFC 3986
+	// unreserved set. Header-only rules keep the looser charset for back-compat.
+	if hasNonHeader && in.Name != "" && !unreservedTokenPattern.MatchString(in.Name) {
+		v.add(base+".name", "placeholder token must use only RFC 3986 unreserved characters (A-Z a-z 0-9 - . _ ~) when substituting outside headers", SeverityError)
+	}
+
+	if in.MaxBodyBytes != nil {
+		if *in.MaxBodyBytes < 0 {
+			v.add(base+".max_body_bytes", fmt.Sprintf("max_body_bytes must be >= 0 (got %d); 0 means inherit proxy.max_body_bytes", *in.MaxBodyBytes), SeverityError)
+		}
+		if !hasBody {
+			v.add(base+".max_body_bytes", "max_body_bytes is meaningful only when inject.in includes \"body\"", SeverityError)
+		}
 	}
 }
 

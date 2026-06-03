@@ -1,7 +1,9 @@
 package broker
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -39,13 +41,21 @@ type Resolver interface {
 //     is never injected onto a cleartext hop.
 //  3. Resolve the matched rule's secret reference. The vaultID is always
 //     empty today; future multi-vault routing will populate it.
-//  4. Inject the resolved credential per the rule's InjectSpec.
+//  4. For a rule that rewrites the request body, buffer the body up to
+//     maxBodyBytes (per-rule override wins) before resolving — an oversized
+//     body returns 413 and the resolver is never called, so a flood of large
+//     bodies cannot hammer the credential vendor.
+//  5. Inject the resolved credential per the rule's InjectSpec.
 //
 // On any resolve or inject error the hook returns a synthesized 502 — fail
 // closed: the proxy must never let an unauthenticated request out to the
 // upstream once it has matched a rule. The underlying error message is
 // logged via logger but never surfaced to the client.
-func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, logger *slog.Logger) func(*http.Request) *http.Response {
+//
+// maxBodyBytes is the proxy-wide body buffering cap; a value <= 0 falls back
+// to config.DefaultMaxBodyBytes. It is only consulted for rules that declare
+// the body surface.
+func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBodyBytes int, logger *slog.Logger) func(*http.Request) *http.Response {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -76,6 +86,37 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, logger 
 				slog.String("scheme", req.URL.Scheme),
 			)
 			return failClosed(req)
+		}
+
+		// Body buffering happens before resolve so an oversized body is
+		// rejected (413) without spending a credential fetch. Only rules that
+		// rewrite the body buffer it; everything else streams untouched.
+		if rule.usesBodySurface() {
+			bodyCap := effectiveBodyCap(maxBodyBytes, rule.Injection.MaxBodyBytes)
+			limited := http.MaxBytesReader(nil, req.Body, int64(bodyCap))
+			buf, rerr := io.ReadAll(limited)
+			if rerr != nil {
+				var maxErr *http.MaxBytesError
+				if errors.As(rerr, &maxErr) {
+					logger.Warn("broker rejected oversized body",
+						slog.String("host", host),
+						slog.String("rule", rule.Host),
+						slog.Int("limit_bytes", bodyCap),
+					)
+					return tooLarge(req)
+				}
+				logger.Warn("broker body read failed",
+					slog.String("host", host),
+					slog.String("rule", rule.Host),
+					slog.Any("err", rerr),
+				)
+				return failClosed(req)
+			}
+			// Replace the streamed body with the buffered copy. goproxy closes
+			// the original body via its own deferred Close, so we must not
+			// close it here (that would double-close).
+			req.Body = io.NopCloser(bytes.NewReader(buf))
+			req.ContentLength = int64(len(buf))
 		}
 
 		cred, err := resolver.Resolve(req.Context(), "", rule.SecretRef)
@@ -143,6 +184,42 @@ func failClosed(req *http.Request) *http.Response {
 		Body:          io.NopCloser(strings.NewReader(failClosedBody)),
 		ContentLength: int64(len(failClosedBody)),
 	}
+}
+
+// tooLargeBody is the body returned with a 413 when a brokered request's body
+// exceeds the buffering cap. Unlike the fail-closed 502 it names the condition:
+// an oversized body is a client error, not a credential-handling failure, so it
+// carries no failure-stage oracle.
+const tooLargeBody = "postern: request entity too large\n"
+
+// tooLarge builds the 413 the broker returns when a body-rewriting rule's
+// request body exceeds the configured cap. The upstream is never contacted.
+func tooLarge(req *http.Request) *http.Response {
+	return &http.Response{
+		Status:        http.StatusText(http.StatusRequestEntityTooLarge),
+		StatusCode:    http.StatusRequestEntityTooLarge,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Request:       req,
+		Header:        http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		Body:          io.NopCloser(strings.NewReader(tooLargeBody)),
+		ContentLength: int64(len(tooLargeBody)),
+	}
+}
+
+// effectiveBodyCap resolves the body buffering cap for a rule: a positive
+// per-rule override wins; otherwise the proxy-wide cap; otherwise the built-in
+// default. The result is always positive so MaxBytesReader never collapses to a
+// zero-byte limit.
+func effectiveBodyCap(global, perRule int) int {
+	if perRule > 0 {
+		return perRule
+	}
+	if global > 0 {
+		return global
+	}
+	return config.DefaultMaxBodyBytes
 }
 
 // stripPort drops the optional :port suffix from an HTTP request URL host.

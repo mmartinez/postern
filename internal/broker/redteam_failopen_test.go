@@ -59,7 +59,7 @@ func TestRedTeam_NoPlaceholderTemplate_FailsClosed(t *testing.T) {
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer "},
 	}})
 	res := &fakeResolver{value: "sk-the-real-secret"}
-	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body
 
 	p, err := proxy.New(proxy.Config{
 		CA:                 root,
@@ -97,8 +97,8 @@ func TestRedTeam_EmptyResolvedCredential_FailsClosed(t *testing.T) {
 		SecretRef: "op://V/I/f",
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
 	}})
-	res := &fakeResolver{value: ""}                                                                               // resolver returns empty, no error
-	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body
+	res := &fakeResolver{value: ""}                                                                                  // resolver returns empty, no error
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body
 
 	p, err := proxy.New(proxy.Config{
 		CA:                 root,
@@ -142,11 +142,11 @@ func TestRedTeam_FailClosedBodyIsUniform(t *testing.T) {
 	// Stage A: resolver error.
 	hookResolveErr := broker.Hook(broker.NewEngine([]broker.Rule{rule}), //nolint:bodyclose // synthetic body
 		&fakeResolver{err: errors.New("token revoked")},
-		config.OnNoMatchPassthrough, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	// Stage B: insecure transport (plain http) for a matched host.
 	hookTransport := broker.Hook(broker.NewEngine([]broker.Rule{rule}), //nolint:bodyclose // synthetic body
 		&fakeResolver{value: "sk"},
-		config.OnNoMatchPassthrough, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	reqHTTPS, _ := http.NewRequest(http.MethodGet, "https://api.example.com/v1", http.NoBody)
 	reqHTTP, _ := http.NewRequest(http.MethodGet, "http://api.example.com/v1", http.NoBody)
