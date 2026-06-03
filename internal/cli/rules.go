@@ -90,7 +90,8 @@ func writeRulesTable(out io.Writer, rules []config.Rule) error {
 		}
 		return w.Flush()
 	}
-	for _, r := range rules {
+	for i := range rules {
+		r := rules[i]
 		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			r.Host, r.SecretRef, r.Inject.Type, r.Inject.Name, r.Inject.Template,
 		); err != nil {
@@ -116,7 +117,8 @@ type injectJSON struct {
 
 func writeRulesJSON(out io.Writer, rules []config.Rule) error {
 	jr := make([]ruleJSON, len(rules))
-	for i, r := range rules {
+	for i := range rules {
+		r := rules[i]
 		jr[i] = ruleJSON{
 			Host:      r.Host,
 			SecretRef: r.SecretRef,

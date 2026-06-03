@@ -254,7 +254,7 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		slog.Duration("cache_ttl", cfg.Proxy.CacheTTL),
 	)
 	return brokerBundle{
-		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, logger), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
+		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, logger), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
 		engine:  engine,
 		cfgPath: cfgPath,
 		listen:  cfg.Proxy.Listen,

@@ -56,6 +56,61 @@ func TestFromConfigRules_TranslatesHeaderAndPlaceholder(t *testing.T) {
 	}
 }
 
+func TestFromConfigRules_TranslatesSurfacesAndCap(t *testing.T) {
+	t.Parallel()
+
+	cap := 4096
+	in := []config.Rule{{
+		Host:      "api.example.com",
+		SecretRef: "op://V/I/f",
+		Inject: config.Inject{
+			Type:         config.InjectTypePlaceholder,
+			Name:         "__tok__",
+			Template:     "{{ CREDENTIAL }}",
+			In:           []config.InjectSurface{config.InjectSurfaceBody, config.InjectSurfacePath, config.InjectSurfaceQuery, config.InjectSurfaceHeader},
+			MaxBodyBytes: &cap,
+		},
+	}}
+
+	got, err := broker.FromConfigRules(in)
+	if err != nil {
+		t.Fatalf("FromConfigRules: %v", err)
+	}
+
+	want := []broker.Rule{{
+		Host:      "api.example.com",
+		SecretRef: "op://V/I/f",
+		Injection: broker.InjectSpec{
+			Type:         broker.InjectPlaceholder,
+			Name:         "__tok__",
+			Template:     "{{ CREDENTIAL }}",
+			Surfaces:     []broker.Surface{broker.SurfaceBody, broker.SurfacePath, broker.SurfaceQuery, broker.SurfaceHeader},
+			MaxBodyBytes: 4096,
+		},
+	}}
+	if diff := cmp.Diff(want, got, cmpopts.EquateEmpty()); diff != "" {
+		t.Fatalf("rules diff (-want +got):\n%s", diff)
+	}
+}
+
+func TestFromConfigRules_RejectsUnknownSurface(t *testing.T) {
+	t.Parallel()
+
+	_, err := broker.FromConfigRules([]config.Rule{{
+		Host:      "api.example.com",
+		SecretRef: "op://V/I/f",
+		Inject: config.Inject{
+			Type:     config.InjectTypePlaceholder,
+			Name:     "__tok__",
+			Template: "{{ CREDENTIAL }}",
+			In:       []config.InjectSurface{"bogus"},
+		},
+	}})
+	if err == nil {
+		t.Fatalf("FromConfigRules with unknown surface: want error, got nil")
+	}
+}
+
 func TestFromConfigRules_RejectsUnknownInjectType(t *testing.T) {
 	t.Parallel()
 

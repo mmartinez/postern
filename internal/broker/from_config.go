@@ -19,7 +19,8 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 		return nil, nil
 	}
 	out := make([]Rule, len(in))
-	for i, src := range in {
+	for i := range in {
+		src := in[i]
 		t, err := injectTypeFromConfig(src.Inject.Type)
 		if err != nil {
 			// A template-only rule has no Host yet; fall back to the template
@@ -30,17 +31,56 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 			}
 			return nil, fmt.Errorf("rules[%d] (%s): %w", i, label, err)
 		}
+		surfaces, err := surfacesFromConfig(src.Inject.In)
+		if err != nil {
+			return nil, fmt.Errorf("rules[%d] (%s): %w", i, src.Host, err)
+		}
 		out[i] = Rule{
 			Host:      src.Host,
 			SecretRef: src.SecretRef,
 			Injection: InjectSpec{
-				Type:     t,
-				Name:     src.Inject.Name,
-				Template: src.Inject.Template,
+				Type:         t,
+				Name:         src.Inject.Name,
+				Template:     src.Inject.Template,
+				Surfaces:     surfaces,
+				MaxBodyBytes: derefBodyCap(src.Inject.MaxBodyBytes),
 			},
 		}
 	}
 	return out, nil
+}
+
+// surfacesFromConfig maps the YAML surface list to broker surfaces. An empty
+// list yields nil, which Inject treats as header-only.
+func surfacesFromConfig(in []config.InjectSurface) ([]Surface, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]Surface, len(in))
+	for i, s := range in {
+		switch s {
+		case config.InjectSurfaceHeader:
+			out[i] = SurfaceHeader
+		case config.InjectSurfaceBody:
+			out[i] = SurfaceBody
+		case config.InjectSurfacePath:
+			out[i] = SurfacePath
+		case config.InjectSurfaceQuery:
+			out[i] = SurfaceQuery
+		default:
+			return nil, fmt.Errorf("unknown inject.in surface %q", s)
+		}
+	}
+	return out, nil
+}
+
+// derefBodyCap unwraps the optional per-rule body cap; a nil pointer (or a
+// non-positive value) means inherit the proxy-wide cap, signalled as 0.
+func derefBodyCap(p *int) int {
+	if p == nil || *p <= 0 {
+		return 0
+	}
+	return *p
 }
 
 func injectTypeFromConfig(t config.InjectType) (InjectType, error) {

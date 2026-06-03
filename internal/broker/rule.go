@@ -25,6 +25,21 @@ type Rule struct {
 	Injection InjectSpec
 }
 
+// usesBodySurface reports whether the rule rewrites the request body. The hook
+// uses this to decide whether to buffer (and size-bound) the body before
+// injecting; rules that don't touch the body stream their bodies untouched.
+func (r Rule) usesBodySurface() bool {
+	if r.Injection.Type != InjectPlaceholder {
+		return false
+	}
+	for _, s := range r.Injection.Surfaces {
+		if s == SurfaceBody {
+			return true
+		}
+	}
+	return false
+}
+
 // Match reports whether the rule's host pattern matches host. Comparison is
 // case-insensitive (DNS hostnames are case-insensitive per RFC 4343). The
 // glob form follows TLS-wildcard semantics: "*" matches exactly one DNS

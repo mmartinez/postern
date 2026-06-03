@@ -56,7 +56,7 @@ func TestE2E_BrokerInjectsHeaderThroughMITMProxy(t *testing.T) {
 		},
 	}})
 	res := &fakeResolver{value: "sk-from-resolver"}
-	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
 
 	p, err := proxy.New(proxy.Config{
 		CA:                 root,
@@ -107,7 +107,7 @@ func TestE2E_ResolverErrorReturns502_UpstreamNotContacted(t *testing.T) {
 		},
 	}})
 	res := &fakeResolver{err: errors.New("token revoked")}
-	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
 
 	p, err := proxy.New(proxy.Config{
 		CA:                 root,
@@ -156,7 +156,7 @@ func TestE2E_OnNoMatchBlock_UpstreamNotContacted(t *testing.T) {
 		},
 	}})
 	res := &fakeResolver{value: "sk-from-resolver"}
-	hook := broker.Hook(engine, res, config.OnNoMatchBlock, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+	hook := broker.Hook(engine, res, config.OnNoMatchBlock, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
 
 	p, err := proxy.New(proxy.Config{
 		CA:                 root,

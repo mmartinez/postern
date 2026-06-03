@@ -59,6 +59,7 @@ func TestProxy_PlainHTTPMatch_FailsClosed_UpstreamNotContacted(t *testing.T) {
 		broker.NewEngine([]broker.Rule{rule}),
 		countingResolver{&resolverCalls},
 		config.OnNoMatchPassthrough,
+		0,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 

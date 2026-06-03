@@ -270,6 +270,62 @@ func TestRunReloader_WarnsOnBaselineDrift(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "expected a Warn about cache_ttl drift; got %s", logBuf.String())
 }
 
+// TestRunReloader_WarnsOnMaxBodyBytesDrift confirms that editing the
+// proxy-wide body cap (bound at startup, captured in the hook closure) trips a
+// restart warning, mirroring the other boot-bound proxy fields.
+func TestRunReloader_WarnsOnMaxBodyBytesDrift(t *testing.T) {
+	t.Parallel()
+
+	engine := broker.NewEngine(nil)
+	logBuf := &syncBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	baseline := &broker.Baseline{
+		Proxy: config.Proxy{
+			Listen:       "127.0.0.1:1701",
+			CacheTTL:     15 * time.Minute,
+			OnNoMatch:    config.OnNoMatchPassthrough,
+			MaxBodyBytes: 1 << 20,
+		},
+		CredStores: []config.CredStore{{
+			Name:  config.DefaultCredStoreName,
+			Token: config.Token{Source: config.TokenSourceAuto, EnvVar: "OP_SERVICE_ACCOUNT_TOKEN"},
+		}},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan config.Event, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		broker.RunReloader(ctx, engine, events, logger, baseline)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		close(events)
+		wg.Wait()
+	})
+
+	events <- config.Event{
+		New: &config.Config{
+			Proxy: config.Proxy{
+				Listen:       "127.0.0.1:1701",
+				CacheTTL:     15 * time.Minute,
+				OnNoMatch:    config.OnNoMatchPassthrough,
+				MaxBodyBytes: 8 << 20,
+			},
+			CredStores: baseline.CredStores,
+		},
+	}
+
+	require.Eventually(t, func() bool {
+		s := logBuf.String()
+		return strings.Contains(s, "config edit ignored") && strings.Contains(s, "max_body_bytes")
+	}, 2*time.Second, 10*time.Millisecond, "expected a Warn about max_body_bytes drift; got %s", logBuf.String())
+}
+
 // TestRunReloader_DoesNotWarnOnCredStoreReorder confirms that a cosmetic
 // reorder of `credstores:` entries in YAML (semantically a no-op) does
 // not trip the drift warning. Order-sensitivity here trains operators

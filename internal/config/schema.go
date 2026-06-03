@@ -41,6 +41,23 @@ const (
 	InjectTypePlaceholder InjectType = "placeholder"
 )
 
+// InjectSurface names a request component placeholder substitution can rewrite.
+// Surfaces are opt-in per rule via inject.in; the default is header-only.
+type InjectSurface string
+
+// Injection surface values accepted in YAML.
+const (
+	InjectSurfaceHeader InjectSurface = "header"
+	InjectSurfaceBody   InjectSurface = "body"
+	InjectSurfacePath   InjectSurface = "path"
+	InjectSurfaceQuery  InjectSurface = "query"
+)
+
+// DefaultMaxBodyBytes is the proxy-wide body buffering cap used when
+// proxy.max_body_bytes is unset (or non-positive). A request body that a
+// body-rewriting rule would buffer beyond this size is rejected with 413.
+const DefaultMaxBodyBytes = 1 << 20 // 1 MiB
+
 // Config is the root of the YAML schema (~/.postern/config.yaml).
 //
 // Two top-level credential-vendor shapes are accepted, but only one at a
@@ -127,6 +144,12 @@ type Proxy struct {
 	Listen    string        `yaml:"listen"`
 	CacheTTL  time.Duration `yaml:"cache_ttl"`
 	OnNoMatch OnNoMatch     `yaml:"on_no_match"`
+
+	// MaxBodyBytes caps how much of a request body postern buffers when a
+	// rule rewrites the body (inject.in includes "body"). Zero means use
+	// DefaultMaxBodyBytes. A body larger than the cap is rejected with 413.
+	// Bound at startup; a hot-reload edit warns and does not take effect.
+	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
 }
 
 // DefaultListenAddr is the loopback bind postern uses when no listen address
@@ -153,4 +176,14 @@ type Inject struct {
 	Type     InjectType `yaml:"type"`
 	Name     string     `yaml:"name,omitempty"`
 	Template string     `yaml:"template"`
+
+	// In lists the request surfaces placeholder mode rewrites (any subset of
+	// header, body, path, query). Empty means header-only. Valid only with
+	// type: placeholder.
+	In []InjectSurface `yaml:"in,omitempty"`
+
+	// MaxBodyBytes overrides proxy.max_body_bytes for this rule's body
+	// buffering. Zero means inherit the proxy-wide cap. Meaningful only when
+	// In includes "body".
+	MaxBodyBytes *int `yaml:"max_body_bytes,omitempty"`
 }

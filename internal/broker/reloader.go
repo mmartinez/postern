@@ -113,6 +113,12 @@ func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.
 			slog.String("reason", "on_no_match is bound at startup; restart postern to apply"),
 		)
 	}
+	if reloaded.Proxy.MaxBodyBytes != baseline.Proxy.MaxBodyBytes {
+		logger.Warn("config edit ignored",
+			slog.String("field", "proxy.max_body_bytes"),
+			slog.String("reason", "the proxy-wide body cap is bound at startup; restart postern to apply (per-rule inject.max_body_bytes hot-reloads)"),
+		)
+	}
 	if !credStoresEqual(reloaded.CredStores, baseline.CredStores) {
 		logger.Warn("config edit ignored",
 			slog.String("field", "credstores"),
