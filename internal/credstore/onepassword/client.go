@@ -37,7 +37,14 @@ type secretsResolver interface {
 // Client is the narrow surface other postern packages depend on. It is
 // constructed from a service-account token and exposes the minimum set of
 // operations the broker runtime needs.
+//
+// sdk is the owning *sdk.Client. It is retained for the Client's lifetime so
+// the SDK's GC finalizer (which calls ReleaseClient and frees the underlying
+// core client) cannot fire while the vaults/secrets handles are still in use:
+// those handles do not keep the parent client reachable on their own. See
+// Resolver, which propagates this reference to the long-lived resolver.
 type Client struct {
+	sdk     *sdk.Client
 	vaults  vaultsLister
 	secrets secretsResolver
 }
@@ -54,7 +61,7 @@ func New(ctx context.Context, token, integrationVersion string) (*Client, error)
 	if err != nil {
 		return nil, fmt.Errorf("1password client: %w", err)
 	}
-	return &Client{vaults: s.Vaults(), secrets: s.Secrets()}, nil
+	return &Client{sdk: s, vaults: s.Vaults(), secrets: s.Secrets()}, nil
 }
 
 // Resolver returns a broker.Resolver backed by this Client's SDK secrets
@@ -62,7 +69,7 @@ func New(ctx context.Context, token, integrationVersion string) (*Client, error)
 // passing it to the broker so TTL and non-cacheable-ref semantics are
 // uniform across vendors.
 func (c *Client) Resolver() broker.Resolver {
-	return &sdkResolver{secrets: c.secrets}
+	return &sdkResolver{secrets: c.secrets, keepAlive: c}
 }
 
 // HealthCheck verifies the configured service-account token is valid and
