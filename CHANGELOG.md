@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/mmartinez/postern/compare/v0.3.1...v0.3.2) (2026-06-03)
+
+
+### Bug Fixes
+
+* **credstore:** retain 1Password SDK client so GC finalizer can't free it ([#38](https://github.com/mmartinez/postern/issues/38)) ([ae97b67](https://github.com/mmartinez/postern/commit/ae97b678ccc46fb6fc2b5506eb820d1751c02c94))
+
 ## [0.3.1](https://github.com/mmartinez/postern/compare/v0.3.0...v0.3.1) (2026-06-03)
 
 
