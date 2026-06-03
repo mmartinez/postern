@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/mmartinez/postern/compare/v0.2.1...v0.3.0) (2026-06-03)
+
+
+### Features
+
+* **broker:** substitute placeholders in body, path, and query ([#17](https://github.com/mmartinez/postern/issues/17)) ([#32](https://github.com/mmartinez/postern/issues/32)) ([a2698e6](https://github.com/mmartinez/postern/commit/a2698e627b2c758b1d278af335e1e135252e5bff))
+
 ## [0.2.1](https://github.com/mmartinez/postern/compare/v0.2.0...v0.2.1) (2026-06-02)
 
 
