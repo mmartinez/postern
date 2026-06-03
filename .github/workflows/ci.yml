@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.26"
+  GO_VERSION: "1.26.4"
   GOLANGCI_VERSION: "v2.12.2"
   GITLEAKS_VERSION: "8.21.4"
   GOFUMPT_VERSION: "v0.7.0"
@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.26.x"]
+        go: ["1.26.4"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
