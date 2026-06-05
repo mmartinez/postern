@@ -73,7 +73,10 @@ distinction.
 ```yaml
 proxy:
   listen: 127.0.0.1:1701     # host:port to listen on
-  cache_ttl: 5m               # how long a resolved credential is cached
+  cache:                      # background-refreshing credential cache
+    ttl: 1h                   # nominal freshness window
+    refresh_ahead: 45m        # refresh asynchronously once a value reaches this age
+    max_stale: 24h            # keep serving a cached value this long if refreshes fail
   on_no_match: passthrough    # passthrough | block
   max_body_bytes: 1048576     # body buffering cap for body substitution (1 MiB)
 ```
@@ -81,9 +84,40 @@ proxy:
 | Field | Required | Meaning |
 |---|---|---|
 | `listen` | yes | `host:port` the proxy binds. Point your agent's `HTTPS_PROXY` at this. |
-| `cache_ttl` | yes | Go duration (`5m`, `30s`). Must be greater than zero. How long a resolved credential is cached before re-fetching; one-time-password references are never cached. |
+| `cache` | no | Credential cache settings (see below). |
+| `cache_ttl` | no | **Legacy alias for `cache.ttl`.** Go duration (`5m`, `30s`). Accepted for backward compatibility; prefer the `cache` block. Setting both `cache_ttl` and `cache.ttl` to different values is a config error. |
 | `on_no_match` | no | What to do when no rule matches. `passthrough` (default) forwards the request unchanged. |
 | `max_body_bytes` | no | Cap (in bytes) on how much of a request body postern buffers when a rule rewrites the body (`inject.in` includes `body`). Default 1 MiB when unset or `0`. A larger body is rejected with `413 Request Entity Too Large` and never reaches the upstream. Bound at startup; a hot-reload edit warns and does not take effect (a per-rule `inject.max_body_bytes` override does hot-reload). |
+
+### `proxy.cache`
+
+Credential resolution is a background concern: the request/inject path reads
+from an in-memory cache keyed by `secret_ref` and essentially never calls the
+vault directly. Concurrent misses for the same reference collapse into a single
+vault call (single-flight); an entry past its `refresh_ahead` age is refreshed
+on a background goroutine while its current value keeps being served; and a
+transient vault failure (rate-limit, timeout) keeps serving the last-known-good
+value up to `max_stale` instead of failing closed. A reference that was **never**
+successfully resolved still fails closed (HTTP 502) — that security guarantee is
+unchanged. One-time-password references are never cached.
+
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `ttl` | no | `1h` | Nominal freshness window. Past `ttl` a value is served *stale* (and logged) while a refresh is attempted. |
+| `refresh_ahead` | no | 75% of `ttl` | Age at which a request triggers an asynchronous refresh, so the hot path never blocks on the vault and there is no cold window at expiry. Must be greater than zero and less than `ttl`. |
+| `max_stale` | no | `24h` | Hard age limit. A value older than `max_stale` is not served: the resolver re-resolves and fails closed on error. Must be `>= ttl`. |
+
+All three are bound at startup; a hot-reload edit warns and does not take effect
+(restart `postern` to apply). The defaults are tuned for long-lived API tokens:
+the vault is queried at most once per reference per refresh interval, with
+exponential backoff (and jitter) after a transient failure so a rate-limited
+vault is not re-hammered.
+
+> **Security note.** Serving a cached value when a refresh fails (up to
+> `max_stale`) means a credential revoked at the vault can keep being injected
+> for that window if the vault is also unreachable for refreshes. Lower
+> `max_stale` (or set it equal to `ttl` to disable stale-serving) for
+> revocation-sensitive deployments. See [security.md](security.md#credential-caching-and-revocation-window).
 
 > **Note — `on_no_match: block`.** The value is accepted today but not yet
 > enforced: every unmatched request currently passes through regardless. Don't
@@ -205,6 +239,9 @@ Errors block startup. Common errors:
   token with reserved characters when a non-header surface is declared.
 - `proxy.max_body_bytes` (or a per-rule `inject.max_body_bytes`) negative; a
   per-rule `max_body_bytes` set without `body` in `inject.in`.
-- `cache_ttl` not greater than zero; `listen` missing or not `host:port`.
+- `cache_ttl` not greater than zero (when no `cache` block is set); `cache.ttl`
+  and `cache_ttl` set to different values; `cache.refresh_ahead` not less than
+  `cache.ttl`; `cache.max_stale` less than `cache.ttl`; `listen` missing or not
+  `host:port`.
 - A rule present but no credstore configured (set `token:` or `credstores:`).
 - Duplicate rule hosts or duplicate credstore names.

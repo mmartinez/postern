@@ -17,6 +17,26 @@ a missing token from a network blip from a misconfigured rule.
 This is an enforced invariant, not a convention: integration tests assert that
 on a resolver error the upstream-side request counter stays at zero.
 
+## Credential caching and revocation window
+
+Resolved credentials are cached in memory and refreshed in the background so the
+request path does not call the vault on every request (see
+[configuration.md](configuration.md#proxycache)). This has a security
+consequence worth stating explicitly: **serve-stale extends how long a revoked
+credential can keep being injected.** If a credential is revoked or rotated at
+the vault while the vault is simultaneously unreachable for refreshes
+(rate-limit, outage), postern keeps serving the last-known-good value for up to
+`proxy.cache.max_stale` (default 24h) before it fails closed. A credential that
+was **never** successfully resolved is never served — only a previously-good
+value is served stale.
+
+The trade-off is deliberate: it is what keeps a transient vault hiccup from
+turning into a 502 storm. `max_stale` is the knob that bounds the exposure
+window. Revocation-sensitive deployments should lower it; setting
+`max_stale == ttl` disables stale-serving entirely (the cache then fails closed
+as soon as a value is past `ttl` and a refresh has failed). One-time-password
+references are never cached, regardless of these settings.
+
 ## What is logged, and what is never logged
 
 Logging is structured (`log/slog`, text or JSON). Postern emits a per-request

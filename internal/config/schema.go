@@ -141,8 +141,12 @@ func (t Token) IsZero() bool {
 
 // Proxy is the listener + caching configuration for the forward HTTPS proxy.
 type Proxy struct {
-	Listen    string        `yaml:"listen"`
-	CacheTTL  time.Duration `yaml:"cache_ttl"`
+	Listen string `yaml:"listen"`
+	// CacheTTL is the legacy scalar credential-cache TTL. It is retained for
+	// backward compatibility and is an alias for Cache.TTL; new configs should
+	// use the cache block. See Proxy.CacheSettings for how the two interact.
+	CacheTTL  time.Duration `yaml:"cache_ttl,omitempty"`
+	Cache     *Cache        `yaml:"cache,omitempty"`
 	OnNoMatch OnNoMatch     `yaml:"on_no_match"`
 
 	// MaxBodyBytes caps how much of a request body postern buffers when a
@@ -150,6 +154,79 @@ type Proxy struct {
 	// DefaultMaxBodyBytes. A body larger than the cap is rejected with 413.
 	// Bound at startup; a hot-reload edit warns and does not take effect.
 	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
+}
+
+// Default cache settings applied when the corresponding key is absent. The
+// defaults are tuned for long-lived API tokens: refresh well before expiry and
+// tolerate a long vault outage by serving the last-known-good value.
+const (
+	// DefaultCacheTTL is the nominal freshness window when neither cache.ttl
+	// nor the legacy cache_ttl is set.
+	DefaultCacheTTL = time.Hour
+	// DefaultCacheMaxStale bounds how long a value is served after it could
+	// last be refreshed, before the resolver fails closed.
+	DefaultCacheMaxStale = 24 * time.Hour
+)
+
+// Cache is the optional proxy.cache block: a background-refreshing credential
+// cache. Every field is optional; absent values default per
+// Proxy.CacheSettings. The effective settings must satisfy
+// 0 < refresh_ahead < ttl <= max_stale (enforced by the validator).
+type Cache struct {
+	// TTL is the nominal freshness window. Past TTL a value is served stale
+	// (up to MaxStale) while a refresh is attempted.
+	TTL time.Duration `yaml:"ttl,omitempty"`
+	// RefreshAhead is the age at which a request triggers an asynchronous
+	// refresh; defaults to 75% of the effective TTL.
+	RefreshAhead time.Duration `yaml:"refresh_ahead,omitempty"`
+	// MaxStale is the hard age limit; past it the resolver fails closed rather
+	// than serve a value. Defaults to DefaultCacheMaxStale (clamped up to TTL).
+	MaxStale time.Duration `yaml:"max_stale,omitempty"`
+}
+
+// CacheSettings is the resolved, effective credential-cache configuration the
+// runtime builds its resolver cache from.
+type CacheSettings struct {
+	TTL          time.Duration
+	RefreshAhead time.Duration
+	MaxStale     time.Duration
+}
+
+// CacheSettings resolves the effective cache configuration from the cache block
+// and the legacy cache_ttl alias, applying defaults. It assumes the config has
+// passed validation and clamps defensively so the result always satisfies
+// 0 < RefreshAhead < TTL <= MaxStale.
+//
+// Precedence: cache.ttl wins over cache_ttl (the validator rejects the case
+// where both are set and disagree); when neither is set, DefaultCacheTTL.
+// refresh_ahead defaults to 75% of the effective TTL; max_stale defaults to
+// DefaultCacheMaxStale, clamped up to TTL.
+func (p Proxy) CacheSettings() CacheSettings {
+	ttl := DefaultCacheTTL
+	switch {
+	case p.Cache != nil && p.Cache.TTL > 0:
+		ttl = p.Cache.TTL
+	case p.CacheTTL > 0:
+		ttl = p.CacheTTL
+	}
+
+	refreshAhead := ttl - ttl/4 // 75% of ttl
+	if p.Cache != nil && p.Cache.RefreshAhead > 0 {
+		refreshAhead = p.Cache.RefreshAhead
+	}
+	if refreshAhead <= 0 || refreshAhead >= ttl {
+		refreshAhead = ttl - ttl/4
+	}
+
+	maxStale := DefaultCacheMaxStale
+	if p.Cache != nil && p.Cache.MaxStale > 0 {
+		maxStale = p.Cache.MaxStale
+	}
+	if maxStale < ttl {
+		maxStale = ttl
+	}
+
+	return CacheSettings{TTL: ttl, RefreshAhead: refreshAhead, MaxStale: maxStale}
 }
 
 // DefaultListenAddr is the loopback bind postern uses when no listen address
