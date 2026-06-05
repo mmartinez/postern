@@ -123,6 +123,62 @@ rules:
 			},
 		},
 		{
+			name: "valid cache block",
+			yaml: strings.Replace(validConfig, "cache_ttl: 5m",
+				"cache:\n    ttl: 1h\n    refresh_ahead: 45m\n    max_stale: 24h", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				require.Empty(t, lints, "a valid cache block needs no cache_ttl")
+			},
+		},
+		{
+			name: "cache_ttl and cache.ttl disagree",
+			yaml: strings.Replace(validConfig, "cache_ttl: 5m",
+				"cache_ttl: 5m\n  cache:\n    ttl: 1h", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "cache")
+			},
+		},
+		{
+			name: "refresh_ahead not less than ttl",
+			yaml: strings.Replace(validConfig, "cache_ttl: 5m",
+				"cache:\n    ttl: 1h\n    refresh_ahead: 1h", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "refresh_ahead")
+			},
+		},
+		{
+			name: "max_stale less than ttl",
+			yaml: strings.Replace(validConfig, "cache_ttl: 5m",
+				"cache:\n    ttl: 1h\n    max_stale: 30m", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "max_stale")
+			},
+		},
+		{
+			name: "cache_ttl and cache.ttl agree is allowed",
+			yaml: strings.Replace(validConfig, "cache_ttl: 5m",
+				"cache_ttl: 1h\n  cache:\n    ttl: 1h", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				require.Empty(t, lints, "equal cache_ttl and cache.ttl must not lint")
+			},
+		},
+		{
+			name: "negative refresh_ahead",
+			yaml: strings.Replace(validConfig, "cache_ttl: 5m",
+				"cache:\n    ttl: 1h\n    refresh_ahead: -1m", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "refresh_ahead")
+			},
+		},
+		{
+			name: "negative max_stale",
+			yaml: strings.Replace(validConfig, "cache_ttl: 5m",
+				"cache:\n    ttl: 1h\n    max_stale: -1h", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "max_stale")
+			},
+		},
+		{
 			name: "bad listen address",
 			yaml: strings.Replace(validConfig, "127.0.0.1:1701", "no-port", 1),
 			wantLints: func(t *testing.T, lints []config.LintError) {

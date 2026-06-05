@@ -270,6 +270,61 @@ func TestRunReloader_WarnsOnBaselineDrift(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "expected a Warn about cache_ttl drift; got %s", logBuf.String())
 }
 
+// TestRunReloader_WarnsOnCacheBlockDrift confirms that editing the proxy.cache
+// block (bound at startup, like cache_ttl) trips a restart warning. Without it
+// an operator who tunes ttl/refresh_ahead/max_stale on disk would believe the
+// new values took effect.
+func TestRunReloader_WarnsOnCacheBlockDrift(t *testing.T) {
+	t.Parallel()
+
+	engine := broker.NewEngine(nil)
+	logBuf := &syncBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	baseline := &broker.Baseline{
+		Proxy: config.Proxy{
+			Listen:    "127.0.0.1:1701",
+			Cache:     &config.Cache{TTL: time.Hour, RefreshAhead: 45 * time.Minute, MaxStale: 24 * time.Hour},
+			OnNoMatch: config.OnNoMatchPassthrough,
+		},
+		CredStores: []config.CredStore{{
+			Name:  config.DefaultCredStoreName,
+			Token: config.Token{Source: config.TokenSourceAuto, EnvVar: "OP_SERVICE_ACCOUNT_TOKEN"},
+		}},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan config.Event, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		broker.RunReloader(ctx, engine, events, logger, baseline)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		close(events)
+		wg.Wait()
+	})
+
+	events <- config.Event{
+		New: &config.Config{
+			Proxy: config.Proxy{
+				Listen:    "127.0.0.1:1701",
+				Cache:     &config.Cache{TTL: 2 * time.Hour, RefreshAhead: 90 * time.Minute, MaxStale: 24 * time.Hour},
+				OnNoMatch: config.OnNoMatchPassthrough,
+			},
+			CredStores: baseline.CredStores,
+		},
+	}
+
+	require.Eventually(t, func() bool {
+		s := logBuf.String()
+		return strings.Contains(s, "config edit ignored") && strings.Contains(s, "proxy.cache")
+	}, 2*time.Second, 10*time.Millisecond, "expected a Warn about proxy.cache drift; got %s", logBuf.String())
+}
+
 // TestRunReloader_WarnsOnMaxBodyBytesDrift confirms that editing the
 // proxy-wide body cap (bound at startup, captured in the hook closure) trips a
 // restart warning, mirroring the other boot-bound proxy fields.

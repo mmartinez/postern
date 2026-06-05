@@ -110,9 +110,7 @@ func (v *validator) checkProxy(p *Proxy) {
 	} else {
 		v.add("proxy.listen", "listen is required", SeverityError)
 	}
-	if p.CacheTTL <= 0 {
-		v.add("proxy.cache_ttl", "cache_ttl must be > 0", SeverityError)
-	}
+	v.checkCache(p)
 	switch p.OnNoMatch {
 	case OnNoMatchPassthrough, OnNoMatchBlock, "":
 	default:
@@ -120,6 +118,48 @@ func (v *validator) checkProxy(p *Proxy) {
 	}
 	if p.MaxBodyBytes < 0 {
 		v.add("proxy.max_body_bytes", fmt.Sprintf("max_body_bytes must be >= 0 (got %d); 0 means use the default", p.MaxBodyBytes), SeverityError)
+	}
+}
+
+// checkCache validates the credential-cache configuration. Without a cache
+// block the legacy scalar cache_ttl is required and must be positive. With a
+// cache block, cache_ttl becomes an optional alias for cache.ttl (setting both
+// to different values is rejected), and the effective settings must satisfy
+// 0 < refresh_ahead < ttl <= max_stale.
+func (v *validator) checkCache(p *Proxy) {
+	if p.Cache == nil {
+		if p.CacheTTL <= 0 {
+			v.add("proxy.cache_ttl", "cache_ttl must be > 0", SeverityError)
+		}
+		return
+	}
+
+	c := p.Cache
+	if c.TTL > 0 && p.CacheTTL > 0 && c.TTL != p.CacheTTL {
+		v.add("proxy.cache.ttl",
+			fmt.Sprintf("cache.ttl (%s) and cache_ttl (%s) disagree; set only one", c.TTL, p.CacheTTL),
+			SeverityError)
+	}
+	if c.TTL < 0 {
+		v.add("proxy.cache.ttl", "cache.ttl must be > 0", SeverityError)
+	}
+	if c.RefreshAhead < 0 {
+		v.add("proxy.cache.refresh_ahead", "cache.refresh_ahead must be > 0", SeverityError)
+	}
+	if c.MaxStale < 0 {
+		v.add("proxy.cache.max_stale", "cache.max_stale must be > 0", SeverityError)
+	}
+
+	ttl := p.CacheSettings().TTL
+	if c.RefreshAhead > 0 && c.RefreshAhead >= ttl {
+		v.add("proxy.cache.refresh_ahead",
+			fmt.Sprintf("cache.refresh_ahead (%s) must be less than ttl (%s)", c.RefreshAhead, ttl),
+			SeverityError)
+	}
+	if c.MaxStale > 0 && c.MaxStale < ttl {
+		v.add("proxy.cache.max_stale",
+			fmt.Sprintf("cache.max_stale (%s) must be >= ttl (%s)", c.MaxStale, ttl),
+			SeverityError)
 	}
 }
 

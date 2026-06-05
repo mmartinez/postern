@@ -101,6 +101,12 @@ func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.
 			slog.Duration("on_disk", reloaded.Proxy.CacheTTL),
 		)
 	}
+	if !cacheBlockEqual(reloaded.Proxy.Cache, baseline.Proxy.Cache) {
+		logger.Warn("config edit ignored",
+			slog.String("field", "proxy.cache"),
+			slog.String("reason", "cache settings are bound at startup; restart postern to apply"),
+		)
+	}
 	if reloaded.Proxy.Listen != "" && reloaded.Proxy.Listen != baseline.Proxy.Listen {
 		logger.Warn("config edit ignored",
 			slog.String("field", "proxy.listen"),
@@ -124,6 +130,20 @@ func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.
 			slog.String("field", "credstores"),
 			slog.String("reason", "credstore provider/token sources are resolved at startup; restart postern to apply"),
 		)
+	}
+}
+
+// cacheBlockEqual reports whether two optional proxy.cache blocks are
+// equivalent. Cache is a struct of comparable durations, so a nil-aware value
+// comparison suffices.
+func cacheBlockEqual(a, b *config.Cache) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
 	}
 }
 

@@ -22,8 +22,15 @@ token:
 proxy:
   # host:port the proxy listens on. Set HTTPS_PROXY to this in your agent shell.
   listen: 127.0.0.1:1701
-  # How long to cache a resolved credential before re-fetching.
-  cache_ttl: 5m
+  # Credential cache. Resolution is a background concern: the request path reads
+  # from this cache and never blocks on the vault, concurrent misses collapse
+  # into one vault call, and a transient vault error keeps serving the
+  # last-known-good value instead of failing closed. Tuned for long-lived tokens.
+  # (The legacy scalar `cache_ttl: <dur>` is still accepted as an alias for ttl.)
+  cache:
+    ttl: 1h             # nominal freshness window
+    refresh_ahead: 45m  # refresh asynchronously once a value reaches this age
+    max_stale: 24h      # keep serving a cached value this long if refreshes fail
   # What to do when no rule matches an outbound request.
   # passthrough = forward unchanged. block = refuse with 502.
   on_no_match: passthrough

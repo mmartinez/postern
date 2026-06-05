@@ -36,11 +36,6 @@ import (
 // patterns from the user's shell don't accidentally trip the check.
 const daemonEnvFlag = "POSTERN_DAEMONIZED"
 
-// brokerCacheCapacity caps the resolver cache. The LRU eviction handles
-// overflow; the entries are credential strings so we keep the cap
-// conservative.
-const brokerCacheCapacity = 1000
-
 // NewServerCmd builds `postern server`. caDir is where the persisted CA
 // lives; reg is the credstore provider registry the broker resolves against;
 // store is the OS keychain wrapper used by the token-resolution chain when
@@ -243,7 +238,14 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		return brokerBundle{}, fmt.Errorf("init credstore router: %w", err)
 	}
 
-	cached, err := credstore.NewCachedResolver(router, brokerCacheCapacity, cfg.Proxy.CacheTTL, nil, newShouldCacheRef(reg))
+	cacheSettings := cfg.Proxy.CacheSettings()
+	cached, err := credstore.NewCachedResolver(router, credstore.CacheConfig{
+		TTL:          cacheSettings.TTL,
+		RefreshAhead: cacheSettings.RefreshAhead,
+		MaxStale:     cacheSettings.MaxStale,
+		ShouldCache:  newShouldCacheRef(reg),
+		Logger:       logger,
+	})
 	if err != nil {
 		return brokerBundle{}, fmt.Errorf("init resolver cache: %w", err)
 	}
@@ -251,7 +253,9 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 	logger.Info("broker enabled",
 		slog.Int("rules", len(rules)),
 		slog.Int("credstores", len(cfg.CredStores)),
-		slog.Duration("cache_ttl", cfg.Proxy.CacheTTL),
+		slog.Duration("cache_ttl", cacheSettings.TTL),
+		slog.Duration("cache_refresh_ahead", cacheSettings.RefreshAhead),
+		slog.Duration("cache_max_stale", cacheSettings.MaxStale),
 	)
 	return brokerBundle{
 		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, logger), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
