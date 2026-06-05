@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/mmartinez/postern/compare/v0.3.2...v0.3.3) (2026-06-05)
+
+
+### Bug Fixes
+
+* **credstore:** make credential cache background-refreshing to stop 502 storms ([#43](https://github.com/mmartinez/postern/issues/43)) ([8d44947](https://github.com/mmartinez/postern/commit/8d44947968eaf693172b5545bfeb174a1461885b))
+
 ## [0.3.2](https://github.com/mmartinez/postern/compare/v0.3.1...v0.3.2) (2026-06-03)
 
 
