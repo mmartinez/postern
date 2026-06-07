@@ -206,6 +206,24 @@ func TestAssertRulesRoutable(t *testing.T) {
 	if !strings.Contains(err.Error(), "bw") {
 		t.Fatalf("error should name the unroutable scheme: %v", err)
 	}
+
+	// A placeholder-routing rule has an empty rule-level SecretRef; its
+	// per-route secret_ref schemes must still be checked, or an unroutable route
+	// would only surface as a 502 at the first matching request.
+	unroutableRoutes := []broker.Rule{{Host: "api.telegram.org", Routes: []broker.Route{
+		{Name: "max", Token: "tgMax", SecretRef: "op://V/max"},
+		{Name: "john", Token: "tgJohn", SecretRef: "bw://C/john"},
+	}}}
+	if err := assertRulesRoutable(unroutableRoutes, resolvers); err == nil {
+		t.Fatalf("routes rule with unroutable route scheme: want error, got nil")
+	}
+
+	routableRoutes := []broker.Rule{{Host: "api.telegram.org", Routes: []broker.Route{
+		{Name: "max", Token: "tgMax", SecretRef: "op://V/max"},
+	}}}
+	if err := assertRulesRoutable(routableRoutes, resolvers); err != nil {
+		t.Fatalf("routes rule with routable scheme: unexpected error %v", err)
+	}
 }
 
 func writeConfig(t *testing.T, body string) string {

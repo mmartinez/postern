@@ -8,12 +8,27 @@ useDefault = true
 
 # Project-specific allowlist (very conservative — anything we add here must
 # be reviewed and justified).
-[[allowlists]]
-description = "Documentation files where brand/secret-shaped marketing copy is intentional"
+#
+# NOTE: this is the singular [allowlist] table, not the plural [[allowlists]].
+# With [extend].useDefault the pinned gitleaks (8.21.4, matched by CI) silently
+# ignores the plural form, so the entries below must live under [allowlist] to
+# take effect. Within the block, a finding is exempt if it matches any path OR
+# any regex.
+[allowlist]
+description = "postern documentation and synthetic test fixtures"
 paths = [
     '''^NOTICE$''',
     '''^LICENSE$''',
     '''^README\.md$''',
     '''^THIRD_PARTY_NOTICES\.md$''',
     '''^docs/.*''',
+]
+# Synthetic placeholder-routing example tokens used in tests and the commented
+# default.yaml example. They are deliberately high-entropy — to exercise the
+# routing token-entropy lint's "no warning" path — which makes the default
+# generic-api-key rule treat them as real keys. They are fixed, fake, and never
+# resolve to anything. Scoped to the exact synthetic prefix (not a broad path)
+# so a genuinely leaked key cannot hide behind this entry.
+regexes = [
+    '''tg_(max|john|alice)_[A-Za-z0-9]+''',
 ]

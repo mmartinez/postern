@@ -347,13 +347,22 @@ func pickProvider(reg *credstore.Registry, cs config.CredStore) (credstore.Provi
 // credstore case, which the per-scheme router would otherwise only reject at
 // the first matching request.
 func assertRulesRoutable(rules []broker.Rule, resolvers map[string]broker.Resolver) error {
-	for _, r := range rules {
-		scheme, _, ok := strings.Cut(r.SecretRef, "://")
-		if !ok || scheme == "" {
-			continue
+	for i := range rules {
+		r := &rules[i]
+		// A placeholder-routing rule has an empty rule-level SecretRef and one
+		// ref per route; check every ref the rule can resolve to.
+		refs := []string{r.SecretRef}
+		for _, rt := range r.Routes {
+			refs = append(refs, rt.SecretRef)
 		}
-		if _, ok := resolvers[scheme]; !ok {
-			return fmt.Errorf("rule %q references secret_ref scheme %q but no credstore resolves it", r.Host, scheme)
+		for _, ref := range refs {
+			scheme, _, ok := strings.Cut(ref, "://")
+			if !ok || scheme == "" {
+				continue
+			}
+			if _, ok := resolvers[scheme]; !ok {
+				return fmt.Errorf("rule %q references secret_ref scheme %q but no credstore resolves it", r.Host, scheme)
+			}
 		}
 	}
 	return nil
