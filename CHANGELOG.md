@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/mmartinez/postern/compare/v0.3.3...v0.4.0) (2026-06-07)
+
+
+### Features
+
+* **broker:** route placeholder tokens to per-agent secrets ([#45](https://github.com/mmartinez/postern/issues/45)) ([287fec6](https://github.com/mmartinez/postern/commit/287fec6a4162d174a394b84f7c2663c7fb80d679))
+
 ## [0.3.3](https://github.com/mmartinez/postern/compare/v0.3.2...v0.3.3) (2026-06-05)
 
 
