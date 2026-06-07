@@ -51,6 +51,71 @@ func surfaceRule(surfaces ...broker.Surface) broker.Rule {
 	}
 }
 
+// routedSurfaceRule is a placeholder-routing rule for the integration harness
+// (host 127.0.0.1, the httptest upstream): two agents, header surface.
+func routedSurfaceRule() broker.Rule {
+	return broker.Rule{
+		Host:      "127.0.0.1",
+		Injection: broker.InjectSpec{Type: broker.InjectPlaceholder, Template: "{{ CREDENTIAL }}"},
+		Routes: []broker.Route{
+			{Name: "max", Token: "tg_max_8Kq2Lp9wZ", SecretRef: "op://Agents/telegram-max/token"},
+			{Name: "john", Token: "tg_john_3Rt7Yx1mQ", SecretRef: "op://Agents/telegram-john/token"},
+		},
+	}
+}
+
+// E2E: a routed request reaches the real upstream with the agent's selected
+// credential injected in place of its token, and the resolver was asked for
+// exactly that route's secret_ref.
+func TestE2E_Routes_SelectsSecretAndUpstreamReceivesIt(t *testing.T) {
+	t.Parallel()
+
+	const value = "sk-routed"
+	var hits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+		hits.Add(1)
+		require.Equal(t, "Bearer "+value, req.Header.Get("Authorization"), "upstream must receive the resolved credential, not the token")
+	}))
+	t.Cleanup(upstream.Close)
+
+	client, res := surfaceProxy(t, upstream, routedSurfaceRule(), value, 1<<20)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/v1/x", http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer tg_john_3Rt7Yx1mQ")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(1), hits.Load())
+	require.Equal(t, int64(1), res.calls.Load())
+	require.Equal(t, "op://Agents/telegram-john/token", res.lastVR.ref, "must resolve the john route's secret")
+}
+
+// E2E: an unknown token fails closed end to end — the upstream is never
+// contacted and the resolver is never called.
+func TestE2E_Routes_UnknownTokenFailsClosed_UpstreamNotContacted(t *testing.T) {
+	t.Parallel()
+
+	var hits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	t.Cleanup(upstream.Close)
+
+	client, res := surfaceProxy(t, upstream, routedSurfaceRule(), "sk-routed", 1<<20)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/v1/x", http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer tg_nobody_unknown")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	require.Zero(t, hits.Load(), "upstream must not be contacted for an unknown token")
+	require.Zero(t, res.calls.Load(), "resolver must not be called for an unknown token")
+}
+
 // E2E: a placeholder in a JSON body arrives at the upstream JSON-escaped. The
 // resolver value carries a double quote, so a raw splice would corrupt the
 // JSON; correct escaping makes it decode back to the original value.

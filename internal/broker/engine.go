@@ -21,9 +21,12 @@ func NewEngine(rules []Rule) *Engine {
 // order the rules were supplied. The bool is false when no rule matches.
 // Engines must be obtained from NewEngine; the zero value is not usable.
 func (e *Engine) Match(host string) (Rule, bool) {
-	for _, r := range *e.rules.Load() {
-		if r.Match(host) {
-			return r, true
+	// Index rather than range-by-value: Rule is large enough that copying it
+	// per iteration trips gocritic's rangeValCopy.
+	rules := *e.rules.Load()
+	for i := range rules {
+		if rules[i].Match(host) {
+			return rules[i], true
 		}
 	}
 	return Rule{}, false

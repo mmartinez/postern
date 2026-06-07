@@ -167,9 +167,32 @@ func (r Rule) injectPlaceholder(req *http.Request, credential string) error {
 	if r.Injection.Name == "" {
 		return ErrEmptyPlaceholderToken
 	}
-	token := r.Injection.Name
 	value := Render(r.Injection.Template, credential)
+	return r.substituteToken(req, r.Injection.Name, value)
+}
 
+// InjectRoute renders credential into the rule's shared template and
+// substitutes it for the route's token across the declared surfaces. It is the
+// placeholder-routing counterpart of Inject: the matched route supplies the
+// token (and selected the secret), while the rule supplies the template and
+// surfaces. Fails closed when the template carries no {{ CREDENTIAL }}
+// placeholder or the token is empty.
+func (r Rule) InjectRoute(req *http.Request, route Route, credential string) error {
+	if !hasCredentialPlaceholder(r.Injection.Template) {
+		return ErrNoCredentialPlaceholder
+	}
+	if route.Token == "" {
+		return ErrEmptyPlaceholderToken
+	}
+	value := Render(r.Injection.Template, credential)
+	return r.substituteToken(req, route.Token, value)
+}
+
+// substituteToken replaces token with the already-rendered value across the
+// rule's declared surfaces, per-surface encoded. The match is aggregate: any
+// one eligible surface carrying the token is success; zero substitutions across
+// one or more eligible surfaces is a fail-closed ErrNoPlaceholder.
+func (r Rule) substituteToken(req *http.Request, token, value string) error {
 	surfaces := r.Injection.Surfaces
 	if len(surfaces) == 0 {
 		surfaces = []Surface{SurfaceHeader}

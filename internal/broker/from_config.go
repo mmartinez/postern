@@ -45,9 +45,23 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 				Surfaces:     surfaces,
 				MaxBodyBytes: derefBodyCap(src.Inject.MaxBodyBytes),
 			},
+			Routes: routesFromConfig(src.Routes),
 		}
 	}
 	return out, nil
+}
+
+// routesFromConfig translates the YAML route list into broker routes. An empty
+// list yields nil (a non-routing rule).
+func routesFromConfig(in []config.Route) []Route {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Route, len(in))
+	for i, r := range in {
+		out[i] = Route{Name: r.Name, Token: r.Token, SecretRef: r.SecretRef}
+	}
+	return out
 }
 
 // surfacesFromConfig maps the YAML surface list to broker surfaces. An empty

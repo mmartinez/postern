@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"strings"
@@ -220,6 +221,11 @@ func (v *validator) checkRule(base string, r Rule) {
 		v.add(base+".host", fmt.Sprintf("host %q must be a literal hostname or a single-* glob (e.g. *.example.com)", r.Host), SeverityError)
 	}
 
+	if len(r.Routes) > 0 {
+		v.checkRoutes(base, r)
+		return
+	}
+
 	if r.SecretRef == "" {
 		v.add(base+".secret_ref", "secret_ref is required", SeverityError)
 	} else if !secretRefPattern.MatchString(r.SecretRef) {
@@ -227,6 +233,176 @@ func (v *validator) checkRule(base string, r Rule) {
 	}
 
 	v.checkInject(base+".inject", r.Inject)
+}
+
+// checkRoutes validates a placeholder-routing rule. Routes mode replaces the
+// rule-level secret_ref and inject.name: each route carries its own token (the
+// placeholder) and secret_ref (the secret that token selects). The shared
+// inject block still supplies the template and surfaces, so its template is
+// validated here while its name must be empty.
+func (v *validator) checkRoutes(base string, r Rule) {
+	in := r.Inject
+	if r.SecretRef != "" {
+		v.add(base+".secret_ref", "secret_ref must be empty when routes is set; each route's secret_ref selects the secret", SeverityError)
+	}
+	if in.Type != InjectTypePlaceholder {
+		v.add(base+".inject.type", fmt.Sprintf("inject.type must be placeholder when routes is set (got %q)", in.Type), SeverityError)
+	}
+	if in.Name != "" {
+		v.add(base+".inject.name", "inject.name must be empty when routes is set; each route's token is the placeholder", SeverityError)
+	}
+	if in.Template == "" {
+		v.add(base+".inject.template", "template is required", SeverityError)
+	} else if !strings.Contains(in.Template, "{{ CREDENTIAL }}") && !strings.Contains(in.Template, "{{CREDENTIAL}}") {
+		v.add(base+".inject.template", "template must contain a {{ CREDENTIAL }} placeholder; without it the resolved credential is discarded and the request is forwarded unauthenticated", SeverityError)
+	}
+
+	v.checkInjectSurfaces(base+".inject", in)
+	v.checkRouteEntries(base, r.Routes, surfacesHaveNonHeader(in.In))
+}
+
+// checkRouteEntries validates each route: required fields, a well-formed
+// secret_ref, a token charset that round-trips outside headers, and that tokens
+// are mutually unique and non-overlapping (no token a substring of another).
+// Overlap is fatal because substitution matches by substring: an agent's token
+// contained in another's would route to the wrong secret.
+func (v *validator) checkRouteEntries(base string, routes []Route, hasNonHeader bool) {
+	seenToken := make(map[string]int, len(routes))
+	seenName := make(map[string]int, len(routes))
+	for i, rt := range routes {
+		rb := fmt.Sprintf("%s.routes[%d]", base, i)
+		if rt.Name == "" {
+			v.add(rb+".name", "name is required", SeverityError)
+		} else if prev, dup := seenName[rt.Name]; dup {
+			// Names are the log/metric attribution handle; duplicates make a
+			// request impossible to attribute to one agent. Not a secret, so
+			// echo it plainly.
+			v.add(rb+".name", fmt.Sprintf("duplicate route name %q (first declared at %s.routes[%d])", rt.Name, base, prev), SeverityError)
+		} else {
+			seenName[rt.Name] = i
+		}
+		if rt.Token == "" {
+			v.add(rb+".token", "token is required", SeverityError)
+		}
+		if rt.SecretRef == "" {
+			v.add(rb+".secret_ref", "secret_ref is required", SeverityError)
+		} else if !secretRefPattern.MatchString(rt.SecretRef) {
+			v.add(rb+".secret_ref", fmt.Sprintf("secret_ref %q must be a URI of the form <scheme>://<rest> (e.g., op://VAULT/ITEM/FIELD)", rt.SecretRef), SeverityError)
+		}
+		if hasNonHeader && rt.Token != "" && !unreservedTokenPattern.MatchString(rt.Token) {
+			v.add(rb+".token", "token must use only RFC 3986 unreserved characters (A-Z a-z 0-9 - . _ ~) when substituting outside headers", SeverityError)
+		}
+		if rt.Token != "" {
+			if prev, dup := seenToken[rt.Token]; dup {
+				v.add(rb+".token", fmt.Sprintf("duplicate token %s (first declared at %s.routes[%d])", maskToken(rt.Token), base, prev), SeverityError)
+			} else {
+				seenToken[rt.Token] = i
+			}
+			// A guessable token lets a co-tenant agent reach another route's
+			// secret. Warn (not fatal) — the operator owns the trust decision.
+			if bits := tokenEntropyBits(rt.Token); bits < minRecommendedTokenEntropyBits {
+				v.add(rb+".token", fmt.Sprintf("token %s looks low-entropy (~%.0f bits); a guessable token lets a co-tenant agent reach another route's secret — use a high-entropy token (>= %d bits, e.g. 16+ random characters)", maskToken(rt.Token), bits, minRecommendedTokenEntropyBits), SeverityWarning)
+			}
+		}
+	}
+
+	for i := range routes {
+		ti := routes[i].Token
+		if ti == "" {
+			continue
+		}
+		for j := range routes {
+			if i == j {
+				continue
+			}
+			tj := routes[j].Token
+			if tj == "" || ti == tj {
+				continue
+			}
+			if strings.Contains(ti, tj) {
+				v.add(fmt.Sprintf("%s.routes[%d].token", base, i),
+					fmt.Sprintf("token %s overlaps token %s (one is a substring of the other); routing matches by substring, so tokens must be mutually non-overlapping", maskToken(ti), maskToken(tj)),
+					SeverityError)
+			}
+		}
+	}
+}
+
+// surfacesHaveNonHeader reports whether the surface list names any surface other
+// than header, which tightens the token charset (the token is percent-escaped
+// outside header values and must round-trip).
+func surfacesHaveNonHeader(in []InjectSurface) bool {
+	for _, s := range in {
+		if s == InjectSurfaceBody || s == InjectSurfacePath || s == InjectSurfaceQuery {
+			return true
+		}
+	}
+	return false
+}
+
+// minRecommendedTokenEntropyBits is the estimated-entropy floor below which a
+// route token earns a warning. 64 bits is the common "strong shared secret"
+// bar; below it a token starts to look human-named or short enough that a
+// co-tenant agent could guess it. The estimate (see tokenEntropyBits) is
+// length times log2 of the character-class alphabet, so it catches short or
+// low-diversity tokens, not dictionary words.
+const minRecommendedTokenEntropyBits = 64
+
+// tokenEntropyBits estimates a token's entropy as len * log2(alphabet), where
+// alphabet is the union of the character classes the token uses (lowercase,
+// uppercase, digits, other). It is a deliberately rough upper bound used only
+// to flag obviously-guessable tokens; it cannot detect a long dictionary word.
+func tokenEntropyBits(s string) float64 {
+	var lower, upper, digit, other bool
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			lower = true
+		case r >= 'A' && r <= 'Z':
+			upper = true
+		case r >= '0' && r <= '9':
+			digit = true
+		default:
+			other = true
+		}
+	}
+	alphabet := 0
+	if lower {
+		alphabet += 26
+	}
+	if upper {
+		alphabet += 26
+	}
+	if digit {
+		alphabet += 10
+	}
+	if other {
+		alphabet += 32
+	}
+	if alphabet == 0 {
+		return 0
+	}
+	return float64(len([]rune(s))) * math.Log2(float64(alphabet))
+}
+
+// maskToken returns a log-safe fingerprint of a route token in the form
+// "first4…last4", fully masking anything too short to reveal safely. A route
+// token can be a shared secret in multi-agent deployments, so validator
+// messages identify it by fingerprint rather than echoing it whole (a failing
+// `config validate` may land in CI logs). Duplicated from token.Fingerprint
+// because config cannot import token (token imports config).
+func maskToken(s string) string {
+	const reveal = 4
+	if s == "" {
+		return "<empty>"
+	}
+	// Rune-aware so a multi-byte token (allowed on the header surface) is never
+	// sliced mid-rune into invalid UTF-8.
+	r := []rune(s)
+	if len(r) < 2*reveal+1 {
+		return strings.Repeat("*", len(r))
+	}
+	return string(r[:reveal]) + "…" + string(r[len(r)-reveal:])
 }
 
 func (v *validator) checkInject(base string, in Inject) {

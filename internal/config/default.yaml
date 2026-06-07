@@ -56,3 +56,22 @@ rules:
       type: header
       name: authorization
       template: "Bearer {{ CREDENTIAL }}"
+
+  # Placeholder routing: let several agents share one host rule, each presenting
+  # its own token. The token selects which secret to inject AND is the value
+  # postern replaces in place. Use instead of secret_ref + inject.name (mutually
+  # exclusive). Pick high-entropy tokens: a token is effectively the only thing
+  # separating one agent's secret from another's. Unknown or ambiguous tokens
+  # fail closed (502); the token value is never logged (only the route name).
+  # - host: api.telegram.org
+  #   inject:
+  #     type: placeholder
+  #     in: [header]
+  #     template: "{{ CREDENTIAL }}"   # agent sends "Authorization: Bearer <token>"
+  #   routes:
+  #     - name: max
+  #       token: tg_max_8Kq2Lp9wZ
+  #       secret_ref: op://Agents/telegram-max/token
+  #     - name: john
+  #       token: tg_john_3Rt7Yx1mQ
+  #       secret_ref: op://Agents/telegram-john/token

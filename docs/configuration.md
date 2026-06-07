@@ -146,8 +146,9 @@ rules:
 | Field | Required | Meaning |
 |---|---|---|
 | `host` | yes* | A literal hostname (`api.example.com`) or a single-`*` glob (`*.example.com`, matching exactly one label). **Do not use a wildcard on a multi-tenant or shared-suffix domain** (e.g. `*.s3.amazonaws.com`, `*.blob.core.windows.net`): any host an attacker can register under that suffix would also match the rule and receive the injected credential. Reserve wildcards for single-tenant domains you control. |
-| `secret_ref` | yes | A `<scheme>://<rest>` URI the matching provider resolves (e.g. `op://VAULT/ITEM/FIELD`). |
+| `secret_ref` | yes | A `<scheme>://<rest>` URI the matching provider resolves (e.g. `op://VAULT/ITEM/FIELD`). Omit when using `routes` (each route carries its own). |
 | `inject` | yes* | How to attach the resolved credential — see below. |
+| `routes` | no | Placeholder-routing entries: per-token secret selection for a shared host. Mutually exclusive with `secret_ref`/`inject.name`; see below. |
 | `template` | no | Name of a built-in preset (see below) that fills in `host` and `inject` defaults. |
 
 \* When `template` is set, `host` and `inject` may be omitted and are filled
@@ -211,6 +212,60 @@ Notes:
 - **WebSocket frames are out of scope.** postern brokers the HTTP request that
   opens a connection; it does not inspect or rewrite WebSocket message frames.
 
+### Placeholder routing (`routes`)
+
+A `placeholder` rule can carry a `routes` list instead of a single rule-level
+`secret_ref` and `inject.name`. Each route's `token` does double duty: presenting
+it on a declared surface both **selects** which secret to resolve and is the
+placeholder **replaced** in place by the resolved value. This lets several agents
+share one host rule, each presenting its own token.
+
+```yaml
+rules:
+  - host: api.telegram.org
+    inject:
+      type: placeholder
+      in: [header]
+      template: "{{ CREDENTIAL }}"   # agent sends "Authorization: Bearer <token>"
+    routes:
+      - name: max
+        token: tg_max_8Kq2Lp9wZ
+        secret_ref: op://Agents/telegram-max/token
+      - name: john
+        token: tg_john_3Rt7Yx1mQ
+        secret_ref: op://Agents/telegram-john/token
+```
+
+| Field | Meaning |
+|---|---|
+| `name` | Operator-facing label for the agent, surfaced in logs. The token value itself is **never** logged. |
+| `token` | The placeholder the agent presents; matching it selects this route. Must be unique and non-overlapping across the rule (see below). |
+| `secret_ref` | The `<scheme>://<rest>` URI resolved when this route's token matches. |
+
+- **Mutually exclusive** with rule-level `secret_ref` and `inject.name`. `routes`
+  requires `type: placeholder`; the shared `inject` block still supplies
+  `template`, `in`, and `max_body_bytes`.
+- **Allowlist + fail closed.** Only enumerated tokens resolve anything. A request
+  carrying no configured token — or two different tokens (ambiguous) — fails
+  closed with `502`, and the resolver is never called.
+- **Token entropy is load-bearing.** When agents are mutually untrusted, the
+  token is effectively the only thing separating one agent's secret from
+  another's. Pick high-entropy, unguessable tokens. postern emits a non-fatal
+  **warning** for a token whose estimated entropy is below ~64 bits (short or
+  low-diversity, e.g. `tgMax`); it does not block boot, since the operator owns
+  the trust decision. postern also **rejects** (fatal) tokens that overlap (one
+  a substring of another), because substitution matches by substring.
+- **Surfaces** behave exactly as above: tokens are scanned for, and replaced on,
+  the surfaces named in `inject.in` (default `[header]`), with the same
+  per-surface encoding and the non-header charset restriction.
+- **Substitution replaces _every_ occurrence on the declared surfaces.** Once a
+  route is selected, the resolved credential is spliced in everywhere its token
+  appears across those surfaces (e.g. every header value containing it). Do not
+  echo a route token into pass-through fields you don't want the credential to
+  land in (a duplicated `User-Agent`, a trace header), or the real secret will be
+  forwarded there too. This only ever places the agent's _own_ secret in its
+  _own_ request to the already-authorized upstream — never another agent's.
+
 ### Built-in templates
 
 Naming a `template` lets a rule skip restating the host pattern, header name,
@@ -237,6 +292,12 @@ Errors block startup. Common errors:
   placeholder.
 - `inject.in` set with `type: header`; an invalid surface name; a `placeholder`
   token with reserved characters when a non-header surface is declared.
+- `routes` combined with a rule-level `secret_ref` or `inject.name`; `routes`
+  without `type: placeholder`; a route missing `name`, `token`, or a well-formed
+  `secret_ref`; duplicate or overlapping route tokens.
+
+Warnings (reported, non-fatal): a route `token` with low estimated entropy
+(below ~64 bits) — a guessability hint, not a hard failure.
 - `proxy.max_body_bytes` (or a per-rule `inject.max_body_bytes`) negative; a
   per-rule `max_body_bytes` set without `body` in `inject.in`.
 - `cache_ttl` not greater than zero (when no `cache` block is set); `cache.ttl`

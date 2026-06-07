@@ -122,6 +122,55 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 			req.ContentLength = int64(len(buf))
 		}
 
+		// Placeholder-routing rule: the token the agent presents selects which
+		// secret to resolve and is itself the placeholder replaced in place.
+		// Selection scans the declared surfaces; zero or more-than-one distinct
+		// token fails closed. The token value is never logged — only the route's
+		// operator-facing name.
+		if len(rule.Routes) > 0 {
+			route, ok := rule.SelectRoute(req)
+			if !ok {
+				logger.Warn("broker route selection failed",
+					slog.String("host", host),
+					slog.String("rule", rule.Host),
+				)
+				return failClosed(req)
+			}
+			cred, err := resolver.Resolve(req.Context(), "", route.SecretRef)
+			if err != nil {
+				logger.Warn("broker resolve failed",
+					slog.String("host", host),
+					slog.String("rule", rule.Host),
+					slog.String("route", route.Name),
+					slog.Any("err", err),
+				)
+				return failClosed(req)
+			}
+			if cred == "" {
+				logger.Warn("broker resolved empty credential",
+					slog.String("host", host),
+					slog.String("rule", rule.Host),
+					slog.String("route", route.Name),
+				)
+				return failClosed(req)
+			}
+			if err := rule.InjectRoute(req, route, cred); err != nil {
+				logger.Warn("broker inject failed",
+					slog.String("host", host),
+					slog.String("rule", rule.Host),
+					slog.String("route", route.Name),
+					slog.Any("err", err),
+				)
+				return failClosed(req)
+			}
+			logger.Info("broker injected",
+				slog.String("host", host),
+				slog.String("rule", rule.Host),
+				slog.String("route", route.Name),
+			)
+			return nil
+		}
+
 		cred, err := resolver.Resolve(req.Context(), "", rule.SecretRef)
 		if err != nil {
 			logger.Warn("broker resolve failed",

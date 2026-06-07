@@ -246,6 +246,24 @@ type Rule struct {
 	Host      string `yaml:"host,omitempty"`
 	SecretRef string `yaml:"secret_ref"`
 	Inject    Inject `yaml:"inject,omitempty"`
+
+	// Routes turns a single host rule into a placeholder-routing rule: each
+	// entry's token both selects, and is replaced by, its own secret. Mutually
+	// exclusive with the rule-level SecretRef and inject.name, and valid only
+	// with inject.type=placeholder. Lets several agents share one host rule,
+	// each presenting its own token.
+	Routes []Route `yaml:"routes,omitempty"`
+}
+
+// Route is one entry of a placeholder-routing rule. Token is the placeholder an
+// agent presents on a declared inject surface; matching it selects SecretRef as
+// the secret to resolve, and the same token is replaced in place by the
+// resolved value. Name is an operator-facing label surfaced in logs to
+// attribute a request to an agent; the token value itself is never logged.
+type Route struct {
+	Name      string `yaml:"name"`
+	Token     string `yaml:"token"`
+	SecretRef string `yaml:"secret_ref"`
 }
 
 // Inject describes how a resolved credential is attached to outbound traffic.
