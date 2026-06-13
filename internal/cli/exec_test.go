@@ -51,6 +51,10 @@ func (r *recordingExec) run(command string, argv, env []string) error {
 
 func allCacheable(string) bool { return true }
 
+// opResolvable reports whether a scheme is the op scheme — the stand-in for "a
+// credstore is configured for this scheme" in scan-mode tests.
+func opResolvable(scheme string) bool { return scheme == "op" }
+
 // The happy path: every ref resolves, the resolved values land in the child
 // env, and a config entry overrides an inherited variable of the same name.
 func TestRunExec_ResolvesMergesAndExecs(t *testing.T) {
@@ -61,7 +65,7 @@ func TestRunExec_ResolvesMergesAndExecs(t *testing.T) {
 	inherited := []string{"PATH=/bin", "A_VAR=old"}
 	rec := &recordingExec{}
 
-	err := runExec(context.Background(), r, refs, inherited, allCacheable, discardLogger(), rec.run, []string{"printenv", "A_VAR"})
+	err := runExec(context.Background(), r, refs, inherited, allCacheable, discardLogger(), rec.run, []string{"printenv", "A_VAR"}, resolveOptions{})
 	require.NoError(t, err)
 
 	require.True(t, rec.called, "the child must be launched on success")
@@ -80,7 +84,7 @@ func TestRunExec_FailClosed_ResolveError_NoExec(t *testing.T) {
 
 	rec := &recordingExec{}
 	err := runExec(context.Background(), fakeResolver{err: errors.New("vault down")},
-		map[string]string{"A_VAR": "op://a"}, nil, allCacheable, discardLogger(), rec.run, []string{"true"})
+		map[string]string{"A_VAR": "op://a"}, nil, allCacheable, discardLogger(), rec.run, []string{"true"}, resolveOptions{})
 
 	require.Error(t, err)
 	require.False(t, rec.called, "must not exec the child when a secret fails to resolve (fail closed)")
@@ -94,7 +98,7 @@ func TestRunExec_RejectsNonCacheable_NoExec(t *testing.T) {
 	neverCacheable := func(string) bool { return false }
 	rec := &recordingExec{}
 	err := runExec(context.Background(), fakeResolver{values: map[string]string{"op://otp": "x"}},
-		map[string]string{"OTP": "op://otp"}, nil, neverCacheable, discardLogger(), rec.run, []string{"true"})
+		map[string]string{"OTP": "op://otp"}, nil, neverCacheable, discardLogger(), rec.run, []string{"true"}, resolveOptions{})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "non-cacheable")
@@ -112,11 +116,64 @@ func TestRunExec_MasksSecretInLogs(t *testing.T) {
 	rec := &recordingExec{}
 
 	err := runExec(context.Background(), fakeResolver{values: map[string]string{"op://a": secret}},
-		map[string]string{"A_VAR": "op://a"}, nil, allCacheable, logger, rec.run, []string{"true"})
+		map[string]string{"A_VAR": "op://a"}, nil, allCacheable, logger, rec.run, []string{"true"}, resolveOptions{})
 	require.NoError(t, err)
 
 	require.NotContains(t, buf.String(), secret, "the raw secret must never appear in logs")
 	require.Contains(t, buf.String(), token.Fingerprint(secret), "logs should reference the masked fingerprint")
+}
+
+// In scan mode an inherited variable whose value is a routable secret_ref is
+// resolved in place; values with an unknown scheme (or none) pass through
+// untouched.
+func TestRunExec_Scan_ResolvesInheritedRefs(t *testing.T) {
+	t.Parallel()
+
+	r := fakeResolver{values: map[string]string{"op://foo": "FOOVAL"}}
+	inherited := []string{"FOO=op://foo", "BAR=plain", "URL=https://example.com"}
+	rec := &recordingExec{}
+
+	err := runExec(context.Background(), r, nil, inherited, allCacheable, discardLogger(), rec.run,
+		[]string{"true"}, resolveOptions{scan: true, isResolvable: opResolvable})
+	require.NoError(t, err)
+
+	require.True(t, rec.called)
+	require.Contains(t, rec.env, "FOO=FOOVAL", "an inherited op:// ref should be resolved in place")
+	require.Contains(t, rec.env, "BAR=plain", "a non-ref value passes through")
+	require.Contains(t, rec.env, "URL=https://example.com", "an unconfigured scheme passes through")
+	require.NotContains(t, rec.env, "FOO=op://foo", "the original ref must be replaced")
+}
+
+// A config env: entry takes precedence over an inherited ref of the same name:
+// the explicit declaration wins, the inherited ref is not resolved.
+func TestRunExec_Scan_ConfigOverridesScanned(t *testing.T) {
+	t.Parallel()
+
+	r := fakeResolver{values: map[string]string{"op://cfg": "CFGVAL", "op://inherited": "INHVAL"}}
+	refs := map[string]string{"FOO": "op://cfg"}
+	inherited := []string{"FOO=op://inherited"}
+	rec := &recordingExec{}
+
+	err := runExec(context.Background(), r, refs, inherited, allCacheable, discardLogger(), rec.run,
+		[]string{"true"}, resolveOptions{scan: true, isResolvable: opResolvable})
+	require.NoError(t, err)
+
+	require.Contains(t, rec.env, "FOO=CFGVAL", "the config env: entry must win over the inherited ref")
+	require.NotContains(t, rec.env, "FOO=INHVAL")
+}
+
+// Scan resolution fails closed just like the config block: an inherited ref
+// that won't resolve aborts before the child launches.
+func TestRunExec_Scan_FailClosedOnScannedRef_NoExec(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingExec{}
+	err := runExec(context.Background(), fakeResolver{err: errors.New("vault down")},
+		nil, []string{"FOO=op://foo"}, allCacheable, discardLogger(), rec.run,
+		[]string{"true"}, resolveOptions{scan: true, isResolvable: opResolvable})
+
+	require.Error(t, err)
+	require.False(t, rec.called)
 }
 
 // mergeEnv overlays resolved values onto the inherited environment, replacing

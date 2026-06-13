@@ -36,6 +36,15 @@ func TestExec_ErrorPaths(t *testing.T) {
 		require.Error(t, err, "missing config must exit non-zero; output: %s", out)
 	})
 
+	t.Run("scan flag is registered", func(t *testing.T) {
+		t.Parallel()
+		cmd := exec.Command(bin, "exec", "--help") //nolint:gosec // test-built binary
+		cmd.Env = filteredEnv()
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "exec --help should succeed; output: %s", out)
+		require.Contains(t, string(out), "--scan", "the --scan flag must be wired onto the command")
+	})
+
 	t.Run("config without env block exits non-zero", func(t *testing.T) {
 		t.Parallel()
 		cfg := filepath.Join(t.TempDir(), "config.yaml")

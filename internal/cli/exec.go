@@ -37,6 +37,7 @@ var execFn = execProcess
 func NewExecCmd(reg *credstore.Registry, store token.Store) *cobra.Command {
 	var (
 		configPath string
+		scan       bool
 		logFormat  string
 		logLevel   string
 		noColor    bool
@@ -54,7 +55,8 @@ func NewExecCmd(reg *credstore.Registry, store token.Store) *cobra.Command {
 			"credential. Prefer `postern server` for anything that speaks HTTPS.\n" +
 			"\n" +
 			"  postern exec -- node server.js\n" +
-			"  postern exec --config ./postern.yaml -- devcontainer up --workspace-folder .",
+			"  postern exec --config ./postern.yaml -- devcontainer up\n" +
+			"  postern exec --scan -- node server.js   # resolve op://-valued env vars",
 		// Everything after `--` is the child command; cobra stops flag parsing
 		// at the dash and hands the remainder through as args.
 		Args:                  cobra.MinimumNArgs(1),
@@ -81,8 +83,8 @@ func NewExecCmd(reg *credstore.Registry, store token.Store) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if cfg == nil || len(cfg.Env) == 0 {
-				return fmt.Errorf("config %s declares no env: block; `postern exec` has nothing to inject", cfgPath)
+			if len(cfg.Env) == 0 && !scan {
+				return fmt.Errorf("config %s declares no env: block and --scan was not set; `postern exec` has nothing to inject", cfgPath)
 			}
 
 			ctx := cmd.Context()
@@ -94,6 +96,13 @@ func NewExecCmd(reg *credstore.Registry, store token.Store) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if len(resolvers) == 0 {
+				// Reachable only in scan-only mode against a config that
+				// configures no credstore: nothing can be resolved, so run the
+				// command with the inherited environment unchanged.
+				logger.Warn("no credstores configured; running command with the inherited environment")
+				return execFn(args[0], args, os.Environ())
+			}
 			if err := assertEnvRoutable(cfg.Env, resolvers); err != nil {
 				return err
 			}
@@ -102,14 +111,37 @@ func NewExecCmd(reg *credstore.Registry, store token.Store) *cobra.Command {
 				return fmt.Errorf("init credstore router: %w", err)
 			}
 
-			return runExec(ctx, router, cfg.Env, os.Environ(), newShouldCacheRef(reg), logger, execFn, args)
+			opts := resolveOptions{
+				scan: scan,
+				isResolvable: func(scheme string) bool {
+					_, ok := resolvers[scheme]
+					return ok
+				},
+			}
+			return runExec(ctx, router, cfg.Env, os.Environ(), newShouldCacheRef(reg), logger, execFn, args, opts)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "", "Config file path (default: ~/.postern/config.yaml)")
+	cmd.Flags().BoolVar(&scan, "scan", false, "Also resolve inherited secret-ref env values")
 	cmd.Flags().StringVar(&logFormat, "log-format", "text", "Log format: text|json")
 	cmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level: quiet|info|debug")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable ANSI colour (NO_COLOR env also honored)")
 	return cmd
+}
+
+// resolveOptions tunes how runExec assembles the child environment beyond the
+// config env: block.
+type resolveOptions struct {
+	// scan, when true, also resolves inherited environment values that are
+	// themselves secret_refs (berglas-style), replacing each in place. A config
+	// env: entry of the same name always wins, so an explicit declaration is
+	// never overridden by a scanned value.
+	scan bool
+	// isResolvable reports whether a scheme has a configured credstore, so scan
+	// only touches values postern can actually resolve and leaves everything
+	// else (https URLs, plain connection strings) untouched. Required when scan
+	// is true.
+	isResolvable func(scheme string) bool
 }
 
 // runExec resolves refs into the child environment and hands off to exec. It is
@@ -126,23 +158,26 @@ func runExec(
 	logger *slog.Logger,
 	exec func(command string, argv, env []string) error,
 	args []string,
+	opts resolveOptions,
 ) error {
 	if len(args) == 0 {
 		return errors.New("exec requires a command to run")
 	}
-	childEnv, err := resolveExecEnv(ctx, router, refs, inherited, shouldCache, logger)
+	childEnv, err := resolveExecEnv(ctx, router, refs, inherited, shouldCache, logger, opts)
 	if err != nil {
 		return err
 	}
 	return exec(args[0], args, childEnv)
 }
 
-// resolveExecEnv resolves every ref in refs and returns the child environment:
-// inherited overlaid with the resolved values. It fails closed — the first
-// resolve error aborts and returns it, so the caller never execs a child with a
-// half-populated secret set. A ref the owning provider marks non-cacheable
-// (e.g. an OTP) is rejected up front: an exec'd child cannot re-resolve a
-// short-lived secret. Resolved values are logged only as masked fingerprints.
+// resolveExecEnv resolves every ref in refs (and, when opts.scan is set, every
+// inherited value that is itself a routable secret_ref) and returns the child
+// environment: inherited overlaid with the resolved values. It fails closed —
+// the first resolve error aborts and returns it, so the caller never execs a
+// child with a half-populated secret set. A ref the owning provider marks
+// non-cacheable (e.g. an OTP) is rejected up front: an exec'd child cannot
+// re-resolve a short-lived secret. Resolved values are logged only as masked
+// fingerprints.
 func resolveExecEnv(
 	ctx context.Context,
 	router broker.Resolver,
@@ -150,23 +185,51 @@ func resolveExecEnv(
 	inherited []string,
 	shouldCache func(string) bool,
 	logger *slog.Logger,
+	opts resolveOptions,
 ) ([]string, error) {
 	resolved := make(map[string]string, len(refs))
-	for _, name := range sortedRefNames(refs) {
-		ref := refs[name]
+	resolve := func(name, ref string) error {
 		if !shouldCache(ref) {
-			return nil, fmt.Errorf("env %s: secret_ref %q is non-cacheable (e.g. a one-time password) and cannot be injected as an environment variable; route it through the proxy instead", name, ref)
+			return fmt.Errorf("env %s: secret_ref %q is non-cacheable (e.g. a one-time password) and cannot be injected as an environment variable; route it through the proxy instead", name, ref)
 		}
 		val, err := router.Resolve(ctx, "", ref)
 		if err != nil {
-			return nil, fmt.Errorf("env %s: resolve %s: %w", name, ref, err)
+			return fmt.Errorf("env %s: resolve %s: %w", name, ref, err)
 		}
 		resolved[name] = val
 		logger.Info("env resolved",
 			slog.String("name", name),
 			slog.String("value", token.Fingerprint(val)),
 		)
+		return nil
 	}
+
+	for _, name := range sortedRefNames(refs) {
+		if err := resolve(name, refs[name]); err != nil {
+			return nil, err
+		}
+	}
+
+	if opts.scan {
+		for _, kv := range inherited {
+			name, val, ok := strings.Cut(kv, "=")
+			if !ok {
+				continue
+			}
+			// A config env: entry of the same name has already resolved and wins.
+			if _, done := resolved[name]; done {
+				continue
+			}
+			scheme, _, ok := strings.Cut(val, "://")
+			if !ok || scheme == "" || opts.isResolvable == nil || !opts.isResolvable(scheme) {
+				continue
+			}
+			if err := resolve(name, val); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return mergeEnv(inherited, resolved), nil
 }
 
