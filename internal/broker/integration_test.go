@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -175,6 +176,61 @@ func TestE2E_OnNoMatchBlock_UpstreamNotContacted(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	require.Equal(t, int64(0), upstreamHits.Load(), "upstream must not be contacted on no-match under block")
 	require.Equal(t, int64(0), res.calls.Load(), "resolver must not be called on no-match under block")
+}
+
+// TestE2E_BrokerSignsOAuth1ThroughMITMProxy exercises the OAuth 1.0a signing
+// path end to end: real goproxy + CA + broker.Hook resolve the four credential
+// refs (fake resolver) and sign the request, and the upstream confirms it
+// received a well-formed "Authorization: OAuth ..." header.
+func TestE2E_BrokerSignsOAuth1ThroughMITMProxy(t *testing.T) {
+	t.Parallel()
+
+	var upstreamHits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		upstreamHits.Add(1)
+		// Assert in-handler (not via a shared variable) to stay race-free.
+		auth := req.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "OAuth ") || !strings.Contains(auth, "oauth_signature=") {
+			t.Errorf("upstream Authorization = %q, want an OAuth 1.0a signature", auth)
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(upstream.Close)
+
+	root := fixtureCA(t)
+	minter := fixtureMinter(t, root)
+
+	engine := broker.NewEngine([]broker.Rule{{
+		Host: "127.0.0.1",
+		Injection: broker.InjectSpec{
+			Type: broker.InjectOAuth1,
+			OAuth1: broker.OAuth1Refs{
+				ConsumerKeyRef:    "op://v/ck",
+				ConsumerSecretRef: "op://v/cs",
+				TokenRef:          "op://v/tk",
+				TokenSecretRef:    "op://v/ts",
+			},
+		},
+	}})
+	res := &fakeResolver{value: "secret-val"}
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+
+	p, err := proxy.New(proxy.Config{
+		CA:                 root,
+		Minter:             minter,
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		UpstreamTLS:        upstreamTLS(t, upstream),
+		PreUpstreamHandler: hook,
+	})
+	require.NoError(t, err)
+
+	client := clientThroughProxy(t, startProxy(t, p), root)
+	resp, err := client.Get(upstream.URL)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(1), upstreamHits.Load())
 }
 
 // Fixture helpers below mirror the patterns used in

@@ -115,3 +115,17 @@ rules:
 #       type: header
 #       name: authorization
 #       template: "Bearer {{ CREDENTIAL }}"
+
+# OAuth 1.0a: postern signs each request with an HMAC-SHA1 signature and sets the
+# "Authorization: OAuth ..." header. The four *_ref fields supply the credentials
+# (any scheme); there is no secret_ref or template. Works with the top-level
+# token: form above. See docs/configuration.md (OAuth 1.0a signing).
+#
+# rules:
+#   - host: api.example.com
+#     inject:
+#       type: oauth1
+#       consumer_key_ref: op://Agents/app/consumer_key
+#       consumer_secret_ref: op://Agents/app/consumer_secret
+#       token_ref: op://Agents/user/access_token
+#       token_secret_ref: op://Agents/user/access_token_secret

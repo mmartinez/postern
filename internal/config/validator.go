@@ -242,6 +242,11 @@ func (v *validator) checkRule(base string, r Rule) {
 		return
 	}
 
+	if r.Inject.Type == InjectTypeOAuth1 {
+		v.checkOAuth1Rule(base, r)
+		return
+	}
+
 	if r.SecretRef == "" {
 		v.add(base+".secret_ref", "secret_ref is required", SeverityError)
 	} else if !secretRefPattern.MatchString(r.SecretRef) {
@@ -249,6 +254,39 @@ func (v *validator) checkRule(base string, r Rule) {
 	}
 
 	v.checkInject(base+".inject", r.Inject)
+}
+
+// checkOAuth1Rule validates an OAuth 1.0a signing rule. The request is signed,
+// not templated, so the four *_ref fields supply the credentials and the
+// rule-level secret_ref and the header/placeholder fields must be empty.
+func (v *validator) checkOAuth1Rule(base string, r Rule) {
+	in := r.Inject
+	if r.SecretRef != "" {
+		v.add(base+".secret_ref", "secret_ref must be empty when inject.type=oauth1; the four oauth1 *_ref fields supply the credentials", SeverityError)
+	}
+	if in.Name != "" {
+		v.add(base+".inject.name", "inject.name is not used with inject.type=oauth1", SeverityError)
+	}
+	if in.Template != "" {
+		v.add(base+".inject.template", "inject.template is not used with inject.type=oauth1 (the request is signed, not templated)", SeverityError)
+	}
+	if len(in.In) > 0 {
+		v.add(base+".inject.in", "inject.in is not used with inject.type=oauth1", SeverityError)
+	}
+
+	v.checkOAuth1Ref(base, "consumer_key_ref", in.ConsumerKeyRef)
+	v.checkOAuth1Ref(base, "consumer_secret_ref", in.ConsumerSecretRef)
+	v.checkOAuth1Ref(base, "token_ref", in.TokenRef)
+	v.checkOAuth1Ref(base, "token_secret_ref", in.TokenSecretRef)
+}
+
+func (v *validator) checkOAuth1Ref(base, field, ref string) {
+	path := base + ".inject." + field
+	if ref == "" {
+		v.add(path, field+" is required when inject.type=oauth1", SeverityError)
+	} else if !secretRefPattern.MatchString(ref) {
+		v.add(path, fmt.Sprintf("%s %q must be a URI of the form <scheme>://<rest> (e.g., op://VAULT/ITEM/FIELD)", field, ref), SeverityError)
+	}
 }
 
 // checkRoutes validates a placeholder-routing rule. Routes mode replaces the
@@ -435,9 +473,12 @@ func (v *validator) checkInject(base string, in Inject) {
 			v.add(base+".name", "name (the placeholder token to replace) is required when inject.type=placeholder", SeverityError)
 		}
 	case "":
-		v.add(base+".type", "inject.type is required (header|placeholder)", SeverityError)
+		v.add(base+".type", "inject.type is required (header|placeholder|oauth1)", SeverityError)
 	default:
-		v.add(base+".type", fmt.Sprintf("invalid inject.type %q (want header|placeholder)", in.Type), SeverityError)
+		v.add(base+".type", fmt.Sprintf("invalid inject.type %q (want header|placeholder|oauth1)", in.Type), SeverityError)
+	}
+	if in.ConsumerKeyRef != "" || in.ConsumerSecretRef != "" || in.TokenRef != "" || in.TokenSecretRef != "" {
+		v.add(base, "the oauth1 *_ref fields (consumer_key_ref, consumer_secret_ref, token_ref, token_secret_ref) are valid only with inject.type=oauth1", SeverityError)
 	}
 	if in.Template == "" {
 		v.add(base+".template", "template is required", SeverityError)

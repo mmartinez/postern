@@ -57,6 +57,12 @@ const (
 	// every declared surface (InjectSpec.Surfaces) and substitutes the
 	// rendered template in place, with per-surface encoding.
 	InjectPlaceholder
+
+	// InjectOAuth1 signs the request with OAuth 1.0a (HMAC-SHA1) and sets the
+	// Authorization: OAuth header. It uses InjectSpec.OAuth1 (four resolved
+	// secret refs) instead of a credential template, so Hook handles it on a
+	// dedicated path rather than through Rule.Inject.
+	InjectOAuth1
 )
 
 // Surface names a request component placeholder substitution can rewrite. The
@@ -95,6 +101,20 @@ type InjectSpec struct {
 	// cap. Zero means inherit the proxy-wide default. Consulted by Hook,
 	// not by Inject.
 	MaxBodyBytes int
+
+	// OAuth1 holds the four secret references for OAuth 1.0a signing. It is
+	// populated only when Type is InjectOAuth1.
+	OAuth1 OAuth1Refs
+}
+
+// OAuth1Refs names the four secret references an OAuth 1.0a signing rule
+// resolves: the application's consumer key/secret and the user's token/token
+// secret. Each is a secret_ref URI resolved through the normal credstore path.
+type OAuth1Refs struct {
+	ConsumerKeyRef    string
+	ConsumerSecretRef string
+	TokenRef          string
+	TokenSecretRef    string
 }
 
 // Render substitutes the resolved credential into a template. The config

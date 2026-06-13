@@ -39,6 +39,10 @@ type InjectType string
 const (
 	InjectTypeHeader      InjectType = "header"
 	InjectTypePlaceholder InjectType = "placeholder"
+	// InjectTypeOAuth1 signs the request with OAuth 1.0a (HMAC-SHA1) and sets
+	// the Authorization: OAuth header. It uses the four oauth1 *_ref fields on
+	// Inject instead of a rule-level secret_ref/template.
+	InjectTypeOAuth1 InjectType = "oauth1"
 )
 
 // InjectSurface names a request component placeholder substitution can rewrite.
@@ -290,4 +294,13 @@ type Inject struct {
 	// buffering. Zero means inherit the proxy-wide cap. Meaningful only when
 	// In includes "body".
 	MaxBodyBytes *int `yaml:"max_body_bytes,omitempty"`
+
+	// OAuth 1.0a (inject.type: oauth1) credential references. All four are
+	// required for, and valid only with, the oauth1 type; each is a secret_ref
+	// URI resolved through the normal credstore path. They replace the
+	// rule-level secret_ref and the header/template fields.
+	ConsumerKeyRef    string `yaml:"consumer_key_ref,omitempty"`
+	ConsumerSecretRef string `yaml:"consumer_secret_ref,omitempty"`
+	TokenRef          string `yaml:"token_ref,omitempty"`
+	TokenSecretRef    string `yaml:"token_secret_ref,omitempty"`
 }

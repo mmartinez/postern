@@ -165,7 +165,7 @@ inject:
 
 | Field | Meaning |
 |---|---|
-| `type` | `header` sets a named header to the rendered template. `placeholder` substitutes a sentinel token (`name`) already present in the request. |
+| `type` | `header` sets a named header to the rendered template. `placeholder` substitutes a sentinel token (`name`) already present in the request. `oauth1` signs the request with OAuth 1.0a (HMAC-SHA1) and sets the `Authorization: OAuth` header — see below. |
 | `name` | For `header`, the header to set. For `placeholder`, the sentinel token to replace. |
 | `template` | The rendered credential string. `{{ CREDENTIAL }}` is replaced with the resolved value. Omitting the placeholder is a **fatal error**: the credential would be discarded and the request forwarded unauthenticated, so postern refuses to start. |
 | `in` | (`placeholder` only) The request surfaces to substitute, any subset of `header`, `body`, `path`, `query`. Defaults to `[header]`. |
@@ -211,6 +211,46 @@ Notes:
   else streams. See `proxy.max_body_bytes` for the cap and the `413` behavior.
 - **WebSocket frames are out of scope.** postern brokers the HTTP request that
   opens a connection; it does not inspect or rewrite WebSocket message frames.
+
+### OAuth 1.0a signing (`oauth1`)
+
+Some APIs authenticate every request with an OAuth 1.0a HMAC-SHA1 signature
+rather than a bearer token. `inject.type: oauth1` makes postern compute that
+signature and set the `Authorization: OAuth …` header, so the agent sends an
+unsigned request and never holds the four secrets.
+
+```yaml
+rules:
+  - host: api.example.com
+    inject:
+      type: oauth1
+      consumer_key_ref: op://Vault/app/consumer_key
+      consumer_secret_ref: op://Vault/app/consumer_secret
+      token_ref: op://Vault/user/access_token
+      token_secret_ref: op://Vault/user/access_token_secret
+```
+
+| Field | Meaning |
+|---|---|
+| `consumer_key_ref` | secret_ref for the application consumer key. |
+| `consumer_secret_ref` | secret_ref for the application consumer secret. |
+| `token_ref` | secret_ref for the user access token. |
+| `token_secret_ref` | secret_ref for the user access-token secret. |
+
+Notes:
+
+- **No `secret_ref`, `name`, or `template`.** An `oauth1` rule supplies its
+  credentials through the four `*_ref` fields; setting the rule-level
+  `secret_ref` or the header/template fields is a config error. The four refs use
+  any registered scheme (`op://`, `bw://`, …) and are resolved through the normal
+  credstore path, so they are cached like any other static secret.
+- **What is signed.** The HTTP method, the normalized request URL, the query
+  parameters, and — only for an `application/x-www-form-urlencoded` body — the
+  form parameters. A JSON or multipart body is forwarded unchanged and not folded
+  into the signature (RFC 5849 §3.4.1.3.1).
+- **Fail closed.** If any of the four references fails to resolve (or resolves
+  empty), the request fails closed with `502` and the upstream is never
+  contacted.
 
 ### Placeholder routing (`routes`)
 
