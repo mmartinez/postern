@@ -84,19 +84,31 @@ func ValidateProviders(cfg *Config, root *yaml.Node, facts ProviderFacts) []Lint
 	if facts.ConfiguredSchemes != nil {
 		for i := range cfg.Rules {
 			r := cfg.Rules[i]
-			scheme, _, ok := strings.Cut(r.SecretRef, "://")
-			if !ok || scheme == "" {
-				// Malformed refs are already flagged by the schema validator;
-				// don't pile a second lint on the same line.
-				continue
-			}
-			if !facts.ConfiguredSchemes[scheme] {
-				v.add(fmt.Sprintf("rules[%d].secret_ref", i),
-					fmt.Sprintf("no credstore configured for secret_ref scheme %q", scheme),
-					SeverityError)
+			v.checkRefScheme(fmt.Sprintf("rules[%d].secret_ref", i), r.SecretRef, facts)
+			// An oauth1 rule carries its credential refs in the inject block, not
+			// the rule-level secret_ref; check those schemes too so an unroutable
+			// oauth1 ref fails at validate/boot rather than at the first request.
+			if r.Inject.Type == InjectTypeOAuth1 {
+				v.checkRefScheme(fmt.Sprintf("rules[%d].inject.consumer_key_ref", i), r.Inject.ConsumerKeyRef, facts)
+				v.checkRefScheme(fmt.Sprintf("rules[%d].inject.consumer_secret_ref", i), r.Inject.ConsumerSecretRef, facts)
+				v.checkRefScheme(fmt.Sprintf("rules[%d].inject.token_ref", i), r.Inject.TokenRef, facts)
+				v.checkRefScheme(fmt.Sprintf("rules[%d].inject.token_secret_ref", i), r.Inject.TokenSecretRef, facts)
 			}
 		}
 	}
 
 	return v.out
+}
+
+// checkRefScheme flags a secret_ref at path whose scheme has no configured
+// credstore. An empty or malformed ref is skipped: the schema validator already
+// covers those, and a second lint on the same line is noise.
+func (v *validator) checkRefScheme(path, ref string, facts ProviderFacts) {
+	scheme, _, ok := strings.Cut(ref, "://")
+	if !ok || scheme == "" {
+		return
+	}
+	if !facts.ConfiguredSchemes[scheme] {
+		v.add(path, fmt.Sprintf("no credstore configured for secret_ref scheme %q", scheme), SeverityError)
+	}
 }

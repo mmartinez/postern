@@ -191,3 +191,40 @@ rules:
 	require.NoError(t, err)
 	require.Empty(t, lints, "an op-only config with op rules should produce no lints")
 }
+
+// An oauth1 rule keeps its credential refs in the inject block, not the
+// rule-level secret_ref. A ref naming an unconfigured scheme must still be
+// flagged at validate time rather than only at the first request.
+func TestLoadAndValidateWithProviders_FlagsUnroutableOAuth1RefScheme(t *testing.T) {
+	t.Parallel()
+
+	doc := `
+token:
+  source: env
+  env_var: OP_SERVICE_ACCOUNT_TOKEN
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: passthrough
+rules:
+  - host: api.example.com
+    inject:
+      type: oauth1
+      consumer_key_ref: op://V/ck
+      consumer_secret_ref: op://V/cs
+      token_ref: op://V/tk
+      token_secret_ref: bw://V/ts
+`
+	_, lints, err := config.LoadAndValidateWithProviders(strings.NewReader(doc), opOnlyFacts)
+	require.NoError(t, err)
+
+	var found *config.LintError
+	for i := range lints {
+		if strings.Contains(lints[i].Path, "token_secret_ref") {
+			found = &lints[i]
+		}
+	}
+	require.NotNil(t, found, "want a lint flagging the unroutable oauth1 ref scheme; got %v", lints)
+	require.Contains(t, found.Message, "bw")
+	require.Greater(t, found.Line, 0, "the lint must carry a line number")
+}

@@ -199,6 +199,10 @@ func oauth1FormBody(req *http.Request, maxBytes int) (url.Values, error) {
 		return nil, nil
 	}
 
+	// An oversized form body surfaces here as a read error and the caller fails
+	// closed with 502 — deliberately, not the 413 the placeholder body path
+	// returns: a signable body is small, and threading a 413 sentinel up to the
+	// hook is not worth it. Either way the upstream is never contacted.
 	buf, err := io.ReadAll(http.MaxBytesReader(nil, req.Body, int64(maxBytes)))
 	if err != nil {
 		return nil, fmt.Errorf("oauth1: read form body: %w", err)

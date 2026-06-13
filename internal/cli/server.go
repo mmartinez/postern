@@ -384,10 +384,15 @@ func assertRulesRoutable(rules []broker.Rule, resolvers map[string]broker.Resolv
 	for i := range rules {
 		r := &rules[i]
 		// A placeholder-routing rule has an empty rule-level SecretRef and one
-		// ref per route; check every ref the rule can resolve to.
+		// ref per route; an oauth1 rule has an empty SecretRef and four refs in
+		// its inject block. Check every ref the rule can resolve to.
 		refs := []string{r.SecretRef}
 		for _, rt := range r.Routes {
 			refs = append(refs, rt.SecretRef)
+		}
+		if r.Injection.Type == broker.InjectOAuth1 {
+			o := r.Injection.OAuth1
+			refs = append(refs, o.ConsumerKeyRef, o.ConsumerSecretRef, o.TokenRef, o.TokenSecretRef)
 		}
 		for _, ref := range refs {
 			scheme, _, ok := strings.Cut(ref, "://")

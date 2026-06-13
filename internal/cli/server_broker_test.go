@@ -224,6 +224,35 @@ func TestAssertRulesRoutable(t *testing.T) {
 	if err := assertRulesRoutable(routableRoutes, resolvers); err != nil {
 		t.Fatalf("routes rule with routable scheme: unexpected error %v", err)
 	}
+
+	// An oauth1 rule has an empty rule-level SecretRef; its four inject refs must
+	// still be checked, or an unroutable ref scheme would only surface as a 502
+	// at the first matching request.
+	unroutableOAuth1 := []broker.Rule{{Host: "api.example.com", Injection: broker.InjectSpec{
+		Type: broker.InjectOAuth1,
+		OAuth1: broker.OAuth1Refs{
+			ConsumerKeyRef:    "op://V/ck",
+			ConsumerSecretRef: "op://V/cs",
+			TokenRef:          "op://V/tk",
+			TokenSecretRef:    "bw://V/ts", // unroutable: no bw resolver
+		},
+	}}}
+	if err := assertRulesRoutable(unroutableOAuth1, resolvers); err == nil {
+		t.Fatalf("oauth1 rule with unroutable ref scheme: want error, got nil")
+	}
+
+	routableOAuth1 := []broker.Rule{{Host: "api.example.com", Injection: broker.InjectSpec{
+		Type: broker.InjectOAuth1,
+		OAuth1: broker.OAuth1Refs{
+			ConsumerKeyRef:    "op://V/ck",
+			ConsumerSecretRef: "op://V/cs",
+			TokenRef:          "op://V/tk",
+			TokenSecretRef:    "op://V/ts",
+		},
+	}}}
+	if err := assertRulesRoutable(routableOAuth1, resolvers); err != nil {
+		t.Fatalf("oauth1 rule with routable ref schemes: unexpected error %v", err)
+	}
 }
 
 func writeConfig(t *testing.T, body string) string {

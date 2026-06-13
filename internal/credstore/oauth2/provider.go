@@ -113,7 +113,15 @@ func (p *Provider) buildResolver(clientSecret, refreshToken string, settings map
 
 	client := p.httpClient
 	if client == nil {
-		client = &http.Client{Timeout: defaultTokenTimeout}
+		client = &http.Client{
+			Timeout: defaultTokenTimeout,
+			// An RFC 6749 token endpoint never legitimately redirects. Refusing
+			// to follow redirects keeps the client secret from being re-sent to a
+			// redirect target (e.g. a DNS-rebound internal/cleartext address).
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 
 	return newResolver(oauthConfig{
