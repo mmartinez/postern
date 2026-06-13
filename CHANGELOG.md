@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/mmartinez/postern/compare/v0.4.0...v0.5.0) (2026-06-13)
+
+
+### Features
+
+* OAuth2 and OAuth 1.0a credential brokering ([#48](https://github.com/mmartinez/postern/issues/48)) ([ec5b757](https://github.com/mmartinez/postern/commit/ec5b75784bfde8436163fc56e758ef5bff430535))
+
 ## [0.4.0](https://github.com/mmartinez/postern/compare/v0.3.3...v0.4.0) (2026-06-07)
 
 
