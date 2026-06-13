@@ -244,6 +244,92 @@ GPL-3.0, postern is Apache-2.0, and we redistribute nothing GPL. You acquire
   `cargo install bws`) and put it on `PATH`. The provider works as soon as
   `bws` is reachable; nothing in postern downloads it for you.
 
+## OAuth2
+
+The `oauth2` provider does not fetch a stored secret — it **mints** one. It
+exchanges long-lived client credentials for a short-lived bearer access token at
+a token endpoint and resolves that token, so the rule injects
+`Authorization: Bearer <access-token>`. Token exchange, in-memory caching, and
+automatic refresh on expiry are handled by `golang.org/x/oauth2`.
+
+- **Name:** `oauth2` · **Scheme:** `oauth2`
+- **`secret_ref` grammar:** `oauth2://<credstore-name>`. The authority is a
+  reserved label (it does not select a field); one `oauth2` credstore maps to one
+  client. A non-`oauth2://` ref fails closed.
+- **Caching:** oauth2 refs **bypass** the broker's global credential cache
+  (`ShouldCache` is always false). The access token's lifetime is governed by the
+  token endpoint's `expires_in`, honored inside the resolver — caching it under a
+  fixed TTL would risk serving an expired token.
+- **Fail closed:** any token-endpoint error returns 502 and the upstream is never
+  contacted. The token-endpoint response body is never logged (it can echo the
+  client secret); only the HTTP status is surfaced.
+
+### Secrets
+
+The OAuth2 grant type decides how many secrets the credstore needs:
+
+- **`client_credentials`** — one secret: the **client secret**, supplied through
+  the standard `token:` block.
+- **`refresh_token`** — two secrets: the **client secret** (`token:`) **and** a
+  long-lived **refresh token** (`refresh_token:`, the same source grammar as
+  `token:`). Both resolve through the normal token chain (env/file/keychain).
+
+A rotated refresh token (some servers issue a new one on each refresh) is held in
+memory for the life of the process; persisting it across restarts is not yet
+supported, so a rotating server must be re-provisioned after a restart.
+
+### Settings keys
+
+| Key | Required | Meaning |
+|---|---|---|
+| `token_url` | yes | The token endpoint. Must be an absolute `https` URL. |
+| `client_id` | yes | The OAuth2 client identifier. |
+| `grant_type` | yes | `client_credentials` or `refresh_token`. Explicit, never inferred. A `refresh_token:` block is required for — and only for — `refresh_token`. |
+| `scope` | no | Space-separated scopes requested at the token endpoint. |
+| `auth_style` | no | How client credentials are sent: `basic` (HTTP Basic header, the default) or `post` (form body). Some endpoints require one or the other. |
+
+### Config example
+
+```yaml
+credstores:
+  - name: corp                              # client_credentials grant
+    provider: oauth2
+    token:
+      source: env
+      env_var: CORP_OAUTH_CLIENT_SECRET     # the client secret
+    settings:
+      token_url: https://idp.example.com/oauth2/token
+      client_id: postern-agent
+      grant_type: client_credentials
+      scope: "read write"
+      auth_style: basic
+
+  - name: feed                              # refresh_token grant
+    provider: oauth2
+    token:
+      source: env
+      env_var: FEED_OAUTH_CLIENT_SECRET     # the client secret
+    refresh_token:
+      source: env
+      env_var: FEED_OAUTH_REFRESH_TOKEN     # the long-lived refresh token
+    settings:
+      token_url: https://idp.example.com/oauth2/token
+      client_id: postern-agent
+      grant_type: refresh_token
+      auth_style: post
+
+proxy:
+  listen: 127.0.0.1:1701
+
+rules:
+  - host: api.example.com
+    secret_ref: oauth2://corp               # authority selects the credstore by name
+    inject:
+      type: header
+      name: authorization
+      template: "Bearer {{ CREDENTIAL }}"
+```
+
 ## Build tags for experimental providers
 
 A provider that is not ready for general release should ship behind a

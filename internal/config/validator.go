@@ -175,7 +175,8 @@ func (v *validator) checkCache(p *Proxy) {
 // checks).
 func (v *validator) checkCredStores(cs []CredStore) {
 	seenName := make(map[string]int, len(cs))
-	for i, c := range cs {
+	for i := range cs {
+		c := &cs[i]
 		if c.IsSynthesized() {
 			// The loader produced this from a legacy top-level token:
 			// block; required fields will be late-bound at runtime.
@@ -191,6 +192,21 @@ func (v *validator) checkCredStores(cs []CredStore) {
 		}
 		if c.Provider == "" {
 			v.add(base+".provider", "provider is required", SeverityError)
+		}
+
+		// Cross-field consistency between settings.grant_type and the
+		// refresh_token block. grant_type is settings-opaque to the config
+		// package, but its relationship to the schema-level refresh_token block
+		// is generic enough to validate offline (with a line number) rather than
+		// only at boot: a refresh-token grant needs the block, and the block is
+		// meaningless without that grant.
+		grantType := c.Settings["grant_type"]
+		hasRefreshBlock := !c.RefreshToken.IsZero()
+		switch {
+		case grantType == "refresh_token" && !hasRefreshBlock:
+			v.add(base+".settings", "grant_type refresh_token requires a refresh_token block", SeverityError)
+		case hasRefreshBlock && grantType != "refresh_token":
+			v.add(base+".refresh_token", "a refresh_token block requires grant_type: refresh_token in settings", SeverityError)
 		}
 	}
 }

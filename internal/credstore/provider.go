@@ -55,3 +55,20 @@ type Provider interface {
 	// cache or metrics decorators before handing it to broker.Hook.
 	NewResolver(ctx context.Context, token string, settings map[string]string) (broker.Resolver, error)
 }
+
+// SecondarySecretProvider is implemented by a Provider that needs a second
+// resolved secret in addition to the primary service-account token. The OAuth2
+// refresh_token grant is the motivating case: it authenticates with the client
+// secret (the primary token) AND a long-lived refresh token (the secondary).
+//
+// When a credstore carries a `refresh_token:` block, the runtime resolves it and
+// calls these variants instead of Validate/NewResolver. Providers that need only
+// one secret do not implement this interface, and the runtime rejects a
+// `refresh_token:` block configured against them.
+type SecondarySecretProvider interface {
+	Provider
+	// ValidateWithSecondary mirrors Provider.Validate with the secondary secret.
+	ValidateWithSecondary(ctx context.Context, token, secondary string, settings map[string]string) error
+	// NewResolverWithSecondary mirrors Provider.NewResolver with the secondary secret.
+	NewResolverWithSecondary(ctx context.Context, token, secondary string, settings map[string]string) (broker.Resolver, error)
+}

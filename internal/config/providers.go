@@ -48,7 +48,8 @@ func ValidateProviders(cfg *Config, root *yaml.Node, facts ProviderFacts) []Lint
 	v := newValidator(root)
 
 	if facts.KnownProviders != nil {
-		for i, c := range cfg.CredStores {
+		for i := range cfg.CredStores {
+			c := &cfg.CredStores[i]
 			// Synthesized credstores carry no user-authored provider name;
 			// the runtime late-binds them to the legacy default scheme.
 			if c.IsSynthesized() || c.Provider == "" {
@@ -63,7 +64,8 @@ func ValidateProviders(cfg *Config, root *yaml.Node, facts ProviderFacts) []Lint
 	}
 
 	if facts.ValidateSettings != nil {
-		for i, c := range cfg.CredStores {
+		for i := range cfg.CredStores {
+			c := &cfg.CredStores[i]
 			if c.IsSynthesized() || c.Provider == "" {
 				continue
 			}

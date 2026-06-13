@@ -94,6 +94,15 @@ type CredStore struct {
 	Provider string `yaml:"provider"`
 	Token    Token  `yaml:"token"`
 
+	// RefreshToken is an optional second credential source for providers that
+	// need two secrets — currently the OAuth2 refresh_token grant, which
+	// authenticates with the client secret (Token) plus a long-lived refresh
+	// token (this). It is resolved through the same token chain as Token. A
+	// provider that does not implement credstore.SecondarySecretProvider rejects
+	// it at boot; the validator requires it iff settings.grant_type is
+	// refresh_token.
+	RefreshToken Token `yaml:"refresh_token,omitempty"`
+
 	// Settings carries optional, provider-interpreted configuration (e.g. a
 	// self-hosted server URL). The config package treats it as an opaque
 	// map to stay brand-agnostic and avoid reopening the config → credstore
