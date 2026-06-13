@@ -95,6 +95,11 @@ func ValidateProviders(cfg *Config, root *yaml.Node, facts ProviderFacts) []Lint
 				v.checkRefScheme(fmt.Sprintf("rules[%d].inject.token_secret_ref", i), r.Inject.TokenSecretRef, facts)
 			}
 		}
+		// The `postern exec` env: values resolve through the same credstores; an
+		// unroutable scheme there is the same fail-at-validate condition as a rule.
+		for _, name := range sortedKeys(cfg.Env) {
+			v.checkRefScheme("env."+name, cfg.Env[name], facts)
+		}
 	}
 
 	return v.out
