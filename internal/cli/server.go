@@ -25,6 +25,7 @@ import (
 	// credstore. The cli package depends on those schemes existing, so the
 	// anchors belong here rather than only in the binary's main package.
 	_ "github.com/mmartinez/postern/internal/credstore/bitwarden"
+	_ "github.com/mmartinez/postern/internal/credstore/oauth2"
 	_ "github.com/mmartinez/postern/internal/credstore/onepassword"
 	"github.com/mmartinez/postern/internal/logging"
 	"github.com/mmartinez/postern/internal/runtime"
@@ -283,8 +284,9 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 func buildCredStoreResolvers(ctx context.Context, reg *credstore.Registry, stores []config.CredStore, store token.Store, logger *slog.Logger) (map[string]broker.Resolver, error) {
 	resolvers := make(map[string]broker.Resolver, len(stores))
 	schemeOwner := make(map[string]string, len(stores))
-	for _, cs := range stores {
-		provider, err := pickProvider(reg, cs)
+	for i := range stores {
+		cs := &stores[i]
+		provider, err := pickProvider(reg, *cs)
 		if err != nil {
 			return nil, err
 		}
@@ -303,21 +305,53 @@ func buildCredStoreResolvers(ctx context.Context, reg *credstore.Registry, store
 			slog.String("source", src),
 		)
 
-		// Boot-time credential ping. The Provider contract documents
-		// Validate as fail-closed-at-boot so a bad token surfaces here
-		// rather than as a 502 on the first brokered request.
-		if err := provider.Validate(ctx, tok, cs.Settings); err != nil {
-			return nil, fmt.Errorf("credstore %q: validate %s: %w", cs.Name, provider.Name(), err)
-		}
-
-		resolver, err := provider.NewResolver(ctx, tok, cs.Settings)
+		resolver, err := buildOneResolver(ctx, provider, cs, tok, store)
 		if err != nil {
-			return nil, fmt.Errorf("credstore %q: init resolver: %w", cs.Name, err)
+			return nil, err
 		}
 		resolvers[scheme] = resolver
 		schemeOwner[scheme] = cs.Name
 	}
 	return resolvers, nil
+}
+
+// buildOneResolver runs the boot-time credential ping and constructs the
+// resolver for one credstore. The ping is fail-closed-at-boot (Provider.Validate
+// semantics) so a bad credential surfaces here rather than as a 502 on the first
+// brokered request.
+//
+// A credstore that declares a refresh_token block needs a second secret, so its
+// provider must implement credstore.SecondarySecretProvider: the refresh token
+// is resolved through the same chain as the primary token and passed alongside
+// it. A provider that does not implement the interface rejects the block at boot.
+func buildOneResolver(ctx context.Context, provider credstore.Provider, cs *config.CredStore, primary string, store token.Store) (broker.Resolver, error) {
+	if cs.RefreshToken.IsZero() {
+		if err := provider.Validate(ctx, primary, cs.Settings); err != nil {
+			return nil, fmt.Errorf("credstore %q: validate %s: %w", cs.Name, provider.Name(), err)
+		}
+		resolver, err := provider.NewResolver(ctx, primary, cs.Settings)
+		if err != nil {
+			return nil, fmt.Errorf("credstore %q: init resolver: %w", cs.Name, err)
+		}
+		return resolver, nil
+	}
+
+	sp, ok := provider.(credstore.SecondarySecretProvider)
+	if !ok {
+		return nil, fmt.Errorf("credstore %q: provider %q does not accept a refresh_token block", cs.Name, provider.Name())
+	}
+	secondary, _, err := token.Resolve(ctx, cs.RefreshToken, store)
+	if err != nil {
+		return nil, fmt.Errorf("credstore %q: resolve refresh token: %w", cs.Name, err)
+	}
+	if err := sp.ValidateWithSecondary(ctx, primary, secondary, cs.Settings); err != nil {
+		return nil, fmt.Errorf("credstore %q: validate %s: %w", cs.Name, provider.Name(), err)
+	}
+	resolver, err := sp.NewResolverWithSecondary(ctx, primary, secondary, cs.Settings)
+	if err != nil {
+		return nil, fmt.Errorf("credstore %q: init resolver: %w", cs.Name, err)
+	}
+	return resolver, nil
 }
 
 // pickProvider resolves a config.CredStore to its credstore.Provider.
@@ -350,10 +384,15 @@ func assertRulesRoutable(rules []broker.Rule, resolvers map[string]broker.Resolv
 	for i := range rules {
 		r := &rules[i]
 		// A placeholder-routing rule has an empty rule-level SecretRef and one
-		// ref per route; check every ref the rule can resolve to.
+		// ref per route; an oauth1 rule has an empty SecretRef and four refs in
+		// its inject block. Check every ref the rule can resolve to.
 		refs := []string{r.SecretRef}
 		for _, rt := range r.Routes {
 			refs = append(refs, rt.SecretRef)
+		}
+		if r.Injection.Type == broker.InjectOAuth1 {
+			o := r.Injection.OAuth1
+			refs = append(refs, o.ConsumerKeyRef, o.ConsumerSecretRef, o.TokenRef, o.TokenSecretRef)
 		}
 		for _, ref := range refs {
 			scheme, _, ok := strings.Cut(ref, "://")
@@ -382,10 +421,10 @@ func newProviderFacts(reg *credstore.Registry) config.ProviderFactsFunc {
 			known[p.Name()] = true
 		}
 		schemes := make(map[string]bool)
-		for _, cs := range cfg.CredStores {
+		for i := range cfg.CredStores {
 			// An unknown provider here is reported separately via
 			// KnownProviders; skip it rather than guess a scheme.
-			if p, err := pickProvider(reg, cs); err == nil {
+			if p, err := pickProvider(reg, cfg.CredStores[i]); err == nil {
 				schemes[p.Scheme()] = true
 			}
 		}

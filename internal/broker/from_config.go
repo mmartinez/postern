@@ -44,6 +44,12 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 				Template:     src.Inject.Template,
 				Surfaces:     surfaces,
 				MaxBodyBytes: derefBodyCap(src.Inject.MaxBodyBytes),
+				OAuth1: OAuth1Refs{
+					ConsumerKeyRef:    src.Inject.ConsumerKeyRef,
+					ConsumerSecretRef: src.Inject.ConsumerSecretRef,
+					TokenRef:          src.Inject.TokenRef,
+					TokenSecretRef:    src.Inject.TokenSecretRef,
+				},
 			},
 			Routes: routesFromConfig(src.Routes),
 		}
@@ -103,6 +109,8 @@ func injectTypeFromConfig(t config.InjectType) (InjectType, error) {
 		return InjectHeader, nil
 	case config.InjectTypePlaceholder:
 		return InjectPlaceholder, nil
+	case config.InjectTypeOAuth1:
+		return InjectOAuth1, nil
 	default:
 		return 0, fmt.Errorf("unknown inject.type %q", t)
 	}

@@ -39,6 +39,10 @@ type InjectType string
 const (
 	InjectTypeHeader      InjectType = "header"
 	InjectTypePlaceholder InjectType = "placeholder"
+	// InjectTypeOAuth1 signs the request with OAuth 1.0a (HMAC-SHA1) and sets
+	// the Authorization: OAuth header. It uses the four oauth1 *_ref fields on
+	// Inject instead of a rule-level secret_ref/template.
+	InjectTypeOAuth1 InjectType = "oauth1"
 )
 
 // InjectSurface names a request component placeholder substitution can rewrite.
@@ -93,6 +97,15 @@ type CredStore struct {
 	Name     string `yaml:"name"`
 	Provider string `yaml:"provider"`
 	Token    Token  `yaml:"token"`
+
+	// RefreshToken is an optional second credential source for providers that
+	// need two secrets — currently the OAuth2 refresh_token grant, which
+	// authenticates with the client secret (Token) plus a long-lived refresh
+	// token (this). It is resolved through the same token chain as Token. A
+	// provider that does not implement credstore.SecondarySecretProvider rejects
+	// it at boot; the validator requires it iff settings.grant_type is
+	// refresh_token.
+	RefreshToken Token `yaml:"refresh_token,omitempty"`
 
 	// Settings carries optional, provider-interpreted configuration (e.g. a
 	// self-hosted server URL). The config package treats it as an opaque
@@ -281,4 +294,13 @@ type Inject struct {
 	// buffering. Zero means inherit the proxy-wide cap. Meaningful only when
 	// In includes "body".
 	MaxBodyBytes *int `yaml:"max_body_bytes,omitempty"`
+
+	// OAuth 1.0a (inject.type: oauth1) credential references. All four are
+	// required for, and valid only with, the oauth1 type; each is a secret_ref
+	// URI resolved through the normal credstore path. They replace the
+	// rule-level secret_ref and the header/template fields.
+	ConsumerKeyRef    string `yaml:"consumer_key_ref,omitempty"`
+	ConsumerSecretRef string `yaml:"consumer_secret_ref,omitempty"`
+	TokenRef          string `yaml:"token_ref,omitempty"`
+	TokenSecretRef    string `yaml:"token_secret_ref,omitempty"`
 }

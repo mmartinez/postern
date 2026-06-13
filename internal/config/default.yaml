@@ -75,3 +75,57 @@ rules:
   #     - name: john
   #       token: tg_john_3Rt7Yx1mQ
   #       secret_ref: op://Agents/telegram-john/token
+
+# OAuth2 (Bearer): postern mints/refreshes a short-lived access token from
+# long-lived client credentials and injects it as "Authorization: Bearer ...".
+# This uses the credstores: form (mutually exclusive with the top-level token:
+# block above), so it is shown fully commented. grant_type is required and
+# explicit; a refresh_token: block is required for, and only for, the
+# refresh_token grant. See docs/providers.md (OAuth2).
+#
+# credstores:
+#   - name: corp                              # client_credentials grant
+#     provider: oauth2
+#     token:                                  # the OAuth2 client secret
+#       source: env
+#       env_var: CORP_OAUTH_CLIENT_SECRET
+#     settings:
+#       token_url: https://idp.example.com/oauth2/token
+#       client_id: postern-agent
+#       grant_type: client_credentials
+#       scope: "read write"                   # optional, space-separated
+#       auth_style: basic                     # basic (default) | post
+#   - name: feed                              # refresh_token grant
+#     provider: oauth2
+#     token:
+#       source: env
+#       env_var: FEED_OAUTH_CLIENT_SECRET
+#     refresh_token:                          # required for grant_type: refresh_token
+#       source: env
+#       env_var: FEED_OAUTH_REFRESH_TOKEN
+#     settings:
+#       token_url: https://idp.example.com/oauth2/token
+#       client_id: postern-agent
+#       grant_type: refresh_token
+#       auth_style: post
+# rules:
+#   - host: api.example.com
+#     secret_ref: oauth2://corp               # authority selects the credstore by name
+#     inject:
+#       type: header
+#       name: authorization
+#       template: "Bearer {{ CREDENTIAL }}"
+
+# OAuth 1.0a: postern signs each request with an HMAC-SHA1 signature and sets the
+# "Authorization: OAuth ..." header. The four *_ref fields supply the credentials
+# (any scheme); there is no secret_ref or template. Works with the top-level
+# token: form above. See docs/configuration.md (OAuth 1.0a signing).
+#
+# rules:
+#   - host: api.example.com
+#     inject:
+#       type: oauth1
+#       consumer_key_ref: op://Agents/app/consumer_key
+#       consumer_secret_ref: op://Agents/app/consumer_secret
+#       token_ref: op://Agents/user/access_token
+#       token_secret_ref: op://Agents/user/access_token_secret

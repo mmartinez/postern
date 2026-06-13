@@ -171,6 +171,34 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 			return nil
 		}
 
+		// OAuth 1.0a signing rule: resolve the four credential refs and sign the
+		// request in place. There is no rule-level secret_ref or template; the
+		// Authorization header is computed from the request itself.
+		if rule.Injection.Type == InjectOAuth1 {
+			creds, err := resolveOAuth1Creds(req.Context(), resolver, rule.Injection.OAuth1)
+			if err != nil {
+				logger.Warn("broker resolve failed",
+					slog.String("host", host),
+					slog.String("rule", rule.Host),
+					slog.Any("err", err),
+				)
+				return failClosed(req)
+			}
+			if err := rule.injectOAuth1(req, creds, maxBodyBytes); err != nil {
+				logger.Warn("broker inject failed",
+					slog.String("host", host),
+					slog.String("rule", rule.Host),
+					slog.Any("err", err),
+				)
+				return failClosed(req)
+			}
+			logger.Info("broker injected",
+				slog.String("host", host),
+				slog.String("rule", rule.Host),
+			)
+			return nil
+		}
+
 		cred, err := resolver.Resolve(req.Context(), "", rule.SecretRef)
 		if err != nil {
 			logger.Warn("broker resolve failed",

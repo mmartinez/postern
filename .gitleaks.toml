@@ -29,6 +29,17 @@ paths = [
 # generic-api-key rule treat them as real keys. They are fixed, fake, and never
 # resolve to anything. Scoped to the exact synthetic prefix (not a broad path)
 # so a genuinely leaked key cannot hide behind this entry.
+#
+# Published OAuth 1.0a signing example (the widely documented RFC 5849 / vendor
+# worked example) used verbatim as the known-answer test vector in
+# internal/broker/oauth1_test.go. These are public documentation values, not real
+# credentials, and resolve to nothing. Pinned to the exact literals so a genuinely
+# leaked key cannot hide behind this entry.
 regexes = [
     '''tg_(max|john|alice)_[A-Za-z0-9]+''',
+    '''xvz1evFS4wEEPTGEFPHBog''',
+    '''kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw''',
+    '''LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE''',
+    '''kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg''',
+    '''370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb''',
 ]
