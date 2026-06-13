@@ -98,13 +98,12 @@ func TestValidateRejectsRefreshGrantWithoutSecondary(t *testing.T) {
 	require.Equal(t, 0, idp.count(), "a refresh grant without a refresh token must not exchange")
 }
 
-func TestValidateWithSecondaryRefreshToken(t *testing.T) {
+func TestValidateWithSecondaryRefreshTokenSkipsLiveExchange(t *testing.T) {
 	t.Parallel()
 	idp := newFakeIDP(t)
 	err := providerFor(idp).ValidateWithSecondary(context.Background(), "csecret", "rt-1", rtSettings(idp.srv.URL))
 	require.NoError(t, err)
-	require.Equal(t, 1, idp.count())
-	require.Equal(t, "rt-1", idp.form().Get("refresh_token"))
+	require.Equal(t, 0, idp.count(), "the refresh grant validates offline; a live boot exchange would consume/rotate the refresh token")
 }
 
 func TestValidateWithSecondaryRejectsClientCredentials(t *testing.T) {

@@ -126,7 +126,9 @@ func sanitizeTokenError(err error) error {
 	if errors.As(err, &re) && re.Response != nil {
 		return fmt.Errorf("oauth2: token endpoint returned status %d", re.Response.StatusCode)
 	}
-	return errors.New("oauth2: token request failed")
+	// A non-RetrieveError is a transport/setup failure (DNS, dial, TLS, timeout)
+	// with no token-endpoint response body, so its context is safe to preserve.
+	return fmt.Errorf("oauth2: token request failed: %w", err)
 }
 
 var _ broker.Resolver = (*resolver)(nil)

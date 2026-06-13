@@ -86,6 +86,16 @@ func (p *Provider) validate(ctx context.Context, clientSecret, refreshToken stri
 	if err != nil {
 		return err
 	}
+	// Only the client_credentials grant gets a live boot ping: re-exchanging
+	// client credentials is idempotent. A refresh_token exchange would consume
+	// the configured refresh token — and on a rotating server swap it for a new
+	// one that this throwaway boot resolver would then discard, leaving the real
+	// resolver holding a now-invalid token. So the refresh grant is validated
+	// offline (config shape only) and the first request performs the first
+	// exchange.
+	if refreshToken != "" {
+		return nil
+	}
 	if _, err := res.Resolve(ctx, "", scheme+"://_validate"); err != nil {
 		return fmt.Errorf("oauth2 validate: %w", err)
 	}
