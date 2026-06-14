@@ -94,10 +94,12 @@ static, boot-time invariant, and silently overriding a previously
 registered provider would be a footgun. Pick a scheme that does not
 clash with an existing provider in the tree.
 
-To activate the provider, the binary's `main` package needs to import
-your provider package as a side effect. The default postern binary
-already imports `internal/credstore/onepassword`; gated providers (see
-below) get a tagged side-effect import alongside it.
+To activate the provider, the binary needs a side-effect import of your
+provider package. The default postern binary registers three providers
+this way — `onepassword`, `bitwarden`, and `oauth2`, none behind a build
+tag — so they are available out of the box. A still-experimental provider
+gets a *tagged* side-effect import instead (see [Build tags](#build-tags-for-experimental-providers))
+so the default binary doesn't pull in its dependency until it graduates.
 
 ## Layout convention
 
@@ -108,11 +110,11 @@ internal/credstore/
   provider.go              # Provider interface + Registry types
   registry.go              # process-wide registry
   router.go                # SchemeRouter (broker.Resolver dispatcher)
+  cache.go                 # shared background-refreshing TTL/LRU cache (provider-agnostic)
   onepassword/             # production provider (links the SDK)
     provider.go            # implements credstore.Provider
     client.go              # SDK construction + HealthCheck
     sdk_resolver.go        # broker.Resolver backed by the SDK
-    cache.go               # LRU+TTL cache (provider-shared utility)
   bitwarden/               # production provider (shells out to the bws CLI)
     doc.go                 # package doc
     provider.go            # implements credstore.Provider
@@ -369,6 +371,6 @@ import to the default binary (the bitwarden provider followed this path).
 - Use the live SDK only behind an opt-in env var (e.g., `XX_E2E=1`)
   and an opt-in CI workflow trigger. See
   `internal/credstore/onepassword/live_test.go` for the pattern.
-- The cache in `internal/credstore/onepassword/cache.go` is generic;
-  consider reusing it rather than reimplementing TTL/LRU in your
-  provider.
+- The cache in `internal/credstore/cache.go` is generic and
+  provider-agnostic; consider reusing it rather than reimplementing
+  TTL/LRU in your provider.
