@@ -86,7 +86,7 @@ proxy:
 | `listen` | yes | `host:port` the proxy binds. Point your agent's `HTTPS_PROXY` at this. |
 | `cache` | no | Credential cache settings (see below). |
 | `cache_ttl` | no | **Legacy alias for `cache.ttl`.** Go duration (`5m`, `30s`). Accepted for backward compatibility; prefer the `cache` block. Setting both `cache_ttl` and `cache.ttl` to different values is a config error. |
-| `on_no_match` | no | What to do when no rule matches. `passthrough` (default) forwards the request unchanged. |
+| `on_no_match` | no | What to do when no rule matches. `passthrough` (default) forwards the request unchanged; `block` denies it with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). See [security.md](security.md#egress-containment-with-on_no_match). |
 | `max_body_bytes` | no | Cap (in bytes) on how much of a request body postern buffers when a rule rewrites the body (`inject.in` includes `body`). Default 1 MiB when unset or `0`. A larger body is rejected with `413 Request Entity Too Large` and never reaches the upstream. Bound at startup; a hot-reload edit warns and does not take effect (a per-rule `inject.max_body_bytes` override does hot-reload). |
 
 ### `proxy.cache`
@@ -119,14 +119,12 @@ vault is not re-hammered.
 > `max_stale` (or set it equal to `ttl` to disable stale-serving) for
 > revocation-sensitive deployments. See [security.md](security.md#credential-caching-and-revocation-window).
 
-> **Note — `on_no_match: block`.** The value is accepted today but not yet
-> enforced: every unmatched request currently passes through regardless. Don't
-> rely on it for egress control. See [security.md](security.md).
->
-> **Note — `listen`.** `postern bootstrap` reads `proxy.listen` when emitting
-> the agent's `HTTPS_PROXY` snippet. `postern server` currently also accepts an
-> `--addr` flag (default `127.0.0.1:1701`); aligning the server's bind to
-> `proxy.listen` is in progress, so keep the two in sync for now.
+> **Note — `listen` and `--addr`.** `postern bootstrap` reads `proxy.listen`
+> when emitting the agent's `HTTPS_PROXY` snippet. `postern server` resolves its
+> bind address with the precedence **`--addr` flag → `proxy.listen` →
+> `127.0.0.1:1701`** (the default): an explicit `--addr` wins, otherwise
+> `proxy.listen` is used, otherwise the built-in default. Set `proxy.listen` and
+> the two stay aligned automatically.
 
 ## `rules`
 
@@ -327,9 +325,13 @@ Errors block startup. Common errors:
 
 - `host is required` / a host that is neither a literal nor a single-`*` glob.
 - `secret_ref` missing or not of the form `<scheme>://<rest>`.
-- `inject.type` missing or not `header`/`placeholder`; `name` missing for a
-  header injection; `template` missing or carrying no `{{ CREDENTIAL }}`
+- `inject.type` missing or not `header`/`placeholder`/`oauth1`; `name` missing
+  for a header injection; `template` missing or carrying no `{{ CREDENTIAL }}`
   placeholder.
+- `inject.type: oauth1` with a rule-level `secret_ref`, or with `inject.name`,
+  `inject.template`, or `inject.in` set; or any of the four `*_ref` fields
+  missing or not of the form `<scheme>://<rest>`. (The `*_ref` fields are valid
+  only with `type: oauth1`.)
 - `inject.in` set with `type: header`; an invalid surface name; a `placeholder`
   token with reserved characters when a non-header surface is declared.
 - `routes` combined with a rule-level `secret_ref` or `inject.name`; `routes`

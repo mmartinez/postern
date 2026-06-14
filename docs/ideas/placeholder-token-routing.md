@@ -1,5 +1,10 @@
 # Placeholder-Token Routing (multi-agent, one host)
 
+> **Status: shipped.** This design has been implemented as the `routes:` field on
+> `placeholder` rules. The note below is kept for design rationale; the
+> authoritative, current reference is
+> [configuration.md → Placeholder routing (`routes`)](../configuration.md#placeholder-routing-routes).
+
 ## Problem Statement
 How might we let 2-10 agents share one postern instance per host, each presenting
 its own token, and have that token select which real secret postern injects -- with

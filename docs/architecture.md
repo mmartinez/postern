@@ -85,8 +85,10 @@ any other private key.
 | `internal/proxy` | goproxy front end: CONNECT handling, MITM, panic recovery, response streaming. |
 | `internal/ca` | Local CA generation, per-host leaf minting, and system trust-store install. |
 | `internal/broker` | Host matching (`Engine`), credential injection (`Inject`), and the proxy hook that wires match → resolve → inject. |
-| `internal/credstore` | Provider registry keyed by URI scheme, plus the `SchemeRouter` that dispatches a `secret_ref` to the right provider. |
-| `internal/credstore/onepassword` | The production provider, backed by the 1Password Go SDK, plus the shared TTL/LRU resolver cache. |
+| `internal/credstore` | Provider registry keyed by URI scheme, the `SchemeRouter` that dispatches a `secret_ref` to the right provider, and the shared background-refreshing resolver cache (`cache.go`) every provider reuses. |
+| `internal/credstore/onepassword` | Provider for 1Password Service Accounts (`op://`), backed by the 1Password Go SDK. Registered by default. |
+| `internal/credstore/bitwarden` | Provider for Bitwarden Secrets Manager (`bw://`), shelling out to the `bws` CLI. Registered by default. |
+| `internal/credstore/oauth2` | Provider that mints short-lived bearer tokens (`oauth2://`) via `golang.org/x/oauth2` (client-credentials / refresh-token grants). Registered by default. |
 | `internal/config` | YAML schema, strict-mode loader, line-numbered validator, and the fsnotify-backed hot-reload watcher. |
 | `internal/token` | Service-account token resolution chain (file → env → keychain) and the OS-keychain-backed store. |
 | `internal/runtime` | Assembles the proxy listener, wires the broker hook, and owns graceful shutdown. |
@@ -107,5 +109,7 @@ restart, and postern logs a warning when a reload diverges on one of them.
 The broker depends only on a one-method `Resolver` interface, so it has no
 compile-time coupling to any vendor SDK. A credstore provider claims a URI
 scheme, validates its token at boot, and constructs a resolver. Adding a vendor
-is a single new sub-package plus a side-effect import in `main`; the broker,
-proxy, and CLI are untouched. The contract is in [providers.md](providers.md).
+is a single new sub-package plus one blank side-effect import in
+`internal/cli/server.go` (the anchor block where all three shipped providers are
+registered, so the `server` command's registry is populated); the broker and
+proxy logic are untouched. The contract is in [providers.md](providers.md).
