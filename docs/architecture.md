@@ -109,7 +109,7 @@ restart, and postern logs a warning when a reload diverges on one of them.
 The broker depends only on a one-method `Resolver` interface, so it has no
 compile-time coupling to any vendor SDK. A credstore provider claims a URI
 scheme, validates its token at boot, and constructs a resolver. Adding a vendor
-is a single new sub-package plus one side-effect import in the binary's wiring
-(`cmd/postern/main.go` or `internal/cli/server.go`, where the shipped providers
-are registered); the broker and proxy logic are untouched. The contract is in
-[providers.md](providers.md).
+is a single new sub-package plus one blank side-effect import in
+`internal/cli/server.go` (the anchor block where all three shipped providers are
+registered, so the `server` command's registry is populated); the broker and
+proxy logic are untouched. The contract is in [providers.md](providers.md).

@@ -94,12 +94,15 @@ static, boot-time invariant, and silently overriding a previously
 registered provider would be a footgun. Pick a scheme that does not
 clash with an existing provider in the tree.
 
-To activate the provider, the binary needs a side-effect import of your
-provider package. The default postern binary registers three providers
-this way — `onepassword`, `bitwarden`, and `oauth2`, none behind a build
-tag — so they are available out of the box. A still-experimental provider
-gets a *tagged* side-effect import instead (see [Build tags](#build-tags-for-experimental-providers))
-so the default binary doesn't pull in its dependency until it graduates.
+To activate the provider, add a blank side-effect import of your provider
+package to the anchor block in `internal/cli/server.go` — that is where the
+`server` command's registry is populated, so an import added anywhere else
+(e.g. `cmd/postern/main.go`) leaves the provider unregistered at runtime. The
+default postern binary registers three providers there — `onepassword`,
+`bitwarden`, and `oauth2`, none behind a build tag — so they are available out
+of the box. A still-experimental provider gets a *tagged* side-effect import
+instead (see [Build tags](#build-tags-for-experimental-providers)) so the
+default binary doesn't pull in its dependency until it graduates.
 
 ## Layout convention
 
@@ -122,6 +125,9 @@ internal/credstore/
     settings.go            # parses server_url / bws_path settings
     resolver.go            # broker.Resolver that runs `bws secret get`
     live_test.go           # opt-in live test (BWS_E2E=1)
+  oauth2/                  # production provider (mints tokens via golang.org/x/oauth2)
+    provider.go            # implements credstore.Provider
+    resolver.go            # broker.Resolver that exchanges client creds for a bearer token
 ```
 
 A provider sub-package owns its SDK or CLI shell-out. The only public
