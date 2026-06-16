@@ -59,6 +59,12 @@ func newRotatingIDP(t *testing.T, seed string) *rotatingIDP {
 	return idp
 }
 
+func (idp *rotatingIDP) latest() string {
+	idp.mu.Lock()
+	defer idp.mu.Unlock()
+	return idp.current
+}
+
 func readFileTrimmed(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -122,6 +128,43 @@ func TestRefreshTokenSeedUsedWhenNoPersistFileYet(t *testing.T) {
 	_, err = res.Resolve(context.Background(), "", "oauth2://mp")
 	require.NoError(t, err)
 	require.Equal(t, "rt-1", readFileTrimmed(t, path), "first rotation must seed the persist file")
+}
+
+// TestRefreshTokenPersistConcurrent hammers Resolve from many goroutines against
+// a rotating IdP. Under -race it guards the fetch+persist critical section, and
+// the final assertion checks that the persisted file holds the latest issued
+// refresh token — never a stale value rolled back by a preempted goroutine.
+func TestRefreshTokenPersistConcurrent(t *testing.T) {
+	t.Parallel()
+	idp := newRotatingIDP(t, "rt-0")
+	path := filepath.Join(t.TempDir(), "refresh-token")
+	p := &Provider{httpClient: idp.srv.Client()}
+	settings := rtSettings(idp.srv.URL)
+	settings["refresh_token_path"] = path
+	res, err := p.NewResolverWithSecondary(context.Background(), "csecret", "rt-0", settings)
+	require.NoError(t, err)
+
+	const workers, iters = 24, 25
+	var wg sync.WaitGroup
+	errs := make(chan error, workers*iters)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iters {
+				if _, err := res.Resolve(context.Background(), "", "oauth2://mp"); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, idp.latest(), readFileTrimmed(t, path),
+		"persisted token must equal the latest issued, never a stale rollback")
 }
 
 // TestParseSettingsRefreshTokenPath validates the new setting: accepted for the

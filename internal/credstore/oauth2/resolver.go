@@ -69,8 +69,10 @@ type oauthConfig struct {
 // persistPath atomically. Servers that issue single-use refresh tokens (X,
 // Marktplaats, …) invalidate the previous refresh token on every refresh; without
 // persistence the rotated token lives only in the TokenSource's memory and is lost
-// on restart, leaving the on-disk seed permanently invalid. mu guards lastRefresh
-// and the write so concurrent Resolve calls persist at most once per rotation.
+// on restart, leaving the on-disk seed permanently invalid. mu serializes the
+// token fetch together with the rotation write (persistence path only), so a
+// goroutine cannot fetch a token, stall, and later overwrite a newer refresh
+// token a concurrent rotation already persisted.
 type resolver struct {
 	ts xoauth2.TokenSource
 
@@ -128,6 +130,25 @@ func (r *resolver) Resolve(_ context.Context, _, secretRef string) (string, erro
 		return "", fmt.Errorf("%w: %q", errNotOAuth2Ref, secretRef)
 	}
 
+	// Persistence-disabled resolvers take the lock-free fast path. When
+	// persistence is on, the token fetch and the rotation write happen under a
+	// single lock: a goroutine preempted between fetch and write must not resume
+	// and overwrite a refresh token a concurrent rotation already persisted —
+	// the server has invalidated the older value, so that would brick the next
+	// restart. Holding r.mu across r.ts.Token() makes fetch+persist atomic.
+	if r.persistPath == "" {
+		tok, err := r.ts.Token()
+		if err != nil {
+			return "", sanitizeTokenError(err)
+		}
+		if tok.AccessToken == "" {
+			return "", errors.New("oauth2: token endpoint returned an empty access_token")
+		}
+		return tok.AccessToken, nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	tok, err := r.ts.Token()
 	if err != nil {
 		return "", sanitizeTokenError(err)
@@ -135,42 +156,29 @@ func (r *resolver) Resolve(_ context.Context, _, secretRef string) (string, erro
 	if tok.AccessToken == "" {
 		return "", errors.New("oauth2: token endpoint returned an empty access_token")
 	}
-	if err := r.persistRotatedRefreshToken(tok.RefreshToken); err != nil {
+	// A rotated refresh token is persisted before the access token is handed out.
+	// A cached (non-refreshing) Token() call leaves RefreshToken unchanged, so it
+	// writes nothing.
+	if rt := tok.RefreshToken; rt != "" && rt != r.lastRefresh {
 		// Fail closed: the server has already invalidated the previous refresh
-		// token, so a token we cannot record will brick the next restart. Surface
-		// it now (502) rather than silently degrade. The access token returned by
-		// this same exchange stays valid in the TokenSource cache, so a transient
-		// write error recovers on the next attempt once the path is writable.
-		return "", err
+		// token, so a value we cannot record will brick the next restart. Surface
+		// it now (502) rather than silently degrade. The access token from this
+		// same exchange stays valid in the TokenSource cache, so a transient write
+		// error recovers on the next attempt once the path is writable.
+		if err := writeRefreshTokenFile(r.persistPath, rt); err != nil {
+			return "", fmt.Errorf("oauth2: persist rotated refresh token: %w", err)
+		}
+		r.lastRefresh = rt
 	}
 	return tok.AccessToken, nil
 }
 
-// persistRotatedRefreshToken writes refreshToken back to persistPath when it has
-// rotated since the last persisted value. It is a no-op when persistence is
-// disabled (persistPath empty), the server did not return a refresh token, or the
-// value is unchanged — so a cached (non-refreshing) Token() call writes nothing.
-func (r *resolver) persistRotatedRefreshToken(refreshToken string) error {
-	if r.persistPath == "" || refreshToken == "" {
-		return nil
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if refreshToken == r.lastRefresh {
-		return nil
-	}
-	if err := writeRefreshTokenFile(r.persistPath, refreshToken); err != nil {
-		return fmt.Errorf("oauth2: persist rotated refresh token: %w", err)
-	}
-	r.lastRefresh = refreshToken
-	return nil
-}
-
 // writeRefreshTokenFile atomically replaces path with token (no trailing
-// newline; readers trim). It writes a sibling temp file at 0600 and renames it
-// over path, so a crash mid-write never leaves a truncated refresh token that
-// would brick the next restart. The temp file shares path's directory so the
-// rename is a same-filesystem atomic operation.
+// newline; readers trim). It writes a sibling temp file and renames it over
+// path, so a crash mid-write never leaves a truncated refresh token that would
+// brick the next restart. The temp file shares path's directory so the rename is
+// a same-filesystem atomic operation. os.CreateTemp opens with O_EXCL at mode
+// 0600, so the refresh token is never briefly world-readable.
 func writeRefreshTokenFile(path, token string) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".refresh-token-*")
@@ -179,10 +187,6 @@ func writeRefreshTokenFile(path, token string) error {
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
 	if _, err := tmp.WriteString(token); err != nil {
 		_ = tmp.Close()
 		return err
