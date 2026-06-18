@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -134,35 +135,53 @@ func (p *Provider) buildResolver(clientSecret, refreshToken string, settings map
 		}
 	}
 
+	// With persistence enabled, a refresh token rotated by a prior process run
+	// lives in refresh_token_path and supersedes the configured seed (which a
+	// rotating server has already invalidated). On first boot the file is absent
+	// and the seed is used; the resolver writes the file on the first rotation.
+	effectiveRefresh := refreshToken
+	if s.refreshTokenPath != "" {
+		persisted, err := readPersistedRefreshToken(s.refreshTokenPath)
+		if err != nil {
+			return nil, err
+		}
+		if persisted != "" {
+			effectiveRefresh = persisted
+		}
+	}
+
 	return newResolver(oauthConfig{
-		tokenURL:     s.tokenURL,
-		clientID:     s.clientID,
-		clientSecret: clientSecret,
-		grantType:    s.grantType,
-		refreshToken: refreshToken,
-		scopes:       s.scopes,
-		authStyle:    s.authStyle,
-		httpClient:   client,
+		tokenURL:         s.tokenURL,
+		clientID:         s.clientID,
+		clientSecret:     clientSecret,
+		grantType:        s.grantType,
+		refreshToken:     effectiveRefresh,
+		scopes:           s.scopes,
+		authStyle:        s.authStyle,
+		refreshTokenPath: s.refreshTokenPath,
+		httpClient:       client,
 	})
 }
 
 // settings is the parsed, validated token-endpoint configuration.
 type settings struct {
-	tokenURL  string
-	clientID  string
-	grantType string
-	scopes    []string
-	authStyle xoauth2.AuthStyle
+	tokenURL         string
+	clientID         string
+	grantType        string
+	scopes           []string
+	authStyle        xoauth2.AuthStyle
+	refreshTokenPath string
 }
 
 // knownSettingKeys is the closed set of recognized settings keys; any other key
 // is a config error so a typo never silently no-ops.
 var knownSettingKeys = map[string]bool{
-	"token_url":  true,
-	"client_id":  true,
-	"grant_type": true,
-	"scope":      true,
-	"auth_style": true,
+	"token_url":          true,
+	"client_id":          true,
+	"grant_type":         true,
+	"scope":              true,
+	"auth_style":         true,
+	"refresh_token_path": true,
 }
 
 // parseSettings validates and parses the provider settings map. grant_type is
@@ -210,6 +229,20 @@ func parseSettings(m map[string]string) (settings, error) {
 
 	if sc := strings.TrimSpace(m["scope"]); sc != "" {
 		s.scopes = strings.Fields(sc)
+	}
+
+	if p := strings.TrimSpace(m["refresh_token_path"]); p != "" {
+		// Persisting a rotated refresh token only makes sense for the refresh_token
+		// grant; client_credentials never receives one.
+		if s.grantType != grantRefreshToken {
+			return s, errors.New("oauth2: refresh_token_path requires grant_type: refresh_token")
+		}
+		// An absolute path keeps persistence independent of the proxy's working
+		// directory and makes the durable-mount requirement explicit.
+		if !filepath.IsAbs(p) {
+			return s, fmt.Errorf("oauth2: refresh_token_path must be an absolute path: %q", p)
+		}
+		s.refreshTokenPath = p
 	}
 	return s, nil
 }

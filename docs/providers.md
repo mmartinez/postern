@@ -282,9 +282,16 @@ The OAuth2 grant type decides how many secrets the credstore needs:
   long-lived **refresh token** (`refresh_token:`, the same source grammar as
   `token:`). Both resolve through the normal token chain (env/file/keychain).
 
-A rotated refresh token (some servers issue a new one on each refresh) is held in
-memory for the life of the process; persisting it across restarts is not yet
-supported, so a rotating server must be re-provisioned after a restart.
+Some servers issue a **single-use refresh token**: every refresh returns a new
+refresh token and invalidates the previous one (e.g. X, Marktplaats). The rotated
+token is always kept in memory for the life of the process. To also survive a
+restart, set **`refresh_token_path`** to a writable, durable file: the resolver
+writes each rotated token there atomically and prefers it over the configured
+`refresh_token:` seed on the next boot. Without it, a restart falls back to the
+seed — which a rotating server has already invalidated — so the credstore must be
+re-provisioned. The `refresh_token:` block is still required as the first-boot
+seed; `refresh_token_path` only needs a durable mount (a hostPath/PVC, not an
+`emptyDir`, which a rotating server would outlive).
 
 ### Settings keys
 
@@ -295,6 +302,7 @@ supported, so a rotating server must be re-provisioned after a restart.
 | `grant_type` | yes | `client_credentials` or `refresh_token`. Explicit, never inferred. A `refresh_token:` block is required for — and only for — `refresh_token`. |
 | `scope` | no | Space-separated scopes requested at the token endpoint. |
 | `auth_style` | no | How client credentials are sent: `basic` (HTTP Basic header, the default) or `post` (form body). Some endpoints require one or the other. |
+| `refresh_token_path` | no | Absolute path to a writable, durable file where a rotated refresh token is persisted and re-read across restarts. `refresh_token` grant only. Omit to keep the in-memory-only behavior. |
 
 ### Config example
 
@@ -325,6 +333,7 @@ credstores:
       client_id: postern-agent
       grant_type: refresh_token
       auth_style: post
+      refresh_token_path: /var/lib/postern/feed-refresh-token  # survives restarts on rotating servers
 
 proxy:
   listen: 127.0.0.1:1701
