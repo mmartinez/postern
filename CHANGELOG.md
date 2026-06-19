@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/mmartinez/postern/compare/v0.5.0...v0.6.0) (2026-06-19)
+
+
+### Features
+
+* **oauth2:** persist rotated refresh tokens across restarts ([#52](https://github.com/mmartinez/postern/issues/52)) ([65e1c7c](https://github.com/mmartinez/postern/commit/65e1c7cd83a6ff22250bcf002ae06be0af2581f3))
+* **proxy:** selective MITM — tunnel non-brokered hosts ([#56](https://github.com/mmartinez/postern/issues/56)) ([237f31f](https://github.com/mmartinez/postern/commit/237f31fa76bcd680748c06575a9510c1f1bdf0cc)), closes [#55](https://github.com/mmartinez/postern/issues/55)
+
 ## [0.5.0](https://github.com/mmartinez/postern/compare/v0.4.0...v0.5.0) (2026-06-13)
 
 
