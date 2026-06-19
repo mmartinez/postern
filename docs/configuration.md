@@ -77,7 +77,7 @@ proxy:
     ttl: 1h                   # nominal freshness window
     refresh_ahead: 45m        # refresh asynchronously once a value reaches this age
     max_stale: 24h            # keep serving a cached value this long if refreshes fail
-  on_no_match: passthrough    # passthrough | block
+  on_no_match: passthrough    # passthrough (tunnel, no MITM) | block (reject the CONNECT)
   max_body_bytes: 1048576     # body buffering cap for body substitution (1 MiB)
 ```
 
@@ -86,7 +86,7 @@ proxy:
 | `listen` | yes | `host:port` the proxy binds. Point your agent's `HTTPS_PROXY` at this. |
 | `cache` | no | Credential cache settings (see below). |
 | `cache_ttl` | no | **Legacy alias for `cache.ttl`.** Go duration (`5m`, `30s`). Accepted for backward compatibility; prefer the `cache` block. Setting both `cache_ttl` and `cache.ttl` to different values is a config error. |
-| `on_no_match` | no | What to do when no rule matches. `passthrough` (default) forwards the request unchanged; `block` denies it with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). See [security.md](security.md#egress-containment-with-on_no_match). |
+| `on_no_match` | no | What to do with a `CONNECT` to a host that matches no rule. `passthrough` (default) tunnels the connection untouched — postern does **not** terminate TLS, so the agent reaches the real upstream with the real certificate and only needs to trust the postern CA for brokered hosts. `block` rejects the `CONNECT` with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). See [security.md](security.md#egress-containment-with-on_no_match). |
 | `max_body_bytes` | no | Cap (in bytes) on how much of a request body postern buffers when a rule rewrites the body (`inject.in` includes `body`). Default 1 MiB when unset or `0`. A larger body is rejected with `413 Request Entity Too Large` and never reaches the upstream. Bound at startup; a hot-reload edit warns and does not take effect (a per-rule `inject.max_body_bytes` override does hot-reload). |
 
 ### `proxy.cache`

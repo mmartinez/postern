@@ -35,17 +35,23 @@ agent                     postern (127.0.0.1:1701)                 upstream
   │  ◀──── response (streamed) ──┤                                     │
 ```
 
-1. **CONNECT + MITM.** The agent points `HTTPS_PROXY` at postern. For each
-   `CONNECT`, postern mints a short-lived leaf certificate for the target host,
-   signed by a CA it generated locally and that the agent's trust store has been
-   told to trust (`postern ca install`). The agent completes a normal TLS
-   handshake; postern is the other end.
+1. **CONNECT + selective MITM.** The agent points `HTTPS_PROXY` at postern. For
+   each `CONNECT`, postern matches the target host against the rules and
+   intercepts only brokered hosts: it mints a short-lived leaf certificate for
+   the host, signed by a CA it generated locally and that the agent's trust
+   store has been told to trust (`postern ca install`), and completes the TLS
+   handshake as the other end. A host that matches no rule is tunneled untouched
+   — postern relays the encrypted bytes without terminating TLS, so the agent
+   reaches the real upstream with the real certificate and only needs to trust
+   the postern CA for hosts it actually brokers. (When no broker is configured
+   at all, postern falls back to intercepting every host.)
 
-2. **Match.** The decrypted request's host (with any `:port` stripped) is
-   matched against the YAML-declared rules — first match wins. Host patterns are
-   either a literal hostname or a single-`*` glob (`*.example.com`, matching one
-   label like a TLS wildcard). No match means the request is forwarded unchanged
-   (the default `passthrough` behavior).
+2. **Match.** For an intercepted host the decrypted request's host (with any
+   `:port` stripped) is matched against the YAML-declared rules — first match
+   wins. Host patterns are either a literal hostname or a single-`*` glob
+   (`*.example.com`, matching one label like a TLS wildcard). A host that
+   matches no rule is tunneled at `CONNECT` without decryption (the default
+   `passthrough` behavior); `block` rejects the `CONNECT` instead.
 
 3. **Resolve.** The matched rule's `secret_ref` (e.g. `op://Vault/Item/field`)
    is handed to the credstore provider registered for that URI scheme. Resolved

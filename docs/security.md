@@ -126,14 +126,36 @@ request.
 
 ## Egress containment with `on_no_match`
 
-`proxy.on_no_match` controls what happens to a proxied request whose host
-matches no broker rule:
+`proxy.on_no_match` controls what happens to a `CONNECT` whose host matches no
+broker rule:
 
-- `passthrough` (the default) forwards the request unchanged.
-- `block` denies it with a `502` and never contacts the upstream — an
-  allowlist-only egress policy for traffic flowing through the proxy.
+- `passthrough` (the default) tunnels the connection untouched — postern does
+  not terminate TLS for it. The agent reaches the real upstream with the real
+  certificate, and clients only need to trust the postern CA for hosts that are
+  actually brokered.
+- `block` rejects the `CONNECT` with a `502` and never contacts the upstream —
+  an allowlist-only egress policy for traffic flowing through the proxy.
 
 `block` governs only requests that reach the proxy. It is not a substitute for a
 network-level egress policy: anything that bypasses the proxy (raw sockets,
 misconfigured `HTTPS_PROXY`, non-HTTP protocols) is unaffected. Use a firewall
 when you need to contain egress the process cannot route around.
+
+## Selective interception
+
+Postern terminates TLS only for hosts that match a broker rule; everything else
+is tunneled byte-for-byte (or rejected under `block`). This shrinks the blast
+radius — postern decrypts only what it brokers — and lets protocol upgrades
+(e.g. WebSockets) and TLS-fingerprinting upstreams work end to end for
+non-brokered hosts, since those connections carry the agent's own handshake to
+the real server. Two boundaries follow from this:
+
+- **The interception decision uses the outer `CONNECT` host (the SNI/authority
+  the agent dials), not an inner request header.** A request that reaches a
+  brokered host by fronting it behind a different, non-brokered `CONNECT` host
+  would be tunneled, not brokered. This matters only under deliberate
+  domain-fronting; for the intended use (an agent dialing an API directly) the
+  `CONNECT` host and the request host are the same.
+- **Brokered hosts that also need a WebSocket upgrade are still MITM'd**, and
+  that upgrade path is not yet handled. Selective interception fixes upgrades
+  for non-brokered hosts only.

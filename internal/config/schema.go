@@ -19,9 +19,10 @@ const (
 	TokenSourceFile     TokenSource = "file"
 )
 
-// OnNoMatch is the proxy behavior when an outbound request doesn't match any
-// rule. The conservative default is passthrough (forward unchanged); "block"
-// is for paranoid deployments that want allowlist-only egress.
+// OnNoMatch is the proxy behavior for a CONNECT whose host matches no rule.
+// The conservative default is passthrough: the connection is tunneled untouched
+// (no TLS termination), so postern decrypts only the hosts it brokers. "block"
+// rejects the CONNECT for allowlist-only egress in paranoid deployments.
 type OnNoMatch string
 
 // On-no-match behavior values accepted in YAML.

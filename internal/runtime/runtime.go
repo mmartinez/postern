@@ -48,6 +48,15 @@ type Options struct {
 	// PreUpstreamHandler is the broker insertion point. nil keeps
 	// the proxy in passthrough mode.
 	PreUpstreamHandler func(req *http.Request) *http.Response
+
+	// ShouldIntercept reports whether a host is brokered and must be MITM'd;
+	// hosts it declines are tunneled (or blocked). nil intercepts every host,
+	// matching the always-MITM behavior used when no broker is active.
+	ShouldIntercept func(host string) bool
+
+	// BlockNonBrokered rejects the CONNECT for non-brokered hosts instead of
+	// tunneling them — the connect-time form of on_no_match: block.
+	BlockNonBrokered bool
 }
 
 // Runtime is the constructed-but-not-yet-running postern server. Build it
@@ -86,6 +95,8 @@ func New(opts Options) (*Runtime, error) {
 		Logger:             opts.Logger,
 		UpstreamTLS:        opts.UpstreamTLS,
 		PreUpstreamHandler: opts.PreUpstreamHandler,
+		ShouldIntercept:    opts.ShouldIntercept,
+		BlockNonBrokered:   opts.BlockNonBrokered,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("init proxy: %w", err)
