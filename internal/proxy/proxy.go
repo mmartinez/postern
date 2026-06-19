@@ -50,6 +50,19 @@ type Config struct {
 	//
 	// The broker plugs into this slot to perform match → resolve → inject.
 	PreUpstreamHandler func(req *http.Request) *http.Response
+
+	// ShouldIntercept reports whether a host (port already stripped) is
+	// brokered and therefore must be MITM'd. Hosts it declines are tunneled
+	// (raw CONNECT relay, no TLS termination) or, when BlockNonBrokered is
+	// set, rejected at connect time. A nil func intercepts every host,
+	// preserving the original always-MITM behavior for callers that construct
+	// a Config directly (notably tests).
+	ShouldIntercept func(host string) bool
+
+	// BlockNonBrokered rejects the CONNECT for hosts ShouldIntercept declines
+	// instead of tunneling them — the connect-time form of on_no_match: block.
+	// It is ignored when ShouldIntercept is nil (every host is intercepted).
+	BlockNonBrokered bool
 }
 
 // Proxy is the postern HTTPS proxy. Construct one with New; expose its
@@ -93,14 +106,28 @@ func New(cfg Config) (*Proxy, error) {
 	}
 
 	tlsConfig := mitmTLSConfig(cfg.Minter)
-	gp.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(func(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+	gp.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 		// Returning host (not "") preserves the destination so goproxy's
 		// downstream dial uses the correct target — the second return is
 		// the upstream connect address, not a label.
-		return &goproxy.ConnectAction{
-			Action:    goproxy.ConnectMitm,
-			TLSConfig: tlsConfig,
-		}, host
+		switch decideConnect(host, cfg.ShouldIntercept, cfg.BlockNonBrokered) {
+		case modeReject:
+			// Refuse the tunnel at connect time: no leaf minted, no upstream
+			// contact. Hand the agent a 502 so the block is legible rather
+			// than a bare socket close.
+			ctx.Resp = goproxy.NewResponse(ctx.Req, goproxy.ContentTypeText, http.StatusBadGateway, "blocked by postern: host not brokered\n") //nolint:bodyclose // synthetic 502; goproxy owns and writes this response, there is no body to close
+			return goproxy.RejectConnect, host
+		case modeTunnel:
+			// Non-brokered host: relay the encrypted bytes untouched so the
+			// client reaches the real upstream with its real certificate and
+			// TLS fingerprint. postern never decrypts what it does not broker.
+			return goproxy.OkConnect, host
+		default:
+			return &goproxy.ConnectAction{
+				Action:    goproxy.ConnectMitm,
+				TLSConfig: tlsConfig,
+			}, host
+		}
 	}))
 
 	installHandlers(gp, cfg.Logger)

@@ -100,6 +100,8 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 				Addr:               addr,
 				Logger:             logger,
 				PreUpstreamHandler: bundle.hook,
+				ShouldIntercept:    bundle.shouldIntercept,
+				BlockNonBrokered:   bundle.blockNonBrokered,
 			})
 			if err != nil {
 				return fmt.Errorf("init runtime: %w", err)
@@ -163,6 +165,15 @@ type brokerBundle struct {
 	cfgPath  string
 	listen   string
 	baseline *broker.Baseline
+
+	// shouldIntercept reports whether a host is brokered, so the proxy MITMs
+	// only those and tunnels the rest. nil (the no-broker bundle) leaves the
+	// proxy intercepting every host, unchanged from before selective MITM.
+	shouldIntercept func(string) bool
+
+	// blockNonBrokered mirrors on_no_match: block — reject non-brokered
+	// CONNECTs instead of tunneling them.
+	blockNonBrokered bool
 }
 
 // resolveListenAddr applies the listen-address precedence for `postern
@@ -267,6 +278,11 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 			Proxy:      cfg.Proxy,
 			CredStores: cfg.CredStores,
 		},
+		shouldIntercept: func(host string) bool { _, ok := engine.Match(host); return ok },
+		// on_no_match is captured here and in broker.Hook above; both bind it at
+		// startup. A hot-reload edit does not take effect until restart — the
+		// reloader's baseline comparison warns when on_no_match changes.
+		blockNonBrokered: cfg.Proxy.OnNoMatch == config.OnNoMatchBlock,
 	}, nil
 }
 
