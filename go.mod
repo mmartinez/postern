@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/1password/onepassword-sdk-go v0.4.0
 	github.com/99designs/keyring v1.2.2
-	github.com/elazarl/goproxy v1.8.4
+	github.com/elazarl/goproxy v1.8.5
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/go-cmp v0.7.0
 	github.com/spf13/cobra v1.10.2
