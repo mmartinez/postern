@@ -3,7 +3,7 @@ module github.com/mmartinez/postern
 go 1.26.4
 
 require (
-	github.com/1password/onepassword-sdk-go v0.4.0
+	github.com/1password/onepassword-sdk-go v0.4.1
 	github.com/99designs/keyring v1.2.2
 	github.com/elazarl/goproxy v1.8.4
 	github.com/fsnotify/fsnotify v1.10.1
