@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/mmartinez/postern/compare/v0.6.0...v0.6.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* **proxy:** hold goproxy at 1.8.4 to keep streaming unbuffered ([#61](https://github.com/mmartinez/postern/issues/61)) ([f5f45a0](https://github.com/mmartinez/postern/commit/f5f45a01b5352b7cb97e991f4e853b67b65f7021))
+
 ## [0.6.0](https://github.com/mmartinez/postern/compare/v0.5.0...v0.6.0) (2026-06-19)
 
 
