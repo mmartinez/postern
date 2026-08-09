@@ -5,6 +5,7 @@ import (
 	"math"
 	"net"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -55,6 +56,11 @@ var secretRefPattern = regexp.MustCompile(`^[a-z][a-z0-9+.\-]*://.+$`)
 // for stable substitution outside header values.
 var unreservedTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 
+// envNamePattern is the POSIX-portable environment-variable name shape: a
+// letter or underscore followed by letters, digits, or underscores. A key
+// outside this set could never be exported to the launched child process.
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // Validate walks cfg and returns the slice of findings. Root is the AST from
 // Load and supplies line numbers; pass nil to skip location info.
 func Validate(cfg *Config, root *yaml.Node) []LintError {
@@ -74,11 +80,16 @@ func validateSkipping(cfg *Config, root *yaml.Node, skipRule map[int]struct{}) [
 	v.checkProxy(&cfg.Proxy)
 	v.checkCredStores(cfg.CredStores)
 	v.checkRulesSkipping(cfg.Rules, skipRule)
-	// Rules without any credstore can never be brokered. Flagging this at
-	// validate time turns the otherwise-cryptic boot error "scheme router
-	// requires at least one resolver" into a line-numbered lint.
-	if len(cfg.Rules) > 0 && len(cfg.CredStores) == 0 {
-		v.add("credstores", "at least one credstore is required when rules are non-empty (set top-level `token:` or `credstores:`)", SeverityError)
+	v.checkEnv(cfg.Env)
+	// Rules or env entries without any credstore can never be resolved.
+	// Flagging this at validate time turns the otherwise-cryptic boot error
+	// "scheme router requires at least one resolver" into a line-numbered lint.
+	if len(cfg.CredStores) == 0 {
+		if len(cfg.Rules) > 0 {
+			v.add("credstores", "at least one credstore is required when rules are non-empty (set top-level `token:` or `credstores:`)", SeverityError)
+		} else if len(cfg.Env) > 0 {
+			v.add("credstores", "at least one credstore is required when env is non-empty (set top-level `token:` or `credstores:`)", SeverityError)
+		}
 	}
 	return v.out
 }
@@ -228,6 +239,37 @@ func (v *validator) checkRulesSkipping(rules []Rule, skip map[int]struct{}) {
 			}
 		}
 	}
+}
+
+// checkEnv validates the env: block consumed by `postern exec`. Each key must
+// be a valid environment-variable name and each value a well-formed secret_ref;
+// the scheme-is-routable check lives in ValidateProviders alongside the rule
+// check, so it runs only on the registry-aware path. Keys are visited in sorted
+// order so the lint output is deterministic regardless of map iteration order.
+func (v *validator) checkEnv(env map[string]string) {
+	for _, name := range sortedKeys(env) {
+		base := "env." + name
+		if !envNamePattern.MatchString(name) {
+			v.add(base, fmt.Sprintf("%q is not a valid environment variable name (use letters, digits, and underscore; must not start with a digit)", name), SeverityError)
+		}
+		ref := env[name]
+		if ref == "" {
+			v.add(base, "secret_ref is required", SeverityError)
+		} else if !secretRefPattern.MatchString(ref) {
+			v.add(base, fmt.Sprintf("secret_ref %q must be a URI of the form <scheme>://<rest> (e.g., op://VAULT/ITEM/FIELD)", ref), SeverityError)
+		}
+	}
+}
+
+// sortedKeys returns the keys of m in lexical order. The validator iterates
+// maps through it so lints over the env: block come out in a stable order.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (v *validator) checkRule(base string, r Rule) {

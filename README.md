@@ -203,11 +203,28 @@ Set `token.source: file` and `token.file:
 token read-only into the unit's private credentials directory for the lifetime of
 the process.
 
+### Environment injection
+
+For tools the proxy can't intercept — a database driver, `git` over SSH, a CLI
+that reads its credential from `$ENV` — `postern exec` resolves secrets from your
+vault and exports them into a command it launches:
+
+```sh
+postern exec -- node server.js
+```
+
+Add an `env:` block to the config (each value a `secret_ref`, each key an
+environment-variable name) and postern resolves it, then replaces itself with
+the command. It **fails closed** and never logs secret values. Note this hands
+the secret to the launched process, a weaker posture than the proxy — prefer a
+rule above for anything that speaks HTTPS. See [docs/exec.md](docs/exec.md).
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) — request lifecycle, trust boundary, components.
 - [Security model](docs/security.md) — fail-closed semantics, logging, threat model, key handling.
 - [Configuration](docs/configuration.md) — the full YAML reference.
+- [Environment injection](docs/exec.md) — `postern exec`: resolve secrets into a command's environment.
 - [Providers](docs/providers.md) — the credential-vendor plugin contract (1Password, Bitwarden).
 
 ## Developing postern

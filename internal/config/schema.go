@@ -78,6 +78,14 @@ type Config struct {
 	CredStores []CredStore `yaml:"credstores,omitempty"`
 	Proxy      Proxy       `yaml:"proxy"`
 	Rules      []Rule      `yaml:"rules"`
+
+	// Env maps environment-variable names to secret references for the
+	// `postern exec` command, which resolves each value through the same
+	// credstore path the proxy uses and exports it into the launched child's
+	// environment. It is independent of the proxy's rules: a config may set
+	// env, rules, or both. Each value is a <scheme>://<rest> secret_ref whose
+	// scheme a configured credstore must resolve.
+	Env map[string]string `yaml:"env,omitempty"`
 }
 
 // CredStore declares a single credential vendor configuration the broker

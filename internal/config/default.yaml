@@ -129,3 +129,19 @@ rules:
 #       consumer_secret_ref: op://Agents/app/consumer_secret
 #       token_ref: op://Agents/user/access_token
 #       token_secret_ref: op://Agents/user/access_token_secret
+
+# env: secrets for `postern exec`. Each value resolves through the same
+# credstore as the rules above, and `postern exec -- <command>` exports the
+# resolved values into the launched process before replacing itself with it:
+#
+#   postern exec -- node server.js
+#   postern exec -- devcontainer up --workspace-folder .
+#
+# Use this for tools the proxy cannot intercept — a database driver, git over
+# SSH, a CLI that reads its credential from the environment. Unlike the proxy,
+# the launched process DOES hold the secret, so prefer a rule above for anything
+# that speaks HTTPS. Keys must be valid environment-variable names.
+#
+# env:
+#   DATABASE_URL: op://Infra/droplet-db/url
+#   STRIPE_SECRET_KEY: op://Infra/stripe/secret_key
