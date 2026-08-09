@@ -20,7 +20,7 @@ permissions:
   id-token: write # goreleaser: keyless cosign signing via GitHub OIDC
 
 env:
-  GO_VERSION: "1.26.4"
+  GO_VERSION: "1.26.5"
   # Kept in lockstep with .github/workflows/ci.yml and .mise.toml.
   GORELEASER_VERSION: "v2.16.0"
   ZIG_VERSION: "0.14.0"
