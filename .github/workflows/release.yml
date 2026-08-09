@@ -52,7 +52,7 @@ jobs:
           # Build the exact commit release-please tagged, not the branch head.
           ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
