@@ -261,6 +261,14 @@ type Rule struct {
 	SecretRef string `yaml:"secret_ref"`
 	Inject    Inject `yaml:"inject,omitempty"`
 
+	// Injects turns a single host rule into a multi-header rule: every entry is
+	// a header injection fed by the rule's one SecretRef, which is still
+	// resolved exactly once per request. It replaces the single Inject block
+	// outright and is mutually exclusive with Inject, Routes, and Template.
+	// Serves upstreams that authenticate the same credential through two
+	// different headers depending on the endpoint the agent calls.
+	Injects []Inject `yaml:"injects,omitempty"`
+
 	// Routes turns a single host rule into a placeholder-routing rule: each
 	// entry's token both selects, and is replaced by, its own secret. Mutually
 	// exclusive with the rule-level SecretRef and inject.name, and valid only
@@ -304,4 +312,13 @@ type Inject struct {
 	ConsumerSecretRef string `yaml:"consumer_secret_ref,omitempty"`
 	TokenRef          string `yaml:"token_ref,omitempty"`
 	TokenSecretRef    string `yaml:"token_secret_ref,omitempty"`
+}
+
+// IsZero reports whether the inject block is absent (the YAML zero value). The
+// validator uses it to enforce that a rule declares either a single `inject:`
+// or an `injects:` list, never both.
+func (i Inject) IsZero() bool {
+	return i.Type == "" && i.Name == "" && i.Template == "" && len(i.In) == 0 &&
+		i.MaxBodyBytes == nil && i.ConsumerKeyRef == "" && i.ConsumerSecretRef == "" &&
+		i.TokenRef == "" && i.TokenSecretRef == ""
 }
