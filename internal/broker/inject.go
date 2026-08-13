@@ -142,17 +142,24 @@ func hasCRLF(s string) bool {
 }
 
 // Inject applies the rule's injection spec to req using credential as the
-// secret value. Header mode sets a single header. Placeholder mode rewrites
-// the token across every declared surface (header, body, path, query) with
-// per-surface encoding, and returns ErrNoPlaceholder when the token is absent
-// from every eligible surface so the proxy fails closed instead of forwarding
-// the request unauthenticated. An unknown InjectType is treated as a
-// configuration error: Inject returns an error so the proxy can fail closed.
+// secret value. Header mode sets a single header; a rule carrying Injections
+// sets each of those headers instead, all from the same credential.
+// Placeholder mode rewrites the token across every declared surface (header,
+// body, path, query) with per-surface encoding, and returns ErrNoPlaceholder
+// when the token is absent from every eligible surface so the proxy fails
+// closed instead of forwarding the request unauthenticated. An unknown
+// InjectType is treated as a configuration error: Inject returns an error so
+// the proxy can fail closed.
 //
 // In placeholder mode body substitution reads req.Body; callers that declare
 // the body surface (Hook) must materialize req.Body into an in-memory,
 // size-bounded reader before calling Inject.
 func (r Rule) Inject(req *http.Request, credential string) error {
+	// A multi-header rule carries its entries in Injections and leaves
+	// Injection zero, so it branches before the single-injection guards.
+	if len(r.Injections) > 0 {
+		return r.injectHeaders(req, credential)
+	}
 	// Guard before mutating anything: a template with no placeholder would
 	// render to a constant and forward the request without the credential.
 	// Reject it so both inject modes fail closed rather than fail open.
@@ -172,6 +179,36 @@ func (r Rule) Inject(req *http.Request, credential string) error {
 	default:
 		return fmt.Errorf("broker: unsupported inject type %d", r.Injection.Type)
 	}
+}
+
+// injectHeaders applies every entry of a multi-header rule, in list order, from
+// the single credential the caller already resolved — a rule reads its
+// secret_ref once per request no matter how many headers it feeds. Every entry
+// carries the same fail-closed guards as single-header mode, and all of them run
+// before the first header is set, so a rejected entry leaves the request
+// untouched instead of forwarding it half-injected.
+func (r Rule) injectHeaders(req *http.Request, credential string) error {
+	values := make([]string, len(r.Injections))
+	for i := range r.Injections {
+		in := &r.Injections[i]
+		if in.Type != InjectHeader {
+			return fmt.Errorf("broker: injections[%d]: unsupported inject type %d (header mode only)", i, in.Type)
+		}
+		if in.Name == "" {
+			return fmt.Errorf("broker: injections[%d]: empty header name", i)
+		}
+		if !hasCredentialPlaceholder(in.Template) {
+			return ErrNoCredentialPlaceholder
+		}
+		values[i] = Render(in.Template, credential)
+		if hasCRLF(values[i]) {
+			return ErrHeaderInjection
+		}
+	}
+	for i := range r.Injections {
+		req.Header.Set(r.Injections[i].Name, values[i])
+	}
+	return nil
 }
 
 // injectPlaceholder rewrites the placeholder token across the rule's declared

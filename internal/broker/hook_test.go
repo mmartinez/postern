@@ -241,6 +241,71 @@ func TestHook_NilLoggerDefaultsToNoop(t *testing.T) {
 	}
 }
 
+// A multi-header rule injects every declared header from ONE resolve: the
+// rule's secret_ref is read exactly once per request no matter how many headers
+// it feeds, which is what keeps a two-header host off the vendor's read quota
+// twice over.
+func TestHook_MultiHeaderInjectsBothFromOneResolve(t *testing.T) {
+	t.Parallel()
+
+	res := &fakeResolver{value: "sk-secret"}
+	hook := newHookFixture(t, broker.Rule{
+		Host:      "api.example.com",
+		SecretRef: "op://Agents/example/api_key",
+		Injections: []broker.InjectSpec{
+			{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
+			{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+		},
+	}, res)
+
+	req, _ := http.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", http.NoBody)
+	resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
+
+	defer closeIfNonNil(t, resp)
+	if resp != nil {
+		t.Fatalf("hook returned response on match: %+v, want nil (forward to upstream)", resp)
+	}
+	if got := req.Header.Get("authorization"); got != "Bearer sk-secret" {
+		t.Fatalf("authorization = %q, want %q", got, "Bearer sk-secret")
+	}
+	if got := req.Header.Get("x-api-key"); got != "sk-secret" {
+		t.Fatalf("x-api-key = %q, want %q", got, "sk-secret")
+	}
+	if got := res.calls.Load(); got != 1 {
+		t.Fatalf("resolver.calls = %d, want 1 (one secret_ref, one read per request)", got)
+	}
+}
+
+// A multi-header rule fails closed as a unit: one unusable entry means no
+// header is injected and the request never reaches the upstream.
+func TestHook_MultiHeaderBadEntryFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	res := &fakeResolver{value: "sk-secret"}
+	hook := newHookFixture(t, broker.Rule{
+		Host:      "api.example.com",
+		SecretRef: "op://Agents/example/api_key",
+		Injections: []broker.InjectSpec{
+			{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
+			{Type: broker.InjectHeader, Name: "x-api-key", Template: "no placeholder"},
+		},
+	}, res)
+
+	req, _ := http.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", http.NoBody)
+	resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
+
+	defer closeIfNonNil(t, resp)
+	if resp == nil {
+		t.Fatalf("unusable injects entry: want non-nil 502, got nil (would forward half-injected)")
+	}
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	if _, ok := req.Header["Authorization"]; ok {
+		t.Fatalf("authorization set on a fail-closed inject; request must not carry partial credential state")
+	}
+}
+
 // A placeholder rule that matches the host but whose placeholder token is
 // absent from the request must fail closed (502), not forward the request to
 // the authenticated upstream with no credential attached.
