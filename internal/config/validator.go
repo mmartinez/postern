@@ -55,6 +55,13 @@ var secretRefPattern = regexp.MustCompile(`^[a-z][a-z0-9+.\-]*://.+$`)
 // for stable substitution outside header values.
 var unreservedTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 
+// headerNamePattern matches the RFC 9110 token grammar every HTTP field name
+// must obey. net/http rejects anything else when it writes the request, so a
+// header rule naming (say) "x api key" could never reach the upstream — catch
+// it as a line-numbered lint at validate time rather than as an opaque
+// transport error on the first matching request.
+var headerNamePattern = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
 // Validate walks cfg and returns the slice of findings. Root is the AST from
 // Load and supplies line numbers; pass nil to skip location info.
 func Validate(cfg *Config, root *yaml.Node) []LintError {
@@ -305,6 +312,8 @@ func (v *validator) checkInjects(base string, r Rule) {
 		}
 		if in.Name == "" {
 			v.add(eb+".name", "name is required", SeverityError)
+		} else if !headerNamePattern.MatchString(in.Name) {
+			v.add(eb+".name", fmt.Sprintf("name %q is not a valid HTTP header name (RFC 9110 token characters)", in.Name), SeverityError)
 		} else if prev, dup := seenName[strings.ToLower(in.Name)]; dup {
 			// Header names are case-insensitive on the wire and injection is a
 			// Set, so a case-variant duplicate would silently overwrite the
@@ -521,6 +530,8 @@ func (v *validator) checkInject(base string, in Inject) {
 	case InjectTypeHeader:
 		if in.Name == "" {
 			v.add(base+".name", "name is required when inject.type=header", SeverityError)
+		} else if !headerNamePattern.MatchString(in.Name) {
+			v.add(base+".name", fmt.Sprintf("name %q is not a valid HTTP header name (RFC 9110 token characters)", in.Name), SeverityError)
 		}
 	case InjectTypePlaceholder:
 		if in.Name == "" {

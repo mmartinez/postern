@@ -127,6 +127,24 @@ func TestValidateInjects(t *testing.T) {
 			},
 		},
 		{
+			name: "injects entry with an invalid header name",
+			yaml: strings.Replace(baseInjectsConfig,
+				"        name: x-api-key\n", "        name: \"x api key\"\n", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "valid HTTP header name")
+			},
+		},
+		{
+			// Underscores are legal token characters, so a header name carrying
+			// one must not trip the charset check.
+			name: "injects entry with an underscore in the header name",
+			yaml: strings.Replace(baseInjectsConfig,
+				"        name: x-api-key\n", "        name: x_api_key\n", 1),
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				require.Empty(t, lints, "an underscore is a valid HTTP header name character")
+			},
+		},
+		{
 			name: "duplicate header names, differing only in case",
 			yaml: strings.Replace(baseInjectsConfig,
 				"        name: x-api-key\n", "        name: Authorization\n", 1),

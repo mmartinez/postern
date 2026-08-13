@@ -197,8 +197,8 @@ rules:
 - **One resolve per request.** The rule's `secret_ref` is read once no matter how
   many headers it feeds, so a multi-header host costs the same vault quota as a
   single-header one.
-- **Header mode only.** Every entry takes `type: header`, a `name`, and a
-  `template` carrying `{{ CREDENTIAL }}`. `placeholder` and `oauth1` rules still
+- **Header mode only.** Every entry takes `type: header`, a `name` that is a
+  valid HTTP field name, and a `template` carrying `{{ CREDENTIAL }}`. `placeholder` and `oauth1` rules still
   use the single `inject` block, and the placeholder-only fields (`in`,
   `max_body_bytes`) are rejected inside an entry.
 - **Mutually exclusive** with `inject`, `routes`, and a preset `template` — each
@@ -376,7 +376,9 @@ Errors block startup. Common errors:
   missing or not of the form `<scheme>://<rest>`. (The `*_ref` fields are valid
   only with `type: oauth1`.)
 - `inject.in` set with `type: header`; an invalid surface name; a `placeholder`
-  token with reserved characters when a non-header surface is declared.
+  token with reserved characters when a non-header surface is declared; a
+  header `name` outside the RFC 9110 token grammar (net/http would refuse to
+  send it).
 - `routes` combined with a rule-level `secret_ref` or `inject.name`; `routes`
   without `type: placeholder`; a route missing `name`, `token`, or a well-formed
   `secret_ref`; duplicate or overlapping route tokens.
