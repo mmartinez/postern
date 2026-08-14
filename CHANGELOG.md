@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/mmartinez/postern/compare/v0.6.1...v0.7.0) (2026-08-14)
+
+
+### Features
+
+* multi-header credential injection ([#66](https://github.com/mmartinez/postern/issues/66)) ([da10869](https://github.com/mmartinez/postern/commit/da10869cd6de9f2a9e808c462d6f1438484cc275))
+
 ## [0.6.1](https://github.com/mmartinez/postern/compare/v0.6.0...v0.6.1) (2026-08-09)
 
 
