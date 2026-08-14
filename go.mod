@@ -5,10 +5,7 @@ go 1.26.6
 require (
 	github.com/1password/onepassword-sdk-go v0.4.1
 	github.com/99designs/keyring v1.2.2
-	// Held at 1.8.4: 1.8.5 writes the MITM response through a bufio.Writer
-	// that wraps the whole resp.Write, so streaming bodies sit in the buffer
-	// until the final flush. See TestProxy_StreamingNotBuffered.
-	github.com/elazarl/goproxy v1.8.4
+	github.com/elazarl/goproxy v1.9.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/go-cmp v0.7.0
 	github.com/spf13/cobra v1.10.2
