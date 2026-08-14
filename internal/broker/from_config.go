@@ -21,6 +21,14 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 	out := make([]Rule, len(in))
 	for i := range in {
 		src := in[i]
+		if len(src.Injects) > 0 {
+			specs, err := injectionsFromConfig(src.Injects)
+			if err != nil {
+				return nil, fmt.Errorf("rules[%d] (%s): %w", i, src.Host, err)
+			}
+			out[i] = Rule{Host: src.Host, SecretRef: src.SecretRef, Injections: specs}
+			continue
+		}
 		t, err := injectTypeFromConfig(src.Inject.Type)
 		if err != nil {
 			// A template-only rule has no Host yet; fall back to the template
@@ -53,6 +61,23 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 			},
 			Routes: routesFromConfig(src.Routes),
 		}
+	}
+	return out, nil
+}
+
+// injectionsFromConfig translates a multi-header rule's inject list into
+// runtime specs. Every entry shares the rule's secret_ref, so an entry carries
+// only the header name and its template. Header mode is the only type the
+// list supports; the validator rejects anything else, and so does this rather
+// than translate a spec Inject could not apply.
+func injectionsFromConfig(in []config.Inject) ([]InjectSpec, error) {
+	out := make([]InjectSpec, len(in))
+	for i := range in {
+		e := &in[i]
+		if e.Type != config.InjectTypeHeader {
+			return nil, fmt.Errorf("injects[%d]: unsupported inject.type %q (header mode only)", i, e.Type)
+		}
+		out[i] = InjectSpec{Type: InjectHeader, Name: e.Name, Template: e.Template}
 	}
 	return out, nil
 }

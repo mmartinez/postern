@@ -93,6 +93,53 @@ func TestFromConfigRules_TranslatesSurfacesAndCap(t *testing.T) {
 	}
 }
 
+// A rule's injects list becomes the runtime Injections slice, in order, with
+// the single rule-level secret_ref carried through unchanged.
+func TestFromConfigRules_TranslatesInjects(t *testing.T) {
+	t.Parallel()
+
+	in := []config.Rule{{
+		Host:      "api.example.com",
+		SecretRef: "op://Agents/example/api_key",
+		Injects: []config.Inject{
+			{Type: config.InjectTypeHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
+			{Type: config.InjectTypeHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+		},
+	}}
+
+	got, err := broker.FromConfigRules(in)
+	if err != nil {
+		t.Fatalf("FromConfigRules: %v", err)
+	}
+
+	want := []broker.Rule{{
+		Host:      "api.example.com",
+		SecretRef: "op://Agents/example/api_key",
+		Injections: []broker.InjectSpec{
+			{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
+			{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+		},
+	}}
+	if diff := cmp.Diff(want, got, cmpopts.EquateEmpty()); diff != "" {
+		t.Fatalf("rules diff (-want +got):\n%s", diff)
+	}
+}
+
+func TestFromConfigRules_RejectsNonHeaderInjectsEntry(t *testing.T) {
+	t.Parallel()
+
+	_, err := broker.FromConfigRules([]config.Rule{{
+		Host:      "api.example.com",
+		SecretRef: "op://V/I/f",
+		Injects: []config.Inject{
+			{Type: config.InjectTypePlaceholder, Name: "__tok__", Template: "{{ CREDENTIAL }}"},
+		},
+	}})
+	if err == nil {
+		t.Fatalf("FromConfigRules with a non-header injects entry: want error, got nil")
+	}
+}
+
 func TestFromConfigRules_RejectsUnknownSurface(t *testing.T) {
 	t.Parallel()
 

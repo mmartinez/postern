@@ -78,6 +78,60 @@ func TestE2E_BrokerInjectsHeaderThroughMITMProxy(t *testing.T) {
 	require.Equal(t, int64(1), res.calls.Load())
 }
 
+// TestE2E_BrokerInjectsMultipleHeadersThroughMITMProxy is the multi-header
+// counterpart: one rule, one secret_ref, two headers. The upstream asserts both
+// arrive with the resolver-supplied value, and the resolver counter proves the
+// secret was read exactly once for the request — the whole point of feeding both
+// headers from one rule instead of two.
+func TestE2E_BrokerInjectsMultipleHeadersThroughMITMProxy(t *testing.T) {
+	t.Parallel()
+
+	var upstreamHits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		upstreamHits.Add(1)
+		if got := req.Header.Get("authorization"); got != "Bearer sk-from-resolver" {
+			t.Errorf("upstream saw authorization=%q, want %q", got, "Bearer sk-from-resolver")
+		}
+		if got := req.Header.Get("x-api-key"); got != "sk-from-resolver" {
+			t.Errorf("upstream saw x-api-key=%q, want %q", got, "sk-from-resolver")
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(upstream.Close)
+
+	root := fixtureCA(t)
+	minter := fixtureMinter(t, root)
+
+	engine := broker.NewEngine([]broker.Rule{{
+		Host:      "127.0.0.1",
+		SecretRef: "op://Agents/example/api_key",
+		Injections: []broker.InjectSpec{
+			{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
+			{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+		},
+	}})
+	res := &fakeResolver{value: "sk-from-resolver"}
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+
+	p, err := proxy.New(proxy.Config{
+		CA:                 root,
+		Minter:             minter,
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		UpstreamTLS:        upstreamTLS(t, upstream),
+		PreUpstreamHandler: hook,
+	})
+	require.NoError(t, err)
+
+	client := clientThroughProxy(t, startProxy(t, p), root)
+	resp, err := client.Get(upstream.URL)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(1), upstreamHits.Load())
+	require.Equal(t, int64(1), res.calls.Load(), "one secret_ref must be resolved once, however many headers it feeds")
+}
+
 // TestE2E_ResolverErrorReturns502_UpstreamNotContacted verifies the
 // fail-closed invariant: on resolver error the proxy returns 502 *and*
 // the upstream counter stays at zero. A regression

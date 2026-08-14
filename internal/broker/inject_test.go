@@ -179,6 +179,141 @@ func TestInjectPlaceholder_EmptyTokenFailsClosed(t *testing.T) {
 	}
 }
 
+// A multi-header rule feeds every declared header from the one credential the
+// caller resolved. Both headers must carry the rendered template, and Set must
+// override whatever the agent supplied.
+func TestInject_MultiHeader_SetsEveryHeader(t *testing.T) {
+	t.Parallel()
+
+	r := broker.Rule{
+		Host: "api.example.com",
+		Injections: []broker.InjectSpec{
+			{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
+			{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+		},
+	}
+	req, _ := http.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", http.NoBody)
+	req.Header.Set("authorization", "Bearer placeholder")
+
+	if err := r.Inject(req, "sk-real"); err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+
+	got := map[string]string{
+		"authorization": req.Header.Get("authorization"),
+		"x-api-key":     req.Header.Get("x-api-key"),
+	}
+	want := map[string]string{
+		"authorization": "Bearer sk-real",
+		"x-api-key":     "sk-real",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("headers diff (-want +got):\n%s", diff)
+	}
+}
+
+// Entries are applied in list order, so a repeated header name resolves to the
+// last entry. The config validator rejects such a rule; this pins the runtime
+// behavior for anything that reaches Inject without that check.
+func TestInject_MultiHeader_PreservesListOrder(t *testing.T) {
+	t.Parallel()
+
+	r := broker.Rule{
+		Host: "api.example.com",
+		Injections: []broker.InjectSpec{
+			{Type: broker.InjectHeader, Name: "authorization", Template: "first {{ CREDENTIAL }}"},
+			{Type: broker.InjectHeader, Name: "authorization", Template: "last {{ CREDENTIAL }}"},
+		},
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/", http.NoBody)
+
+	if err := r.Inject(req, "sk-real"); err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	if got := req.Header.Get("authorization"); got != "last sk-real" {
+		t.Fatalf("authorization = %q, want %q (later entry wins)", got, "last sk-real")
+	}
+}
+
+// Every fail-closed guard applies per entry, and nothing is written until all
+// entries pass: a bad second entry must leave the first header unset rather
+// than forward a half-injected request.
+func TestInject_MultiHeader_PerEntryGuardsFailClosed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		second  broker.InjectSpec
+		wantErr error
+	}{
+		{
+			name:    "CRLF in the rendered value",
+			second:  broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}\r\nx-evil: 1"},
+			wantErr: broker.ErrHeaderInjection,
+		},
+		{
+			name:    "template without the CREDENTIAL placeholder",
+			second:  broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "static"},
+			wantErr: broker.ErrNoCredentialPlaceholder,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := broker.Rule{
+				Host: "api.example.com",
+				Injections: []broker.InjectSpec{
+					{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
+					tc.second,
+				},
+			}
+			req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/", http.NoBody)
+
+			err := r.Inject(req, "sk-real")
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Inject: got %v, want %v", err, tc.wantErr)
+			}
+			if _, ok := req.Header["Authorization"]; ok {
+				t.Fatalf("authorization set despite a failing entry; a fail-closed inject must not partially mutate the request")
+			}
+			if _, ok := req.Header["X-Api-Key"]; ok {
+				t.Fatalf("x-api-key set from a failing entry")
+			}
+		})
+	}
+}
+
+// Non-header entries and empty header names never reach a validated config;
+// Inject rejects them anyway rather than write a credential somewhere the
+// caller did not intend.
+func TestInject_MultiHeader_RejectsUnusableEntry(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		entry broker.InjectSpec
+	}{
+		{"non-header type", broker.InjectSpec{Type: broker.InjectPlaceholder, Name: "__tok__", Template: "{{ CREDENTIAL }}"}},
+		{"empty header name", broker.InjectSpec{Type: broker.InjectHeader, Name: "", Template: "{{ CREDENTIAL }}"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := broker.Rule{Host: "api.example.com", Injections: []broker.InjectSpec{tc.entry}}
+			req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/", http.NoBody)
+
+			if err := r.Inject(req, "sk-real"); err == nil {
+				t.Fatalf("Inject with %s: want error, got nil", tc.name)
+			}
+			if len(req.Header) != 0 {
+				t.Fatalf("headers mutated to %v; nothing must be injected when failing closed", req.Header)
+			}
+		})
+	}
+}
+
 func TestInject_UnknownTypeReturnsError(t *testing.T) {
 	t.Parallel()
 

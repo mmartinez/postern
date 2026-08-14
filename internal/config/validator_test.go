@@ -204,6 +204,28 @@ rules:
 			},
 		},
 		{
+			// net/http refuses to write a field name outside the RFC 9110 token
+			// grammar, so such a rule could never reach the upstream. Catch it as
+			// a lint instead of an opaque transport error at request time.
+			name: "header inject with an invalid header name",
+			yaml: `
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: passthrough
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: "x api key"
+      template: "{{ CREDENTIAL }}"
+`,
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "valid HTTP header name")
+			},
+		},
+		{
 			name: "placeholder inject missing name is fatal",
 			yaml: `
 proxy:

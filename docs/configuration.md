@@ -146,6 +146,7 @@ rules:
 | `host` | yes* | A literal hostname (`api.example.com`) or a single-`*` glob (`*.example.com`, matching exactly one label). **Do not use a wildcard on a multi-tenant or shared-suffix domain** (e.g. `*.s3.amazonaws.com`, `*.blob.core.windows.net`): any host an attacker can register under that suffix would also match the rule and receive the injected credential. Reserve wildcards for single-tenant domains you control. |
 | `secret_ref` | yes | A `<scheme>://<rest>` URI the matching provider resolves (e.g. `op://VAULT/ITEM/FIELD`). Omit when using `routes` (each route carries its own). |
 | `inject` | yes* | How to attach the resolved credential — see below. |
+| `injects` | no | Several header injections fed by the rule's one `secret_ref`, for a host that authenticates the same credential through two different headers. Mutually exclusive with `inject`, `routes`, and `template`; see below. |
 | `routes` | no | Placeholder-routing entries: per-token secret selection for a shared host. Mutually exclusive with `secret_ref`/`inject.name`; see below. |
 | `template` | no | Name of a built-in preset (see below) that fills in `host` and `inject` defaults. |
 
@@ -168,6 +169,48 @@ inject:
 | `template` | The rendered credential string. `{{ CREDENTIAL }}` is replaced with the resolved value. Omitting the placeholder is a **fatal error**: the credential would be discarded and the request forwarded unauthenticated, so postern refuses to start. |
 | `in` | (`placeholder` only) The request surfaces to substitute, any subset of `header`, `body`, `path`, `query`. Defaults to `[header]`. |
 | `max_body_bytes` | (`placeholder` with `in` including `body`) Per-rule override of `proxy.max_body_bytes`. `0` (or unset) inherits the proxy-wide cap. |
+
+### Multi-header injection (`injects`)
+
+Some upstreams authenticate the *same* credential through *different* headers
+depending on the endpoint. OpenCode Zen is the canonical case: its OpenAI-shaped
+endpoint wants `Authorization: Bearer <key>` while its Anthropic-shaped endpoint
+wants `x-api-key: <key>`, both on `opencode.ai`. Host matching is first-match, so
+a single rule has to cover both.
+
+An `injects` list replaces the single `inject` block with several header
+injections, all fed by the rule's one `secret_ref`:
+
+```yaml
+rules:
+  - host: opencode.ai
+    secret_ref: op://Agents/opencode/api_key
+    injects:
+      - type: header
+        name: authorization
+        template: "Bearer {{ CREDENTIAL }}"
+      - type: header
+        name: x-api-key
+        template: "{{ CREDENTIAL }}"
+```
+
+- **One resolve per request.** The rule's `secret_ref` is read once no matter how
+  many headers it feeds, so a multi-header host costs the same vault quota as a
+  single-header one.
+- **Header mode only.** Every entry takes `type: header`, a `name` that is a
+  valid HTTP field name, and a `template` carrying `{{ CREDENTIAL }}`. `placeholder` and `oauth1` rules still
+  use the single `inject` block, and the placeholder-only fields (`in`,
+  `max_body_bytes`) are rejected inside an entry.
+- **Mutually exclusive** with `inject`, `routes`, and a preset `template` — each
+  of those would supply a second, conflicting injection. Header names must not
+  repeat within a rule (compared case-insensitively, since injection *sets* the
+  header rather than appending).
+- **Fail closed as a unit.** Every entry is validated and rendered before the
+  first header is set, so one unusable entry (no `{{ CREDENTIAL }}`, a CR/LF in
+  the rendered value) returns `502` with no header injected at all — never a
+  half-authenticated request.
+- **Each `Set` overrides** whatever the agent sent under that name, exactly as
+  single-header mode does.
 
 ### Substitution surfaces (`placeholder` mode)
 
@@ -333,10 +376,15 @@ Errors block startup. Common errors:
   missing or not of the form `<scheme>://<rest>`. (The `*_ref` fields are valid
   only with `type: oauth1`.)
 - `inject.in` set with `type: header`; an invalid surface name; a `placeholder`
-  token with reserved characters when a non-header surface is declared.
+  token with reserved characters when a non-header surface is declared; a
+  header `name` outside the RFC 9110 token grammar (net/http would refuse to
+  send it).
 - `routes` combined with a rule-level `secret_ref` or `inject.name`; `routes`
   without `type: placeholder`; a route missing `name`, `token`, or a well-formed
   `secret_ref`; duplicate or overlapping route tokens.
+- `injects` combined with `inject`, `routes`, or `template`; an empty `injects`
+  list; an entry that is not `type: header`, is missing `name` or `template`, or
+  carries `in`/`max_body_bytes`; duplicate header names within one rule.
 
 Warnings (reported, non-fatal): a route `token` with low estimated entropy
 (below ~64 bits) — a guessability hint, not a hard failure.

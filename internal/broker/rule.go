@@ -30,6 +30,11 @@ type Rule struct {
 	// outbound request. See InjectSpec and Rule.Inject.
 	Injection InjectSpec
 
+	// Injections, when non-empty, makes this a multi-header rule: every entry
+	// is a header injection applied with the same credential, resolved once
+	// from SecretRef. It replaces Injection, which is then the zero value.
+	Injections []InjectSpec
+
 	// Routes, when non-empty, makes this a placeholder-routing rule: the token
 	// an agent presents on a declared surface selects (and is replaced by) the
 	// route's secret. See SelectRoute and InjectRoute.

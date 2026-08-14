@@ -55,6 +55,13 @@ var secretRefPattern = regexp.MustCompile(`^[a-z][a-z0-9+.\-]*://.+$`)
 // for stable substitution outside header values.
 var unreservedTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 
+// headerNamePattern matches the RFC 9110 token grammar every HTTP field name
+// must obey. net/http rejects anything else when it writes the request, so a
+// header rule naming (say) "x api key" could never reach the upstream — catch
+// it as a line-numbered lint at validate time rather than as an opaque
+// transport error on the first matching request.
+var headerNamePattern = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
 // Validate walks cfg and returns the slice of findings. Root is the AST from
 // Load and supplies line numbers; pass nil to skip location info.
 func Validate(cfg *Config, root *yaml.Node) []LintError {
@@ -237,6 +244,11 @@ func (v *validator) checkRule(base string, r Rule) {
 		v.add(base+".host", fmt.Sprintf("host %q must be a literal hostname or a single-* glob (e.g. *.example.com)", r.Host), SeverityError)
 	}
 
+	if r.Injects != nil {
+		v.checkInjects(base, r)
+		return
+	}
+
 	if len(r.Routes) > 0 {
 		v.checkRoutes(base, r)
 		return
@@ -254,6 +266,64 @@ func (v *validator) checkRule(base string, r Rule) {
 	}
 
 	v.checkInject(base+".inject", r.Inject)
+}
+
+// checkInjects validates a multi-header rule. Every entry is a header injection
+// fed by the rule's single secret_ref (resolved once per request), so entries
+// carry only type/name/template while the rule keeps the usual secret_ref
+// requirement. `injects` replaces the single `inject` block outright, so
+// combining it with `inject`, `routes`, or a preset `template` — each of which
+// would supply a second, conflicting injection — is rejected rather than
+// silently resolved in favor of one of them.
+func (v *validator) checkInjects(base string, r Rule) {
+	if len(r.Injects) == 0 {
+		v.add(base+".injects", "injects must declare at least one entry", SeverityError)
+		return
+	}
+	switch {
+	case r.Template != "":
+		// Template expansion has already poured the preset's header name and
+		// template into the (otherwise empty) inject block, so report the
+		// preset rather than the inject block it filled.
+		v.add(base+".injects", "injects and template are mutually exclusive; a template preset fills the single inject block", SeverityError)
+	case !r.Inject.IsZero():
+		v.add(base+".injects", "injects and inject are mutually exclusive; declare every header under injects", SeverityError)
+	}
+	if len(r.Routes) > 0 {
+		v.add(base+".injects", "injects and routes are mutually exclusive; routes requires inject.type=placeholder", SeverityError)
+	}
+
+	if r.SecretRef == "" {
+		v.add(base+".secret_ref", "secret_ref is required", SeverityError)
+	} else if !secretRefPattern.MatchString(r.SecretRef) {
+		v.add(base+".secret_ref", fmt.Sprintf("secret_ref %q must be a URI of the form <scheme>://<rest> (e.g., op://VAULT/ITEM/FIELD)", r.SecretRef), SeverityError)
+	}
+
+	seenName := make(map[string]int, len(r.Injects))
+	for i := range r.Injects {
+		in := &r.Injects[i]
+		eb := fmt.Sprintf("%s.injects[%d]", base, i)
+		if in.Type != InjectTypeHeader {
+			v.add(eb+".type", fmt.Sprintf("injects entries must be type: header (got %q); placeholder and oauth1 rules carry a single inject block", in.Type), SeverityError)
+		}
+		if len(in.In) > 0 || in.MaxBodyBytes != nil || in.ConsumerKeyRef != "" ||
+			in.ConsumerSecretRef != "" || in.TokenRef != "" || in.TokenSecretRef != "" {
+			v.add(eb, "only type, name, and template are valid in an injects entry", SeverityError)
+		}
+		if in.Name == "" {
+			v.add(eb+".name", "name is required", SeverityError)
+		} else if !headerNamePattern.MatchString(in.Name) {
+			v.add(eb+".name", fmt.Sprintf("name %q is not a valid HTTP header name (RFC 9110 token characters)", in.Name), SeverityError)
+		} else if prev, dup := seenName[strings.ToLower(in.Name)]; dup {
+			// Header names are case-insensitive on the wire and injection is a
+			// Set, so a case-variant duplicate would silently overwrite the
+			// earlier entry instead of adding a header.
+			v.add(eb+".name", fmt.Sprintf("duplicate header name %q (first declared at %s.injects[%d]); header names are case-insensitive", in.Name, base, prev), SeverityError)
+		} else {
+			seenName[strings.ToLower(in.Name)] = i
+		}
+		v.checkCredentialTemplate(eb+".template", in.Template)
+	}
 }
 
 // checkOAuth1Rule validates an OAuth 1.0a signing rule. The request is signed,
@@ -305,11 +375,7 @@ func (v *validator) checkRoutes(base string, r Rule) {
 	if in.Name != "" {
 		v.add(base+".inject.name", "inject.name must be empty when routes is set; each route's token is the placeholder", SeverityError)
 	}
-	if in.Template == "" {
-		v.add(base+".inject.template", "template is required", SeverityError)
-	} else if !strings.Contains(in.Template, "{{ CREDENTIAL }}") && !strings.Contains(in.Template, "{{CREDENTIAL}}") {
-		v.add(base+".inject.template", "template must contain a {{ CREDENTIAL }} placeholder; without it the resolved credential is discarded and the request is forwarded unauthenticated", SeverityError)
-	}
+	v.checkCredentialTemplate(base+".inject.template", in.Template)
 
 	v.checkInjectSurfaces(base+".inject", in)
 	v.checkRouteEntries(base, r.Routes, surfacesHaveNonHeader(in.In))
@@ -464,6 +530,8 @@ func (v *validator) checkInject(base string, in Inject) {
 	case InjectTypeHeader:
 		if in.Name == "" {
 			v.add(base+".name", "name is required when inject.type=header", SeverityError)
+		} else if !headerNamePattern.MatchString(in.Name) {
+			v.add(base+".name", fmt.Sprintf("name %q is not a valid HTTP header name (RFC 9110 token characters)", in.Name), SeverityError)
 		}
 	case InjectTypePlaceholder:
 		if in.Name == "" {
@@ -480,17 +548,25 @@ func (v *validator) checkInject(base string, in Inject) {
 	if in.ConsumerKeyRef != "" || in.ConsumerSecretRef != "" || in.TokenRef != "" || in.TokenSecretRef != "" {
 		v.add(base, "the oauth1 *_ref fields (consumer_key_ref, consumer_secret_ref, token_ref, token_secret_ref) are valid only with inject.type=oauth1", SeverityError)
 	}
-	if in.Template == "" {
-		v.add(base+".template", "template is required", SeverityError)
-	} else if !strings.Contains(in.Template, "{{ CREDENTIAL }}") && !strings.Contains(in.Template, "{{CREDENTIAL}}") {
-		// Fatal, not a warning: a template with no placeholder discards the
-		// resolved credential, so the request would be forwarded to the upstream
-		// unauthenticated — a silent fail-open. Reject it at validate time so the
-		// proxy never boots (or hot-reloads) into that state.
-		v.add(base+".template", "template must contain a {{ CREDENTIAL }} placeholder; without it the resolved credential is discarded and the request is forwarded unauthenticated", SeverityError)
-	}
+	v.checkCredentialTemplate(base+".template", in.Template)
 
 	v.checkInjectSurfaces(base, in)
+}
+
+// checkCredentialTemplate requires a credential template that actually carries
+// the {{ CREDENTIAL }} placeholder. A missing placeholder is fatal, not a
+// warning: the template would render to a constant, discarding the resolved
+// credential and forwarding the request to the upstream unauthenticated — a
+// silent fail-open. Rejecting it at validate time keeps the proxy from booting
+// (or hot-reloading) into that state.
+func (v *validator) checkCredentialTemplate(path, tmpl string) {
+	if tmpl == "" {
+		v.add(path, "template is required", SeverityError)
+		return
+	}
+	if !strings.Contains(tmpl, "{{ CREDENTIAL }}") && !strings.Contains(tmpl, "{{CREDENTIAL}}") {
+		v.add(path, "template must contain a {{ CREDENTIAL }} placeholder; without it the resolved credential is discarded and the request is forwarded unauthenticated", SeverityError)
+	}
 }
 
 // checkInjectSurfaces validates the per-rule substitution surface list and its
