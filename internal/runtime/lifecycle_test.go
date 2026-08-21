@@ -190,15 +190,47 @@ func TestIdleTunnelReapedAndGoroutinesSettle(t *testing.T) {
 	// the upstream accept loop already live.
 	before := goruntime.NumGoroutine()
 	client := dialTunnel(t, rt.Addr(), up.addr)
+	// The CONNECT exchange alone moves fewer than minProgressBytes, so push
+	// real tunnel traffic through to cross the progress threshold: this conn
+	// must be classified as established (tier-2), not stalled (tier-1).
+	_, err := client.Write(make([]byte, 256))
+	require.NoError(t, err)
 	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 	buf := make([]byte, 16)
-	_, err := client.Read(buf)
+	_, err = client.Read(buf)
 	require.Error(t, err, "stalled tunnel must be closed within the tier-2 bound")
 
 	require.Eventually(t, func() bool {
 		return goruntime.NumGoroutine() <= before+2
 	}, 3*time.Second, 50*time.Millisecond, "relay goroutines must return to baseline after reap")
+}
+
+// TestOneByteStalledConnReapedAtTier1 pins the insufficient-progress tier:
+// a hostile client that sends one byte and then stalls must be reaped at
+// the tier-1 bound, not held for the tier-2 idle timeout.
+func TestOneByteStalledConnReapedAtTier1(t *testing.T) {
+	t.Parallel()
+	rt, _, _ := newLifecycleRuntime(t, func(o *runtime.Options) {
+		o.TestStalledConnTimeout = 300 * time.Millisecond
+		o.TestTunnelIdleTimeout = 10 * time.Second
+		o.TestReapInterval = 50 * time.Millisecond
+	})
+	startRuntime(t, rt)
+
+	c, err := net.DialTimeout("tcp", rt.Addr(), 2*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = c.Close() }()
+	_, err = c.Write([]byte("G")) // one byte, then stall: below minProgressBytes
+	require.NoError(t, err)
+
+	start := time.Now()
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 16)
+	_, err = c.Read(buf)
+	require.Error(t, err, "server must close the one-byte-then-stall conn")
+	require.Less(t, time.Since(start), 2*time.Second,
+		"close must happen at the tier-1 bound, not the tier-2 idle bound")
 }
 
 func TestSSEStreamSurvivesIdleReap(t *testing.T) {
@@ -303,15 +335,16 @@ func TestShutdownDrainsThenForceClosesTunnels(t *testing.T) {
 
 	cancel()
 
-	// Run must NOT return while the drain window is open, and the live
-	// tunnel must still pass bytes during it.
-	time.Sleep(200 * time.Millisecond)
+	// Run must NOT return while the drain window is open. The ping itself is
+	// the in-window probe: it only succeeds while the tunnel is still being
+	// drained, and the non-blocking select after it catches a premature
+	// return without any wall-clock sleep.
+	require.NoError(t, ping(), "tunnel must keep passing bytes during the drain window")
 	select {
 	case err := <-done:
 		t.Fatalf("Run returned %v before the shutdown budget expired", err)
 	default:
 	}
-	require.NoError(t, ping(), "tunnel must keep passing bytes during the drain window")
 
 	select {
 	case err := <-done:
@@ -337,6 +370,9 @@ func newStreamingTLSUpstream(t *testing.T, every time.Duration, total int) *upst
 			if flusher != nil {
 				flusher.Flush()
 			}
+			// Genuine cadence sleep: the SSE tick interval is the fixture's
+			// stand-in for live traffic, whose activity keeps resetting the
+			// injected tunnelIdleTimeout under test.
 			time.Sleep(every)
 		}
 	}))

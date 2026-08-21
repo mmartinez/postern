@@ -15,11 +15,12 @@ import (
 // any successful Read or Write resets the timer, so a live SSE stream is
 // never cut mid-flight.
 const (
-	// stalledConnTimeout reaps conns that have never successfully read a
-	// byte since accept (stalled TLS handshakes, silent slowloris clients).
-	// 30s matches the server's ReadHeaderTimeout order of magnitude: far
-	// more generous than any legitimate client needs to send its first
-	// bytes, short enough that stalled conns cannot accumulate.
+	// stalledConnTimeout reaps conns that have moved fewer than
+	// minProgressBytes total bytes since accept (stalled TLS handshakes,
+	// silent or one-byte-then-stall slowloris clients). 30s matches the
+	// server's ReadHeaderTimeout order of magnitude: far more generous than
+	// any legitimate client needs to send its first bytes, short enough
+	// that stalled conns cannot accumulate.
 	stalledConnTimeout = 30 * time.Second
 
 	// tunnelIdleTimeout reaps established conns after sustained inactivity
@@ -33,6 +34,14 @@ const (
 	// worst reapInterval + threshold; 30s keeps that bound negligible
 	// relative to the thresholds while making the scan cost invisible.
 	reapInterval = 30 * time.Second
+
+	// minProgressBytes is the total bytes (reads+writes combined) a conn
+	// must move to graduate from the stalled tier to the established idle
+	// tier. Any real TLS handshake or HTTP request moves far more than 128
+	// bytes within seconds, so a conn still under this total after
+	// stalledConnTimeout is stalled by definition; raw-tunnel peers and
+	// handshakes cross it immediately.
+	minProgressBytes = 128
 )
 
 // halfClosable mirrors goproxy's unexported interface of the same name.
@@ -60,7 +69,7 @@ type trackedConn struct {
 
 	accepted     time.Time    // fixed at track time; tier-1 clock start
 	lastActivity atomic.Int64 // unix nanos of last successful Read/Write
-	readAny      atomic.Bool  // any byte ever read since accept
+	progress     atomic.Int64 // total bytes read+written since accept
 	closeOnce    sync.Once
 	half         halfClosable // non-nil when the underlying conn half-closes
 }
@@ -68,7 +77,7 @@ type trackedConn struct {
 func (c *trackedConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
-		c.readAny.Store(true)
+		c.progress.Add(int64(n))
 		c.markActive()
 	}
 	return n, err
@@ -77,6 +86,7 @@ func (c *trackedConn) Read(p []byte) (int, error) {
 func (c *trackedConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
+		c.progress.Add(int64(n))
 		c.markActive()
 	}
 	return n, err
@@ -112,9 +122,10 @@ func (c *trackedConn) CloseRead() error {
 }
 
 // idleFor reports how long the conn has been quiet and whether it counts as
-// zero-progress (never read anything — tier-1) or established (tier-2).
-func (c *trackedConn) idleFor(now time.Time) (d time.Duration, zeroProgress bool) {
-	if !c.readAny.Load() {
+// insufficient-progress (under minProgressBytes total bytes — tier-1) or
+// established (tier-2).
+func (c *trackedConn) idleFor(now time.Time) (d time.Duration, insufficientProgress bool) {
+	if c.progress.Load() < minProgressBytes {
 		return now.Sub(c.accepted), true
 	}
 	return now.Sub(time.Unix(0, c.lastActivity.Load())), false

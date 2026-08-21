@@ -264,9 +264,9 @@ func (r *Runtime) reapOnce() {
 	now := time.Now()
 	var stale []*trackedConn
 	r.conns.each(func(c *trackedConn) {
-		idle, zeroProgress := c.idleFor(now)
+		idle, insufficientProgress := c.idleFor(now)
 		limit := r.tunnelIdleTimeout
-		if zeroProgress {
+		if insufficientProgress {
 			limit = r.stalledConnTimeout
 		}
 		if idle > limit {
