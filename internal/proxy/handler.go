@@ -37,14 +37,14 @@ func bad502(req *http.Request) *http.Response {
 	}
 }
 
-// installInnerGuard binds every inner MITM request to the CONNECT authority
-// stashed by the CONNECT handler in ctx.UserData (goproxy copies that slot
-// onto each inner request's fresh ProxyCtx). goproxy rebuilds only
-// relative-form inner URLs against the tunnel host; an absolute-form inner
-// request keeps its own URL host, and a cross-scheme one makes goproxy's
-// unchecked re-parse fail, leaving req.URL nil. Without this guard the first
-// case would be forwarded under passthrough policy and the second would
-// panic the logging handler, so both fail closed with the generic 502.
+// installInnerGuard binds every inner MITM request to the full CONNECT
+// authority (host AND port) stashed by the CONNECT handler in ctx.UserData
+// (goproxy copies that slot onto each inner request's fresh ProxyCtx).
+// goproxy rebuilds only relative-form inner URLs against the tunnel
+// authority; an absolute-form inner request keeps its own URL host, and a
+// cross-scheme one can leave req.URL nil. Without this guard such requests
+// would be forwarded under passthrough policy or panic the logging handler,
+// so both fail closed with the generic 502.
 func installInnerGuard(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 	gp.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		authority, ok := ctx.UserData.(string)
@@ -61,11 +61,14 @@ func installInnerGuard(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 			)
 			return req, bad502(req) //nolint:bodyclose // goproxy owns the synthetic body
 		}
-		if host := strings.ToLower(stripPort(req.URL.Host)); host != authority {
+		// Full-authority comparison (host AND port): a port-stripped match
+		// would let an absolute-form inner request for api.example:8443 ride
+		// an api.example:443 tunnel and collect its credential.
+		if reqHost := strings.ToLower(req.URL.Host); reqHost != authority {
 			logger.Info("rejecting non-brokered inner host",
 				slog.Int64("session", ctx.Session),
 				slog.String("method", req.Method),
-				slog.String("host", host),
+				slog.String("host", reqHost),
 				slog.String("authority", authority),
 			)
 			return req, bad502(req) //nolint:bodyclose // goproxy owns the synthetic body

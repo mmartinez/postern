@@ -188,6 +188,33 @@ func TestRedTeam_InnerRequest_SameHostAbsoluteForm_Forwards(t *testing.T) {
 	require.Equal(t, int64(1), hits.Load(), "same-host inner request must reach the upstream")
 }
 
+// TestRedTeam_InnerRequest_CrossPortAbsoluteForm_FailsClosed pins the
+// full-authority binding: an absolute-form inner request whose HOST matches
+// the tunnel but whose PORT differs must be rejected — the credential is
+// brokered for one origin:port, not for every port on the host.
+func TestRedTeam_InnerRequest_CrossPortAbsoluteForm_FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	var hits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	t.Cleanup(upstream.Close)
+
+	logBuf := &lockedBuffer{}
+	proxyURL, root := startGuardProxy(t, upstream, logBuf)
+
+	target := strings.TrimPrefix(upstream.URL, "https://")
+	host, _, err := net.SplitHostPort(target)
+	require.NoError(t, err)
+	tn := openMITMTunnel(t, proxyURL, target, root)
+
+	status, body := tn.roundTrip(t, "GET https://"+host+":1/v1/steal HTTP/1.1\r\nHost: "+host+":1\r\n\r\n")
+	require.Equal(t, http.StatusBadGateway, status)
+	require.Equal(t, guardBadBody, body)
+	require.Zero(t, hits.Load(), "cross-port inner request must NOT be forwarded upstream")
+}
+
 // TestRedTeam_InnerRequest_SequentialOverOneTunnel pins that the authority
 // stash is carried on every inner request of a tunnel, not just the first:
 // allowed and rejected requests interleave over a single connection and each
