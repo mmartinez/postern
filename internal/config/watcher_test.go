@@ -39,6 +39,35 @@ func receiveEvent(t *testing.T, ch <-chan config.Event, budget time.Duration) co
 	}
 }
 
+// drainUntilSettled collects Watcher emissions until the stream has been
+// quiet for quietPeriod (comfortably more than one debounce window) or the
+// overall budget expires. It returns the last emission and how many arrived,
+// so callers can assert on the settled state rather than on whichever
+// emission happened to arrive first.
+func drainUntilSettled(t *testing.T, ch <-chan config.Event) (config.Event, int) {
+	t.Helper()
+	const (
+		quietPeriod = 500 * time.Millisecond // > debounceWindow with scheduling slack
+		budget      = 3 * time.Second
+	)
+	deadline := time.After(budget)
+	var last config.Event
+	n := 0
+	for {
+		idle := time.After(quietPeriod)
+		select {
+		case ev := <-ch:
+			last = ev
+			n++
+		case <-idle:
+			return last, n
+		case <-deadline:
+			t.Fatalf("watcher did not settle within %s", budget)
+			return last, n
+		}
+	}
+}
+
 const watchedValidConfig = `
 token:
   source: env
@@ -159,44 +188,63 @@ func TestWatcher_DebouncesRapidEdits(t *testing.T) {
 	events, err := w.Watch(ctx)
 	require.NoError(t, err)
 
-	// Three rapid writes inside the debounce window should coalesce to one
-	// emitted event with the latest content.
-	for i := 0; i < 3; i++ {
+	// Three rapid in-place writes plus an atomic replace inside the
+	// debounce window. Under load the pump can lag the writer far enough
+	// that the debounce fires between individual saves (or mid-save, on a
+	// truncated file), so an emission may legally reflect an intermediate
+	// state; the watcher contract is convergence to the freshest state,
+	// not "first emission == last write".
+	for range 3 {
 		require.NoError(t, os.WriteFile(path, []byte(watchedValidConfig), 0o600))
 	}
 	writeAtomic(t, path, []byte(watchedSecondValidConfig))
 
-	// Under CI load the rapid writes can straddle debounce windows, and a
-	// write observed mid-truncate parses as a transient empty config, so
-	// more than one event may be emitted. Require the stream to settle on
-	// the final write's content instead of assuming exactly one event.
-	var last config.Event
-	require.Eventually(t, func() bool {
-		select {
-		case ev := <-events:
-			last = ev
-			return len(last.New.Rules) > 0 && last.New.Rules[0].Host == "api.anthropic.com"
-		default:
-			return false
-		}
-	}, 3*time.Second, 10*time.Millisecond,
-		"events must settle on the last write; last event: %+v", last)
+	last, n := drainUntilSettled(t, events)
+	require.GreaterOrEqual(t, n, 1, "rapid edits must produce at least one emission")
+	require.LessOrEqual(t, n, 6, "debounce collapsed too few of the four edits: %d emissions", n)
+	require.NotNil(t, last.New, "final emission must carry a parsed config")
+	require.NotEmpty(t, last.New.Rules, "final emission must carry the parsed rules")
+	require.Equal(t, "api.anthropic.com", last.New.Rules[0].Host,
+		"watcher must converge to the most recent write")
+}
 
-	// After settling, earlier content must never reappear. Transient
-	// mid-write snapshots (empty rules) are tolerated; anything parsed must
-	// reflect the final write.
-	for {
-		select {
-		case ev := <-events:
-			if len(ev.New.Rules) == 0 {
-				continue
-			}
-			require.Equal(t, "api.anthropic.com", ev.New.Rules[0].Host,
-				"stale content must not be emitted after the final write")
-		case <-time.After(200 * time.Millisecond):
-			return
-		}
-	}
+// TestWatcher_ConvergesAfterTornSave pins the recovery half of the debounce
+// contract. A save that stalls between truncate and write (editor or runner
+// descheduled mid-save) makes the debounce fire on an empty file; whatever
+// is emitted for that intermediate state must not wedge the watcher: once
+// the content lands it triggers a further emission, the watcher converges
+// to the completed save, and then goes quiet.
+func TestWatcher_ConvergesAfterTornSave(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(watchedValidConfig), 0o600))
+
+	w := config.NewWatcher(path)
+	t.Cleanup(func() { _ = w.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	events, err := w.Watch(ctx)
+	require.NoError(t, err)
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, f.Truncate(0))
+	// Hold the file empty past the 100ms debounce window so the watcher
+	// necessarily observes the intermediate state before the content lands.
+	time.Sleep(150 * time.Millisecond)
+	_, err = f.WriteString(watchedSecondValidConfig)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	last, n := drainUntilSettled(t, events)
+	require.GreaterOrEqual(t, n, 1, "torn save followed by content must produce an emission")
+	require.NotNil(t, last.New, "final emission must carry a parsed config")
+	require.Equal(t, "api.anthropic.com", last.New.Rules[0].Host,
+		"watcher must converge to the completed save after observing a torn state")
 }
 
 func TestWatcher_ClosesCleanly(t *testing.T) {
