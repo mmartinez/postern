@@ -20,6 +20,7 @@ import (
 
 	"github.com/mmartinez/postern/internal/ca"
 	"github.com/mmartinez/postern/internal/runtime"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -179,10 +180,12 @@ func TestStalledHandshakeReaped(t *testing.T) {
 }
 
 func TestIdleTunnelReapedAndGoroutinesSettle(t *testing.T) {
+	reaped := make(chan struct{}, 1)
 	up := newTunnelUpstream(t, "stall")
 	rt, _, _ := newLifecycleRuntime(t, func(o *runtime.Options) {
 		o.TestTunnelIdleTimeout = 200 * time.Millisecond
 		o.TestReapInterval = 50 * time.Millisecond
+		o.TestReapHook = func() { reaped <- struct{}{} }
 	})
 	startRuntime(t, rt)
 
@@ -201,9 +204,23 @@ func TestIdleTunnelReapedAndGoroutinesSettle(t *testing.T) {
 	_, err = client.Read(buf)
 	require.Error(t, err, "stalled tunnel must be closed within the tier-2 bound")
 
-	require.Eventually(t, func() bool {
-		return goruntime.NumGoroutine() <= before+2
-	}, 3*time.Second, 50*time.Millisecond, "relay goroutines must return to baseline after reap")
+	// Wait on the reaper's own eviction signal rather than racing a fixed
+	// clock: under CI load the reap tick can land long after the client
+	// observes the close.
+	select {
+	case <-reaped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("reaper never evicted the stalled tunnel")
+	}
+
+	// Leak check: after eviction the relay goroutines must actually exit.
+	// The bound is generous so scheduler noise under load cannot flake it,
+	// but a reaped tunnel that leaks its goroutines still fails here.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		now := goruntime.NumGoroutine()
+		assert.LessOrEqual(c, now, before+2,
+			fmt.Sprintf("relay goroutines must settle at baseline %d after reap; observed %d", before, now))
+	}, 10*time.Second, 100*time.Millisecond)
 }
 
 // TestOneByteStalledConnReapedAtTier1 pins the insufficient-progress tier:
