@@ -152,11 +152,11 @@ type trustFilesSnapshot struct {
 	stateOK  bool
 }
 
-func keychainOf(keychain string) string { return keychain }
-
 // snapshotTrustFiles captures the current anchor and state bytes. An
-// unreadable anchor aborts the install before any mutation; an unreadable
-// state file is treated as absent, since restore would remove it anyway.
+// unreadable anchor or state file aborts the install before any mutation:
+// rollback could not faithfully restore content it never read, and silently
+// treating an existing state file as absent would let a failed install
+// delete it, forcing later uninstalls into the broad common-name fallback.
 func snapshotTrustFiles(anchorPath string) (trustFilesSnapshot, error) {
 	var snap trustFilesSnapshot
 	data, err := os.ReadFile(anchorPath)
@@ -167,8 +167,11 @@ func snapshotTrustFiles(anchorPath string) (trustFilesSnapshot, error) {
 		return snap, fmt.Errorf("snapshot trust anchor: %w", err)
 	}
 	data, err = os.ReadFile(anchorStatePath(anchorPath))
-	if err == nil {
+	switch {
+	case err == nil:
 		snap.state, snap.stateOK = data, true
+	case !errors.Is(err, fs.ErrNotExist):
+		return snap, fmt.Errorf("snapshot trust state: %w", err)
 	}
 	return snap, nil
 }

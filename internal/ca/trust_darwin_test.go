@@ -138,25 +138,63 @@ func TestInstallTrustAt_PersistsSha256StateFile(t *testing.T) {
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
-// TestInstallTrustAt_StateWriteFailureRollsBackTrust pins the rollback: when
-// add-trusted-cert has already registered the certificate but persisting the
-// SHA-256 state fails, install must undo the registration and the on-disk
-// writes instead of reporting a failed install that actually left the CA
-// trusted.
-func TestInstallTrustAt_StateWriteFailureRollsBackTrust(t *testing.T) {
+// TestInstallTrustAt_UnreadableStateAbortsBeforeMutation pins the snapshot
+// discipline: an existing-but-unreadable state file must abort the install
+// up front. Rollback could not faithfully restore content it never read, so
+// proceeding risked deleting the previous CA's hash on failure and forcing
+// later uninstalls into the broad common-name fallback.
+func TestInstallTrustAt_UnreadableStateAbortsBeforeMutation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	certPEM := darwinFixtureCA(t)
+	prevPEM := darwinFixtureCA(t)
+	newPEM := darwinFixtureCA(t)
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 	require.NoError(t, os.MkdirAll(filepath.Dir(anchor), 0o700))
-	// Occupy the state path with a directory so the atomic rename inside
-	// writeStateFile fails after the trust registration already succeeded.
-	stateBlocker := filepath.Join(home, ".postern", "trust", "ca.sha256")
-	require.NoError(t, os.Mkdir(stateBlocker, 0o700))
+	require.NoError(t, writeFileMode(anchor, prevPEM, 0o644))
+	// Occupy the state path with a directory: readable as neither file nor
+	// "absent", so the snapshot must refuse to continue.
+	require.NoError(t, os.Mkdir(filepath.Join(home, ".postern", "trust", "ca.sha256"), 0o700))
 
 	rec := &securityRecorder{}
-	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
+	_, err := darwinTrust{run: rec.run}.install(anchor, newPEM)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot trust state")
+	require.Empty(t, rec.calls, "no security invocation may run before the snapshot is trustworthy")
+
+	got, readErr := os.ReadFile(anchor)
+	require.NoError(t, readErr)
+	require.Equal(t, prevPEM, got, "the previous anchor must be untouched")
+}
+
+// TestInstallTrustAt_FailedReinstallRestoresPreviousPairing covers the
+// failed-reinstall regression: registration succeeds but persisting the new
+// state hash fails (unwritable trust dir; the existing anchor file itself
+// stays writable), so install rolls back the registration and restores the
+// PREVIOUS anchor and state pairing. Otherwise the new anchor would be left
+// paired with the old hash and a later uninstall would target the
+// already-rolled-back certificate while the previous generation stayed
+// trusted.
+func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	prevPEM := darwinFixtureCA(t)
+	newPEM := darwinFixtureCA(t)
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+	statePath := filepath.Join(home, ".postern", "trust", "ca.sha256")
+	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	trustDir := filepath.Dir(anchor)
+	require.NoError(t, os.MkdirAll(trustDir, 0o700))
+	require.NoError(t, writeFileMode(anchor, prevPEM, 0o644))
+	prevHash := pemSHA256Hex(t, prevPEM)
+	require.NoError(t, writeFileMode(statePath, []byte(prevHash), 0o600))
+	// The anchor FILE stays writable, but no new temp file can be created in
+	// a directory without the write bit, failing the state write after
+	// add-trusted-cert already succeeded.
+	require.NoError(t, os.Chmod(trustDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(trustDir, 0o700) })
+
+	rec := &securityRecorder{}
+	_, err := darwinTrust{run: rec.run}.install(anchor, newPEM)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "write trust state")
 
@@ -169,46 +207,17 @@ func TestInstallTrustAt_StateWriteFailureRollsBackTrust(t *testing.T) {
 		rec.calls[0])
 	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[1])
 	require.Equal(t,
-		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
-		rec.calls[2])
-
-	_, statErr := os.Stat(anchor)
-	require.True(t, os.IsNotExist(statErr), "freshly written anchor must be removed on rollback")
-	_, statErr = os.Stat(stateBlocker)
-	require.True(t, os.IsNotExist(statErr), "state path must be clear after restoring the absent pre-install state")
-}
-
-// TestInstallTrustAt_FailedReinstallRestoresPreviousPairing covers the
-// follow-up regression: a failed reinstall over an existing CA must restore
-// the PREVIOUS anchor bytes, not leave the new anchor on disk. Otherwise a
-// later anchor-present uninstall would target the already-rolled-back
-// certificate while the previously installed generation stayed trusted.
-func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	prevPEM := darwinFixtureCA(t)
-	newPEM := darwinFixtureCA(t)
-	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
-	trustDir := filepath.Dir(anchor)
-	require.NoError(t, os.MkdirAll(trustDir, 0o700))
-	// Previous install: old CA anchored, no state file (pre-state-file era).
-	require.NoError(t, writeFileMode(anchor, prevPEM, 0o644))
-	// Block the state path so the reinstall fails after registration.
-	require.NoError(t, os.Mkdir(filepath.Join(trustDir, "ca.sha256"), 0o700))
-
-	rec := &securityRecorder{}
-	_, err := darwinTrust{run: rec.run}.install(anchor, newPEM)
-	require.Error(t, err)
+		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, newPEM), keychain},
+		rec.calls[2], "the newly registered generation must be rolled back")
 
 	got, readErr := os.ReadFile(anchor)
 	require.NoError(t, readErr)
 	require.Equal(t, prevPEM, got,
 		"a failed reinstall must restore the previous anchor bytes exactly")
-	require.Equal(t,
-		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, newPEM), keychain},
-		rec.calls[2],
-		"the newly registered generation must be rolled back, not the previous one")
+	gotState, readErr := os.ReadFile(statePath)
+	require.NoError(t, readErr)
+	require.Equal(t, prevHash, strings.TrimSpace(string(gotState)),
+		"the previous state hash must survive the failed reinstall")
 }
 
 // TestRestoreTrustFiles_RestoresContents unit-tests the file half of the
