@@ -99,17 +99,17 @@ func uninstallTrustAt(location string) ([]string, error) {
 // The user-authentication dialog add-trusted-cert triggers is expected;
 // per-user trust settings deliberately avoid sudo.
 //
-// A failure after add-trusted-cert succeeded (the only such step is the
-// state-file write) rolls the registration back — remove-trusted-cert plus
-// delete-certificate — so a reported install failure never leaves the
-// certificate trusted, and a failed reinstall never leaves a stale state
-// hash that could later misdirect lost-anchor recovery.
+// Install is atomic on failure: the previous anchor PEM and state file are
+// snapshotted before anything is mutated, and any failure after that point
+// restores the exact pre-install pairing and (when add-trusted-cert already
+// completed) revokes the registration. A failed install therefore never
+// leaves a trusted certificate, and a failed reinstall never leaves the new
+// anchor paired with the previous hash — a mismatch that would later send
+// anchor-present uninstall at an already-rolled-back certificate while the
+// previously installed generation stayed trusted.
 func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
-	anchorPath, err := writeAnchor(location, certPEM)
-	if err != nil {
-		return anchorPath, err
-	}
-	keychain, err := loginKeychain()
+	anchorPath := resolveAnchorPath(location)
+	snap, err := snapshotTrustFiles(anchorPath)
 	if err != nil {
 		return anchorPath, err
 	}
@@ -117,28 +117,100 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	if err != nil {
 		return anchorPath, fmt.Errorf("digest trust anchor: %w", err)
 	}
+	keychain, err := loginKeychain()
+	if err != nil {
+		return anchorPath, fmt.Errorf("resolve login keychain: %w", err)
+	}
+	anchorPath, err = writeAnchor(location, certPEM)
+	if err != nil {
+		return anchorPath, err
+	}
+
+	fail := func(cause error, registered bool) (string, error) {
+		if rbErr := b.rollbackInstall(anchorPath, hash, keychain, snap, registered); rbErr != nil {
+			return anchorPath, errors.Join(cause, rbErr)
+		}
+		return anchorPath, cause
+	}
+
 	if _, err := b.run("add-trusted-cert", "-r", "trustRoot", "-k", keychain, anchorPath); err != nil {
-		return anchorPath, fmt.Errorf("register trust anchor: %w", err)
+		return fail(fmt.Errorf("register trust anchor: %w", err), false)
 	}
 	if err := writeStateFile(anchorStatePath(anchorPath), hash); err != nil {
-		if rbErr := b.rollbackRegistration(anchorPath, hash, keychain); rbErr != nil {
-			return anchorPath, errors.Join(fmt.Errorf("write trust state: %w", err), rbErr)
-		}
-		return anchorPath, fmt.Errorf("write trust state: %w", err)
+		return fail(fmt.Errorf("write trust state: %w", err), true)
 	}
 	return anchorPath, nil
 }
 
-// rollbackRegistration undoes a completed add-trusted-cert after a later
-// install step failed. Best effort: any rollback failure is returned so it
-// is surfaced alongside the original error instead of silently swallowed.
-func (b darwinTrust) rollbackRegistration(anchorPath, hash, keychain string) error {
-	var errs []error
-	if _, err := b.run("remove-trusted-cert", anchorPath); err != nil {
-		errs = append(errs, fmt.Errorf("rollback revoke trust settings: %w", err))
+// trustFilesSnapshot holds the pre-install bytes of the anchor PEM and its
+// sibling state file. ok=false means the file was absent before the install,
+// so restore removes it rather than writing empty content.
+type trustFilesSnapshot struct {
+	anchor   []byte
+	anchorOK bool
+	state    []byte
+	stateOK  bool
+}
+
+func keychainOf(keychain string) string { return keychain }
+
+// snapshotTrustFiles captures the current anchor and state bytes. An
+// unreadable anchor aborts the install before any mutation; an unreadable
+// state file is treated as absent, since restore would remove it anyway.
+func snapshotTrustFiles(anchorPath string) (trustFilesSnapshot, error) {
+	var snap trustFilesSnapshot
+	data, err := os.ReadFile(anchorPath)
+	switch {
+	case err == nil:
+		snap.anchor, snap.anchorOK = data, true
+	case !errors.Is(err, fs.ErrNotExist):
+		return snap, fmt.Errorf("snapshot trust anchor: %w", err)
 	}
-	if _, err := b.run("delete-certificate", "-Z", hash, keychain); err != nil {
-		errs = append(errs, fmt.Errorf("rollback delete keychain certificate: %w", err))
+	data, err = os.ReadFile(anchorStatePath(anchorPath))
+	if err == nil {
+		snap.state, snap.stateOK = data, true
+	}
+	return snap, nil
+}
+
+// rollbackInstall undoes every mutation a failed install made: the completed
+// keychain registration (when registered is true) and the on-disk anchor and
+// state files. Best effort: every rollback failure is returned so it is
+// surfaced alongside the original error instead of silently swallowed.
+func (b darwinTrust) rollbackInstall(anchorPath, hash, keychain string, snap trustFilesSnapshot, registered bool) error {
+	var errs []error
+	if registered {
+		if _, err := b.run("remove-trusted-cert", anchorPath); err != nil {
+			errs = append(errs, fmt.Errorf("rollback revoke trust settings: %w", err))
+		}
+		if _, err := b.run("delete-certificate", "-Z", hash, keychain); err != nil {
+			errs = append(errs, fmt.Errorf("rollback delete keychain certificate: %w", err))
+		}
+	}
+	if err := restoreTrustFiles(snap, anchorPath); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// restoreTrustFiles puts the anchor and state files back to their pre-install
+// contents, removing files that did not exist before the install.
+func restoreTrustFiles(snap trustFilesSnapshot, anchorPath string) error {
+	var errs []error
+	if snap.anchorOK {
+		if err := writeFileMode(anchorPath, snap.anchor, trustFileMode); err != nil {
+			errs = append(errs, fmt.Errorf("restore trust anchor: %w", err))
+		}
+	} else if err := os.Remove(anchorPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("restore trust anchor: %w", err))
+	}
+	statePath := anchorStatePath(anchorPath)
+	if snap.stateOK {
+		if err := writeFileMode(statePath, snap.state, 0o600); err != nil {
+			errs = append(errs, fmt.Errorf("restore trust state: %w", err))
+		}
+	} else if err := os.Remove(statePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("restore trust state: %w", err))
 	}
 	return errors.Join(errs...)
 }
