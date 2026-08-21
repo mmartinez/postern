@@ -124,12 +124,13 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	// Ground truth for the rollback decision: was this exact certificate in
 	// the keychain before this run? Files can be stale (a manually deleted
 	// keychain entry leaves anchor/state behind), so presence is probed, not
-	// inferred. A probe failure degrades conservatively: the identity is
-	// treated as not pre-existing, so a later failure rolls the registration
-	// back instead of leaving possibly-new trust behind.
+	// inferred. An unanswerable probe aborts the install before any
+	// mutation: guessing either way corrupts state on failure — skipping
+	// rollback could leave new trust behind, running it could destroy
+	// pre-existing trust.
 	presentBefore, err := b.keychainHashes()
 	if err != nil {
-		presentBefore = nil
+		return anchorPath, fmt.Errorf("probe login keychain: %w", err)
 	}
 	anchorPath, err = writeAnchor(location, certPEM)
 	if err != nil {

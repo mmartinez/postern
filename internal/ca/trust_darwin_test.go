@@ -256,8 +256,10 @@ func TestInstallTrustAt_SameCARereinstallFailureKeepsTrust(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, rec.calls, 2, "probe runs, but no revoke/delete for an identity already in the keychain")
 	require.Equal(t,
-		[]string{"find-certificate", "-a", "-c", caCommonName, "-p",
-			filepath.Join(home, "Library", "Keychains", "login.keychain-db")},
+		[]string{
+			"find-certificate", "-a", "-c", caCommonName, "-p",
+			filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
+		},
 		rec.calls[0])
 	require.Equal(t, "add-trusted-cert", rec.calls[1][0])
 
@@ -552,7 +554,15 @@ func TestUninstallTrustAt_KeychainProbeFailureSurfacesError(t *testing.T) {
 func TestInstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	rec := failingRunner(44, "SecTrustSettingsAddTrusted failed\n")
+	// The keychain probe succeeds; only the registration fails.
+	rec := &securityRecorder{handle: func(args []string) ([]byte, error) {
+		if args[0] != "add-trusted-cert" {
+			return nil, nil
+		}
+		cmd := exec.Command("/bin/sh", "-c", "exit 44")
+		runErr := cmd.Run()
+		return nil, securityCmdError(args, runErr, "SecTrustSettingsAddTrusted failed\n")
+	}}
 	certPEM := darwinFixtureCA(t)
 
 	_, err := darwinTrust{run: rec.run}.install(filepath.Join(home, ".postern", "trust", "ca.pem"), certPEM)
@@ -562,6 +572,27 @@ func TestInstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
 	require.Contains(t, err.Error(), "exit status 44")
 	require.Contains(t, err.Error(), "SecTrustSettingsAddTrusted failed",
 		"security's stderr must be surfaced to the caller")
+}
+
+// TestInstallTrustAt_ProbeFailureAbortsBeforeMutation pins the probe
+// discipline: when keychain presence cannot be determined, install aborts
+// before touching anything. Guessing either way corrupts state on a later
+// failure: skipping rollback could leave new trust behind, running it could
+// destroy pre-existing trust.
+func TestInstallTrustAt_ProbeFailureAbortsBeforeMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	rec := failingRunner(51, "SecKeychainSearchCopyNext failed\n")
+	certPEM := darwinFixtureCA(t)
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+
+	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "probe login keychain")
+	require.Len(t, rec.calls, 1, "only the failed probe may run")
+
+	_, statErr := os.Stat(anchor)
+	require.True(t, os.IsNotExist(statErr), "no anchor may be written when presence is unknown")
 }
 
 func TestUninstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
