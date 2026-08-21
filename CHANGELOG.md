@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.1](https://github.com/mmartinez/postern/compare/v0.7.0...v0.7.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **broker:** canonicalize trailing-dot FQDN hosts ([#73](https://github.com/mmartinez/postern/issues/73)) ([2932c69](https://github.com/mmartinez/postern/commit/2932c69ef3f4826f213dd86317e057e0f1d41445))
+* **config:** survive silent watch death in config hot reload ([#72](https://github.com/mmartinez/postern/issues/72)) ([28d0c54](https://github.com/mmartinez/postern/commit/28d0c5491c96c8f6288abe0972226ae70d723343))
+* **proxy:** bind inner MITM requests to the CONNECT authority ([#71](https://github.com/mmartinez/postern/issues/71)) ([381e4db](https://github.com/mmartinez/postern/commit/381e4db411c51fc744943bb8eb12e3e038c9e1e4))
+* **proxy:** bound outbound transport, tunnel dials, inbound idle conns; sanitize connection errors ([#70](https://github.com/mmartinez/postern/issues/70)) ([82bccd2](https://github.com/mmartinez/postern/commit/82bccd2da0ab00021512cd5533d388c51f3b1668))
+
 ## [0.7.0](https://github.com/mmartinez/postern/compare/v0.6.1...v0.7.0) (2026-08-14)
 
 
