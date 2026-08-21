@@ -123,8 +123,8 @@ jobs:
     name: test (macos)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -307,15 +307,56 @@ jobs:
           # --skip=sign: PRs have no OIDC token / cosign; the image still builds
           # so the verify step below runs. Signing is exercised by release.yml.
           args: release --snapshot --clean --skip=sign
-      - name: assert release artifacts (>= 2 archives, checksums, >= 2 SBOMs)
+      - name: assert release artifacts match the goreleaser matrix exactly
         run: |
           set -euo pipefail
-          ls -la dist/*.tar.gz dist/checksums.txt dist/*.sbom.spdx.json
-          # >= rather than ==: darwin build targets landing in a sibling PR
-          # grow the archive/SBOM count. Still fails on zero/missing artifacts:
-          # under set -e, ls of an unmatched glob aborts the step.
-          test "$(ls dist/*.tar.gz | wc -l)" -ge 2
-          test "$(ls dist/*.sbom.spdx.json | wc -l)" -ge 2
+          cfg=.goreleaser.yaml
+          test -f dist/checksums.txt
+          ls -l dist
+
+          # Expected archive set derived from the goreleaser config
+          # (name_template x goos/goarch matrix), so adding targets there
+          # (e.g. darwin) updates this assertion with no edit.
+          ext=$(grep -m1 'formats:' "$cfg" | sed -E 's/.*\[(.*)\].*/\1/')
+          tmpl=$(awk '/^    name_template:/{sub(/^    name_template: */,"");gsub(/"/,"");print;exit}' "$cfg")
+          matrix() {
+            awk -v k="$1" '$0 ~ "^    " k ":" {on=1;next} on && /^      - /{sub(/^      - */,"");print;next} on{on=0}' "$cfg"
+          }
+          archives=()
+          for goos in $(matrix goos); do
+            for goarch in $(matrix goarch); do
+              pat=$tmpl
+              pat=${pat//'{{ .Version }}'/*}
+              pat=${pat//'{{ .Os }}'/$goos}
+              pat=${pat//'{{ .Arch }}'/$goarch}
+              archives+=("${pat}.${ext}")
+            done
+          done
+
+          # Unquoted globs are deliberate: we are counting glob matches.
+          for pat in "${archives[@]}"; do
+            n=$(ls dist/$pat 2>/dev/null | wc -l)
+            if [ "$n" -ne 1 ]; then
+              echo "expected exactly one artifact matching $pat, found $n" >&2
+              exit 1
+            fi
+          done
+          total=$(ls dist/*.${ext} 2>/dev/null | wc -l)
+          if [ "$total" -ne "${#archives[@]}" ]; then
+            echo "unexpected extra archives: found $total, expected ${#archives[@]}" >&2
+            exit 1
+          fi
+
+          # One SBOM per archive, base-name matched (goreleaser renders
+          # documents as {{ .ArtifactName }}.sbom.spdx.json).
+          for pat in "${archives[@]}"; do
+            base=$(basename "${pat%.${ext}}")
+            n=$(ls dist/$base.sbom.spdx.json 2>/dev/null | wc -l)
+            if [ "$n" -ne 1 ]; then
+              echo "expected exactly one SBOM matching $base.sbom.spdx.json, found $n" >&2
+              exit 1
+            fi
+          done
       - name: verify release image (uid 65532, entrypoint, no baked token)
         run: |
           amd64="$(docker images --filter=reference='ghcr.io/mmartinez/postern:*-amd64' --format '{{.Repository}}:{{.Tag}}' | head -1)"
