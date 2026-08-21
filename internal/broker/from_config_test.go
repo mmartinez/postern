@@ -125,6 +125,48 @@ func TestFromConfigRules_TranslatesInjects(t *testing.T) {
 	}
 }
 
+// A config may write a rule host in its RFC 3986 §3.2.2 fully-qualified form
+// ("api.example.com."). FromConfigRules canonicalizes the pattern once at
+// construction so Rule.Match compares canonical-to-canonical with no
+// per-call transformation. Canonicalization must be single-application: a
+// double-dot pattern is stripped once and the residue ("api.example.com.")
+// is a malformed name that can never match a canonicalized request host.
+func TestFromConfigRules_CanonicalizesTrailingDotHostPattern(t *testing.T) {
+	t.Parallel()
+
+	header := func() config.Inject {
+		return config.Inject{Type: config.InjectTypeHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"}
+	}
+	in := []config.Rule{
+		{Host: "api.example.com.", SecretRef: "op://V/I/f", Inject: header()},
+		{Host: "*.example.com.", SecretRef: "op://V/I/f", Inject: header()},
+		{Host: "api.example.com..", SecretRef: "op://V/I/f", Inject: header()},
+	}
+
+	got, err := broker.FromConfigRules(in)
+	if err != nil {
+		t.Fatalf("FromConfigRules: %v", err)
+	}
+
+	wantHosts := []string{"api.example.com", "*.example.com", "api.example.com."}
+	for i, want := range wantHosts {
+		if got[i].Host != want {
+			t.Fatalf("rules[%d].Host = %q, want %q (exactly one trailing dot stripped)", i, got[i].Host, want)
+		}
+	}
+
+	engine := broker.NewEngine(got)
+	if _, ok := engine.Match("api.example.com"); !ok {
+		t.Fatalf("dotted literal pattern must match the bare host after construction-time canonicalization")
+	}
+	if _, ok := engine.Match("sub.example.com"); !ok {
+		t.Fatalf("dotted glob pattern must match a single-label subdomain after construction-time canonicalization")
+	}
+	if _, ok := engine.Match("api.example.org"); ok {
+		t.Fatalf("canonicalized pattern must not match an unrelated host")
+	}
+}
+
 func TestFromConfigRules_RejectsNonHeaderInjectsEntry(t *testing.T) {
 	t.Parallel()
 

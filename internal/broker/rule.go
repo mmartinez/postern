@@ -177,18 +177,21 @@ func canonicalHost(host string) string {
 }
 
 // Match reports whether the rule's host pattern matches host. Comparison is
-// case-insensitive (DNS hostnames are case-insensitive per RFC 4343), and
-// canonicalHost is applied to both sides, so a rule and a request host agree
-// whether or not either carries the RFC 3986 §3.2.2 trailing dot. The glob
-// form follows TLS-wildcard semantics: "*" matches exactly one DNS label and
-// never crosses a dot, so "*.example.com" matches "api.example.com" but
-// neither "example.com" nor "a.b.example.com".
+// case-insensitive (DNS hostnames are case-insensitive per RFC 4343) and
+// purely canonical-to-canonical: r.Host was canonicalized once at rule
+// construction (FromConfigRules), and callers must canonicalize host exactly
+// once at their entry boundary — never inside Match. Stacked transformations
+// would strip a malformed multi-dot authority one dot per layer until it
+// matched a brokered host. The glob form follows TLS-wildcard semantics: "*"
+// matches exactly one DNS label and never crosses a dot, so "*.example.com"
+// matches "api.example.com" but neither "example.com" nor "a.b.example.com".
 //
-// host should be the bare hostname without a port. Callers that hold a
-// host:port value (e.g. CONNECT targets) must strip the port first.
+// host should be the bare, canonicalized hostname without a port. Callers
+// that hold a host:port value (e.g. CONNECT targets) must strip the port and
+// apply canonicalHost first.
 func (r Rule) Match(host string) bool {
-	pattern := strings.ToLower(canonicalHost(r.Host))
-	h := strings.ToLower(canonicalHost(host))
+	pattern := strings.ToLower(r.Host)
+	h := strings.ToLower(host)
 
 	if !strings.HasPrefix(pattern, "*.") {
 		return pattern == h

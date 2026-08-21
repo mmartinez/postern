@@ -347,6 +347,83 @@ func TestE2E_BrokerInjectsForTrailingDotHost(t *testing.T) {
 	require.Equal(t, int64(1), res.calls.Load(), "broker must fire for the dotted-host request")
 }
 
+// TestE2E_DoubleDotAuthorityIsNeverBrokered pins the single-application
+// canonicalization contract at the proxy boundary, with the production
+// shouldIntercept wiring (engine.Match over the canonicalized CONNECT host):
+// a malformed double-dot authority survives the decision boundary's one
+// strip as "localhost.", which matches no rule. Under block it is rejected
+// at connect time; under passthrough it is never MITM'd. Either way the
+// resolver is never called and the upstream is never contacted.
+func TestE2E_DoubleDotAuthorityIsNeverBrokered(t *testing.T) {
+	t.Parallel()
+
+	var upstreamHits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		upstreamHits.Add(1)
+	}))
+	t.Cleanup(upstream.Close)
+
+	root := fixtureCA(t)
+	minter := fixtureMinter(t, root)
+
+	engine := broker.NewEngine([]broker.Rule{{
+		Host:      "localhost",
+		SecretRef: "op://Agents/Anthropic/api_key",
+		Injection: broker.InjectSpec{
+			Type:     broker.InjectHeader,
+			Name:     "x-api-key",
+			Template: "{{ CREDENTIAL }}",
+		},
+	}})
+	res := &fakeResolver{value: "sk-from-resolver"}
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+
+	newProxy := func(block bool) *proxy.Proxy {
+		p, err := proxy.New(proxy.Config{
+			CA:                 root,
+			Minter:             minter,
+			Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+			UpstreamTLS:        upstreamTLS(t, upstream),
+			PreUpstreamHandler: hook,
+			ShouldIntercept:    func(host string) bool { _, ok := engine.Match(host); return ok },
+			BlockNonBrokered:   block,
+		})
+		require.NoError(t, err)
+		return p
+	}
+
+	port := strings.TrimPrefix(upstream.URL, "https://127.0.0.1:")
+	target := "https://localhost..:" + port + "/"
+
+	// Block mode: connect-time rejection. The CONNECT is refused before any
+	// TLS termination, so the client sees the failed tunnel as a transport
+	// error carrying the proxy's 502 (goproxy's RejectConnect path), not a
+	// brokered response.
+	client := clientThroughProxy(t, startProxy(t, newProxy(true)), root)
+	resp, err := client.Get(target) //nolint:bodyclose // rejected CONNECT carries no readable body; closed below when non-nil
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	require.Error(t, err, "double-dot authority must be rejected at connect time under block")
+
+	// Passthrough mode: the malformed host tunnels (or the relay fails to
+	// resolve it) — it is never MITM'd, so the request can neither succeed
+	// end-to-end nor come back as postern's connect-time block.
+	clientPass := clientThroughProxy(t, startProxy(t, newProxy(false)), root)
+	respPass, errPass := clientPass.Get(target) //nolint:bodyclose // closed immediately below
+	if respPass != nil {
+		defer func() { _ = respPass.Body.Close() }()
+		body, _ := io.ReadAll(respPass.Body)
+		require.NotEqual(t, "blocked by postern: host not brokered\n", string(body),
+			"passthrough must tunnel, not connect-time reject")
+	}
+	require.True(t, errPass != nil || respPass.StatusCode != http.StatusOK,
+		"malformed double-dot authority must not be brokered into a successful request")
+
+	require.Equal(t, int64(0), upstreamHits.Load(), "upstream must never be contacted for a double-dot authority")
+	require.Equal(t, int64(0), res.calls.Load(), "resolver must never fire for a double-dot authority")
+}
+
 // Fixture helpers below mirror the patterns used in
 // internal/proxy/proxy_test.go (kept local rather than exported to avoid
 // growing the proxy package's public surface for test plumbing).

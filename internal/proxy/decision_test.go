@@ -55,11 +55,22 @@ func TestDecideConnect(t *testing.T) {
 			want:            modeMITM,
 		},
 		{
-			name:             "double trailing dot is not canonicalized away",
+			// Canonicalization is single-application: one strip turns the
+			// malformed double-dot authority into "api.anthropic.com.", which
+			// is not a brokered host. It must fall through to policy — never
+			// be MITM'd — no matter what downstream matchers do.
+			name:             "double trailing dot is not canonicalized away (block)",
 			host:             "api.anthropic.com..:443",
 			shouldIntercept:  matchAnthropic,
 			blockNonBrokered: true,
 			want:             modeReject,
+		},
+		{
+			name:             "double trailing dot tunnels untouched under passthrough",
+			host:             "api.anthropic.com..:443",
+			shouldIntercept:  matchAnthropic,
+			blockNonBrokered: false,
+			want:             modeTunnel,
 		},
 		{
 			name:            "nil shouldIntercept intercepts everything (back-compat)",
@@ -83,4 +94,22 @@ func TestDecideConnect(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestCanonicalHost_IdempotentForWellFormedHosts pins the single-application
+// property the decision path depends on: for any well-formed input (bare or
+// single trailing dot) re-canonicalizing is a no-op, so a host crossing
+// several boundaries cannot be stripped dot by dot into a matchable name.
+// (A malformed double-dot input is deliberately NOT idempotent — each
+// boundary strips at most one dot, and the residue must stay malformed.)
+func TestCanonicalHost_IdempotentForWellFormedHosts(t *testing.T) {
+	t.Parallel()
+
+	for _, h := range []string{"api.example.com", "api.example.com.", "API.Example.Com."} {
+		once := canonicalHost(h)
+		require.Equal(t, once, canonicalHost(once),
+			"canonicalHost must be idempotent for well-formed host %q", h)
+	}
+	require.Equal(t, "api.example.com.", canonicalHost("api.example.com.."),
+		"at most one trailing dot may be stripped per application")
 }
