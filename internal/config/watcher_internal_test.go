@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,14 +20,14 @@ import (
 const internalValidConfig = `
 token:
   source: env
-  env_var: OP_SERVICE_ACCOUNT_TOKEN
+  env_var: SERVICE_ACCOUNT_TOKEN
 proxy:
   listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
-  - host: api.example.com
-    secret_ref: op://Vault/Item/field
+  - host: api.one.example
+    secret_ref: op://vault/items/one/credential
     inject:
       type: header
       name: x-api-key
@@ -36,14 +37,14 @@ rules:
 const internalSecondValidConfig = `
 token:
   source: env
-  env_var: OP_SERVICE_ACCOUNT_TOKEN
+  env_var: SERVICE_ACCOUNT_TOKEN
 proxy:
   listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
 rules:
-  - host: api.anthropic.com
-    secret_ref: op://Agents/Anthropic/api_key
+  - host: api.two.example
+    secret_ref: op://vault/items/two/credential
     inject:
       type: header
       name: x-api-key
@@ -117,7 +118,7 @@ func TestWatcher_LogsFsnotifyErrors(t *testing.T) {
 	select {
 	case ev := <-events:
 		require.NotNil(t, ev.New)
-		require.Equal(t, "api.anthropic.com", ev.New.Rules[0].Host)
+		require.Equal(t, "api.two.example", ev.New.Rules[0].Host)
 	case <-time.After(pollInterval + debounceWindow + 3*time.Second):
 		t.Fatal("pump died after fsnotify error: no reload event")
 	}
@@ -152,7 +153,7 @@ func TestWatcher_PollFallbackWithoutFsnotifyEvents(t *testing.T) {
 	case ev := <-events:
 		require.NotNil(t, ev.New)
 		require.Empty(t, ev.Lints, "valid edit should emit no lints")
-		require.Equal(t, "api.anthropic.com", ev.New.Rules[0].Host)
+		require.Equal(t, "api.two.example", ev.New.Rules[0].Host)
 	case <-time.After(pollInterval + debounceWindow + 3*time.Second):
 		t.Fatal("stat-poll fallback did not fire a reload after a silent edit")
 	}
@@ -163,5 +164,81 @@ func TestWatcher_PollFallbackWithoutFsnotifyEvents(t *testing.T) {
 	case extra := <-events:
 		t.Fatalf("unexpected duplicate reload event: %+v", extra)
 	case <-time.After(pollInterval + 500*time.Millisecond):
+	}
+}
+
+// TestWatcher_NoLostUpdateAcrossEmission reproduces, deterministically, the
+// interleaving where an edit lands after emitReload reads the file but
+// before the post-emission stat refreshes the poll baseline: the afterEmit
+// hook writes the new version inside exactly that window. The invariant
+// under test: every fingerprint admitted into the baseline belongs to a
+// version whose content was actually emitted — a version landing
+// mid-emission must be re-armed and emitted, never swallowed as "seen".
+func TestWatcher_NoLostUpdateAcrossEmission(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(internalValidConfig), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	fsw, err := fsnotify.NewWatcher() // no watches registered: stat poll drives everything
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fsw.Close() })
+
+	const thirdConfig = `
+token:
+  source: env
+  env_var: SERVICE_ACCOUNT_TOKEN
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: passthrough
+rules:
+  - host: api.three.example
+    secret_ref: op://vault/items/three/credential
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+`
+
+	// tickInterval (500ms) > debounceWindow (100ms): the detection tick and
+	// the emission never overlap, keeping the event order deterministic.
+	var sneaked atomic.Bool
+	w := &fsWatcher{path: path, tickInterval: 500 * time.Millisecond}
+	w.afterEmit = func() {
+		if sneaked.CompareAndSwap(false, true) {
+			if err := os.WriteFile(path, []byte(thirdConfig), 0o600); err != nil {
+				t.Errorf("hook write failed: %v", err)
+			}
+		}
+	}
+
+	events, err := w.startLocked(ctx, fsw)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	// The poll baseline is seeded synchronously inside startLocked, so an
+	// edit written now is guaranteed to be a detected change, not baseline.
+	require.NoError(t, os.WriteFile(path, []byte(internalSecondValidConfig), 0o600))
+
+	ev := <-events
+	require.NotNil(t, ev.New)
+	require.Equal(t, "api.two.example", ev.New.Rules[0].Host,
+		"first emission must carry the content read at emission time")
+
+	// The version written inside the post-emission window must surface as
+	// its own reload; the buggy baseline refresh absorbed it unemitted and
+	// this receive timed out.
+	select {
+	case ev := <-events:
+		require.NotNil(t, ev.New)
+		require.Equal(t, "api.three.example", ev.New.Rules[0].Host,
+			"mid-emission edit must be emitted, not absorbed into the baseline")
+	case <-time.After(3 * time.Second):
+		t.Fatal("update landing across the emission boundary was lost")
 	}
 }

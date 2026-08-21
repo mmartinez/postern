@@ -77,6 +77,15 @@ type fsWatcher struct {
 	path   string
 	logger *slog.Logger
 
+	// Test hooks, nil/zero in production: statFn substitutes the stat
+	// read and tickInterval overrides pollInterval (scripting deterministic
+	// change interleavings); afterEmit runs between an emission and the
+	// post-emission stat — the exact window where a racing edit would
+	// otherwise be silently absorbed into the baseline.
+	statFn       func(path string) (statSnapshot, bool)
+	tickInterval time.Duration
+	afterEmit    func()
+
 	mu       sync.Mutex
 	fsw      *fsnotify.Watcher
 	events   chan Event
@@ -117,9 +126,18 @@ func (w *fsWatcher) startLocked(parent context.Context, fsw *fsnotify.Watcher) (
 
 	// Seed the poll fingerprint synchronously so an edit racing Watch's
 	// return cannot be absorbed into the baseline and missed by the ticker.
-	seed, seedOK := statSnapshotOf(w.path)
+	seed, seedOK := w.statFile()
 	go w.pump(ctx, seed, seedOK)
 	return out, nil
+}
+
+// statFile reads the watched file's poll fingerprint through statFn when a
+// test installed one, and through the real stat otherwise.
+func (w *fsWatcher) statFile() (statSnapshot, bool) {
+	if w.statFn != nil {
+		return w.statFn(w.path)
+	}
+	return statSnapshotOf(w.path)
 }
 
 // pump is the long-lived goroutine that converts fsnotify events on the
@@ -165,7 +183,11 @@ func (w *fsWatcher) pump(ctx context.Context, last statSnapshot, lastOK bool) {
 		}
 	}()
 
-	ticker := time.NewTicker(pollInterval)
+	interval := w.tickInterval
+	if interval <= 0 {
+		interval = pollInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -200,19 +222,28 @@ func (w *fsWatcher) pump(ctx context.Context, last statSnapshot, lastOK bool) {
 			// legitimate reload.
 			log.Warn("config watcher error", slog.Any("err", err))
 		case <-ticker.C:
-			cur, ok := statSnapshotOf(w.path)
+			cur, ok := w.statFile()
 			if ok != lastOK || cur != last {
 				last, lastOK = cur, ok
 				armDebounce()
 			}
 		case <-timerCh:
 			timerCh = nil
+			// Snapshot before reading so the baseline can only advance to
+			// a fingerprint whose content this emission actually read.
+			pre, preOK := w.statFile()
 			w.emitReload(ctx)
-			// Record the state that produced this emission so the next
-			// tick does not re-arm for a change the event path already
-			// handled.
-			if cur, ok := statSnapshotOf(w.path); ok {
-				last, lastOK = cur, ok
+			if w.afterEmit != nil {
+				w.afterEmit()
+			}
+			if post, postOK := w.statFile(); postOK != preOK || post != pre {
+				// The file changed while emitting. Leave the baseline at
+				// the last emitted state and re-arm: the newer version
+				// must be emitted too, never silently absorbed into the
+				// baseline.
+				armDebounce()
+			} else {
+				last, lastOK = pre, preOK
 			}
 		}
 	}
