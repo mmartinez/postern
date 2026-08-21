@@ -188,12 +188,10 @@ func TestWatcher_DebouncesRapidEdits(t *testing.T) {
 	events, err := w.Watch(ctx)
 	require.NoError(t, err)
 
-	// Three rapid in-place writes plus an atomic replace inside the
-	// debounce window. Under load the pump can lag the writer far enough
-	// that the debounce fires between individual saves (or mid-save, on a
-	// truncated file), so an emission may legally reflect an intermediate
-	// state; the watcher contract is convergence to the freshest state,
-	// not "first emission == last write".
+	// Under load the pump can lag the writer far enough that the debounce
+	// fires mid-burst or mid-save, so an emission may legally carry an
+	// intermediate state; the contract is convergence to the freshest
+	// state, not first-emission finality.
 	for range 3 {
 		require.NoError(t, os.WriteFile(path, []byte(watchedValidConfig), 0o600))
 	}
@@ -206,45 +204,6 @@ func TestWatcher_DebouncesRapidEdits(t *testing.T) {
 	require.NotEmpty(t, last.New.Rules, "final emission must carry the parsed rules")
 	require.Equal(t, "api.anthropic.com", last.New.Rules[0].Host,
 		"watcher must converge to the most recent write")
-}
-
-// TestWatcher_ConvergesAfterTornSave pins the recovery half of the debounce
-// contract. A save that stalls between truncate and write (editor or runner
-// descheduled mid-save) makes the debounce fire on an empty file; whatever
-// is emitted for that intermediate state must not wedge the watcher: once
-// the content lands it triggers a further emission, the watcher converges
-// to the completed save, and then goes quiet.
-func TestWatcher_ConvergesAfterTornSave(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(watchedValidConfig), 0o600))
-
-	w := config.NewWatcher(path)
-	t.Cleanup(func() { _ = w.Close() })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	events, err := w.Watch(ctx)
-	require.NoError(t, err)
-
-	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
-	require.NoError(t, err)
-	require.NoError(t, f.Truncate(0))
-	// Hold the file empty past the 100ms debounce window so the watcher
-	// necessarily observes the intermediate state before the content lands.
-	time.Sleep(150 * time.Millisecond)
-	_, err = f.WriteString(watchedSecondValidConfig)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	last, n := drainUntilSettled(t, events)
-	require.GreaterOrEqual(t, n, 1, "torn save followed by content must produce an emission")
-	require.NotNil(t, last.New, "final emission must carry a parsed config")
-	require.Equal(t, "api.anthropic.com", last.New.Rules[0].Host,
-		"watcher must converge to the completed save after observing a torn state")
 }
 
 func TestWatcher_ClosesCleanly(t *testing.T) {

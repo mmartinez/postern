@@ -242,3 +242,66 @@ rules:
 		t.Fatal("update landing across the emission boundary was lost")
 	}
 }
+
+// TestWatcher_TornSaveConvergesAfterMidSaveRead pins recovery after a torn
+// save, driven through the stat-poll seam so no wall-clock margin decides
+// whether the pump observes the intermediate state. The file sits
+// truncated until the content is written below, so every debounce fire in
+// between necessarily reads the torn state; whatever the emission policy
+// does with it, the watcher must converge to the completed save.
+func TestWatcher_TornSaveConvergesAfterMidSaveRead(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(internalValidConfig), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	fsw, err := fsnotify.NewWatcher() // no watches: the stat poll drives detection
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fsw.Close() })
+
+	w := &fsWatcher{path: path, tickInterval: 20 * time.Millisecond}
+	events, err := w.startLocked(ctx, fsw)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	require.NoError(t, os.Truncate(path, 0))
+	select {
+	case <-events:
+		// The intermediate state surfaced; fine either way.
+	case <-time.After(2 * time.Second):
+		// Multiple tick + debounce cycles have already elapsed against the
+		// empty file, so suppression instead of surfacing is acceptable.
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(internalSecondValidConfig)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	var last Event
+	n := 0
+	settled := false
+	deadline := time.After(5 * time.Second)
+	for !settled {
+		idle := time.After(500 * time.Millisecond)
+		select {
+		case ev := <-events:
+			last = ev
+			n++
+		case <-idle:
+			settled = true
+		case <-deadline:
+			t.Fatal("watcher never converged to the completed save after a torn save")
+		}
+	}
+	require.GreaterOrEqual(t, n, 1, "content landing after a torn save must produce an emission")
+	require.LessOrEqual(t, n, 6, "torn save produced runaway emissions: %d", n)
+	require.NotNil(t, last.New, "final emission must carry a parsed config")
+	require.Equal(t, "api.two.example", last.New.Rules[0].Host,
+		"watcher must converge to the completed save after reading a torn state")
+}
