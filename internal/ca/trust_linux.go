@@ -28,3 +28,15 @@ func defaultTrustDir() (string, error) {
 	}
 	return filepath.Join(home, ".local", "share", "ca-certificates"), nil
 }
+
+// installTrustAt on Linux is the anchor file drop: update-ca-certificates
+// --user picks up ~/.local/share/ca-certificates/postern.crt on its next run.
+func installTrustAt(dir string, certPEM []byte) (string, error) {
+	return writeAnchor(dir, certPEM)
+}
+
+// uninstallTrustAt on Linux removes the anchor file; the per-user updater
+// drops it from the trust bundle on its next run.
+func uninstallTrustAt(dir string) (string, error) {
+	return removeAnchor(dir)
+}
