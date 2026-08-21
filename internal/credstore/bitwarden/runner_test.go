@@ -63,7 +63,6 @@ func TestFakeRunner_ReturnsCannedOutput(t *testing.T) {
 }
 
 func TestExecRunner_CapturesStdoutOnSuccess(t *testing.T) {
-
 	r := &execRunner{bwsPath: writeScript(t, `echo hello`)}
 	out, err := r.run(context.Background(), nil, nil)
 	require.NoError(t, err)
@@ -71,7 +70,6 @@ func TestExecRunner_CapturesStdoutOnSuccess(t *testing.T) {
 }
 
 func TestExecRunner_MapsNonZeroExitToError(t *testing.T) {
-
 	r := &execRunner{bwsPath: writeScript(t, `exit 3`)}
 	out, err := r.run(context.Background(), nil, nil)
 	require.Error(t, err)
@@ -79,7 +77,6 @@ func TestExecRunner_MapsNonZeroExitToError(t *testing.T) {
 }
 
 func TestExecRunner_ForwardsArgsAndEnv(t *testing.T) {
-
 	// The script echoes its first arg and a sentinel env var so the test can
 	// assert both crossed the exec boundary intact.
 	r := &execRunner{bwsPath: writeScript(t, `echo "$1 $POSTERN_TEST_VAR"`)}
