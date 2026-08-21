@@ -75,7 +75,7 @@ agent                     postern (127.0.0.1:1701)                 upstream
 
 Tunnel lifetime: hijacked tunnels are activity-tracked, not deadline-bound.
 The reaper scans every 30s, so closure lands within the stated bound plus one scan.
-A connection that has moved fewer than 128 bytes of total progress is closed within roughly 30-60s of silence, and an established tunnel after roughly 10m of sustained two-way silence (any activity resets the timer, so live SSE streams are not cut).
+A connection that has moved fewer than 128 bytes of total progress is closed roughly 30-60s after acceptance regardless of any intervening activity, while an established tunnel is closed after roughly 10m without two-way traffic (activity resets that longer timer, so live SSE streams are not cut).
 Shutdown drains open tunnels within the remaining budget before force-closing whatever is still alive.
 
 If resolution or injection fails at step 3 or 4, postern **fails closed**: it
