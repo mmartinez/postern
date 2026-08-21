@@ -29,12 +29,12 @@ type Resolver interface {
 // Hook returns a goproxy PreUpstreamHandler that brokers credentials for
 // every outbound request that matches a rule in engine:
 //
-//  1. Match the request host (with any :port stripped) against the engine.
-//     No match defers to onNoMatch: passthrough (or the empty default)
-//     returns nil so goproxy forwards the request unmodified, while block
-//     returns a synthesized 502 so non-matching egress is denied — the
-//     allowlist-only containment an operator opts into with
-//     proxy.on_no_match: block.
+//  1. Match the request host (with any :port stripped and any RFC 3986
+//     §3.2.2 trailing dot canonicalized) against the engine. No match defers
+//     to onNoMatch: passthrough (or the empty default) returns nil so goproxy
+//     forwards the request unmodified, while block returns a synthesized 502
+//     so non-matching egress is denied — the allowlist-only containment an
+//     operator opts into with proxy.on_no_match: block.
 //  2. Refuse to broker over an insecure transport: a matched request whose
 //     scheme is not https (i.e. plain http forwarded through the proxy, not
 //     MITM-terminated TLS) fails closed before any resolve, so a credential
@@ -60,7 +60,7 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return func(req *http.Request) *http.Response {
-		host := stripPort(req.URL.Host)
+		host := canonicalHost(stripPort(req.URL.Host))
 		rule, ok := engine.Match(host)
 		if !ok {
 			if onNoMatch == config.OnNoMatchBlock {
@@ -304,7 +304,9 @@ func effectiveBodyCap(global, perRule int) int {
 
 // stripPort drops the optional :port suffix from an HTTP request URL host.
 // MITM'd HTTPS requests usually arrive as "api.example.com:443"; the broker
-// matches against bare hostnames.
+// matches against bare hostnames. Callers still apply canonicalHost to the
+// result: a trailing-dot FQDN ("api.example.com.:443") must match the same
+// rule as its bare spelling.
 func stripPort(hostport string) string {
 	if hostport == "" {
 		return ""

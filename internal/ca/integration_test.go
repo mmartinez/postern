@@ -1,9 +1,11 @@
 package ca_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -70,4 +72,61 @@ func TestMintedLeaf_VerifiesAgainstCAOverHTTPS(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", parsedURL.Hostname(),
 		"sanity check: httptest server bound to the IP we minted for")
+}
+
+// TestMintedLeaf_DottedSNI_PassesRealHandshake proves the MITM shape for a
+// trailing-dot CONNECT: the leaf Mint returns for the dotted SNI a Go client
+// actually sends ("example.com.", RFC 3986 §3.2.2) completes a real TLS
+// handshake against that same dotted ServerName. A leaf whose SAN carried
+// the dot would fail here — crypto/x509 trims the dot from the client's
+// name but not from certificate SANs.
+func TestMintedLeaf_DottedSNI_PassesRealHandshake(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	root, err := ca.Generate(now)
+	require.NoError(t, err)
+	minter, err := ca.NewMinter(root, 4, func() time.Time { return now })
+	require.NoError(t, err)
+
+	leaf, err := minter.Mint("example.com.")
+	require.NoError(t, err)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	type handshakeResult struct{ err error }
+	serverErr := make(chan handshakeResult, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			serverErr <- handshakeResult{err}
+			return
+		}
+		srv := tls.Server(conn, &tls.Config{
+			Certificates: []tls.Certificate{*leaf},
+			MinVersion:   tls.VersionTLS12,
+		})
+		serverErr <- handshakeResult{err: srv.HandshakeContext(context.Background())}
+	}()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(root.Cert)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	require.NoError(t, err)
+	client := tls.Client(conn, &tls.Config{
+		RootCAs:    pool,
+		ServerName: "example.com.",
+		MinVersion: tls.VersionTLS12,
+	})
+	require.NoError(t, client.HandshakeContext(context.Background()),
+		"leaf minted via dotted SNI must validate against the dotted ServerName")
+
+	select {
+	case res := <-serverErr:
+		require.NoError(t, res.err, "server-side handshake must also succeed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("server handshake did not complete")
+	}
 }

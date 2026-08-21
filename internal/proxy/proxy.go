@@ -156,10 +156,13 @@ func (p *Proxy) Handler() http.Handler { return p.server }
 // mitmTLSConfig builds the per-CONNECT TLS config factory that goproxy hands
 // the client. Each invocation mints (or cache-hits) a leaf for the requested
 // host via the postern Minter — goproxy's own TLSConfigFromCA is bypassed so
-// we keep a single source of truth for leaf shape.
+// we keep a single source of truth for leaf shape. The SNI is canonicalized
+// before Mint: crypto/x509 does not tolerate a trailing-dot SAN, so a leaf
+// minted under the dotted spelling would fail exactly the Go clients whose
+// dotted CONNECT it was minted for.
 func mitmTLSConfig(minter *ca.Minter) func(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
 	return func(host string, _ *goproxy.ProxyCtx) (*tls.Config, error) {
-		sni := stripPort(host)
+		sni := canonicalHost(stripPort(host))
 		leaf, err := minter.Mint(sni)
 		if err != nil {
 			return nil, fmt.Errorf("mint leaf for %s: %w", sni, err)
@@ -181,6 +184,18 @@ func stripPort(hostport string) string {
 		return hostport
 	}
 	return host
+}
+
+// canonicalHost normalizes a hostname for comparison by stripping exactly one
+// trailing dot — the RFC 3986 §3.2.2 fully-qualified spelling of the same
+// name. More than one trailing dot is left alone: that is a malformed name,
+// not an FQDN.
+//
+// This helper is deliberately duplicated in internal/broker and internal/ca:
+// the packages are decoupled by design (see the comment in handler.go), and
+// a one-line string op is not worth a new coupling point.
+func canonicalHost(host string) string {
+	return strings.TrimSuffix(host, ".")
 }
 
 // mutedLogger silences goproxy's internal stderr chatter. Its log lines

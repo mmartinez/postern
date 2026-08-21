@@ -11,6 +11,11 @@ import (
 // between the config schema and the broker's internal representation, so
 // adding a new InjectType requires updating both sides here.
 //
+// Each rule's Host pattern is canonicalized exactly once here (a single
+// RFC 3986 §3.2.2 trailing dot stripped), so Rule.Match compares
+// canonical-to-canonical with no per-call transformation. The validator
+// keeps accepting dotted literals; runtime normalizes.
+//
 // Validation (line-numbered, user-facing) is the config validator's job;
 // FromConfigRules trusts that the config has already passed validation
 // and only rejects values it cannot translate.
@@ -26,7 +31,7 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 			if err != nil {
 				return nil, fmt.Errorf("rules[%d] (%s): %w", i, src.Host, err)
 			}
-			out[i] = Rule{Host: src.Host, SecretRef: src.SecretRef, Injections: specs}
+			out[i] = Rule{Host: canonicalHost(src.Host), SecretRef: src.SecretRef, Injections: specs}
 			continue
 		}
 		t, err := injectTypeFromConfig(src.Inject.Type)
@@ -44,7 +49,7 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 			return nil, fmt.Errorf("rules[%d] (%s): %w", i, src.Host, err)
 		}
 		out[i] = Rule{
-			Host:      src.Host,
+			Host:      canonicalHost(src.Host),
 			SecretRef: src.SecretRef,
 			Injection: InjectSpec{
 				Type:         t,

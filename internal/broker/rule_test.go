@@ -11,6 +11,15 @@ import (
 // the TLS-wildcard convention: a single "*" matches exactly one DNS label
 // (no dots). Apex hosts do not match a glob — "*.example.com" excludes
 // "example.com" itself.
+//
+// Match is a pure canonical-to-canonical comparison: rule patterns are
+// canonicalized once at construction (FromConfigRules strips one trailing
+// dot), and request hosts are canonicalized exactly once at their entry
+// boundary (the proxy's CONNECT decision, the broker hook). Match itself
+// performs no host transformation — canonicalization must be
+// single-application, or a malformed double-dot authority survives one
+// strip at the boundary and a second strip inside Match and brokers after
+// all (the Greptile P1 on PR #73).
 func TestRuleMatch(t *testing.T) {
 	t.Parallel()
 
@@ -33,6 +42,15 @@ func TestRuleMatch(t *testing.T) {
 		{"glob mismatched suffix", "*.example.com", "example.org", false},
 		{"glob empty label rejected", "*.example.com", ".example.com", false},
 		{"glob case-insensitive", "*.GOOGLEAPIS.com", "Translate.googleapis.COM", true},
+
+		// RFC 3986 §3.2.2 trailing-dot forms are normalized before Match is
+		// reached, never inside it. A dotted host arriving here un-normalized
+		// must not match, and a double-dot host must never match anything:
+		// one boundary strip turns "api.example.com.." into "api.example.com.",
+		// which is a malformed name, not the brokered host.
+		{"dotted FQDN host does not match at Match level", "api.example.com", "api.example.com.", false},
+		{"wildcard does not match dotted host at Match level", "*.example.com", "api.example.com.", false},
+		{"double-dot host never matches", "api.example.com", "api.example.com..", false},
 	}
 
 	for _, tc := range cases {

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -75,11 +76,28 @@ func NewMinter(root *CA, capacity int, now func() time.Time) (*Minter, error) {
 	}, nil
 }
 
+// canonicalHost strips exactly one trailing dot so the RFC 3986 §3.2.2
+// fully-qualified spelling of a host ("example.com.") shares one cache entry
+// — and therefore one leaf — with its bare spelling. More than one trailing
+// dot is left alone: that is a malformed name, not an FQDN.
+//
+// This helper is deliberately duplicated in internal/broker and internal/proxy:
+// the packages are decoupled by design, and a one-line string op is not worth
+// a new coupling point.
+func canonicalHost(host string) string {
+	return strings.TrimSuffix(host, ".")
+}
+
 // Mint returns a TLS certificate valid for host, signed by the wrapped CA.
 // Repeated calls with the same host return the cached certificate (same
-// pointer) until LRU eviction. Hosts that parse as IP literals populate the
-// IPAddresses SAN; everything else populates DNSNames.
+// pointer) until LRU eviction; a host sent in its RFC 3986 §3.2.2
+// fully-qualified form ("example.com.") hits the same entry as its bare
+// spelling, and the minted SAN carries the bare name — crypto/x509's hostname
+// matching does not tolerate a dotted SAN. Hosts that parse as IP literals
+// populate the IPAddresses SAN; everything else populates DNSNames.
 func (m *Minter) Mint(host string) (*tls.Certificate, error) {
+	host = canonicalHost(host)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -184,6 +184,94 @@ func TestHook_StripsPortFromMatchHost(t *testing.T) {
 	}
 }
 
+// A host sent with one RFC 3986 §3.2.2 trailing dot is the fully-qualified
+// spelling of the same logical host: the hook canonicalizes its input once,
+// so the credential is injected exactly as for the bare spelling.
+func TestHook_TrailingDotHostStillBrokers(t *testing.T) {
+	t.Parallel()
+
+	res := &fakeResolver{value: "sk-secret"}
+	hook := newHookFixture(t, broker.Rule{
+		Host:      "api.anthropic.com",
+		SecretRef: "op://V/I/f",
+		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+	}, res)
+
+	req, _ := http.NewRequest(http.MethodGet, "https://api.anthropic.com.:443/v1/messages", http.NoBody)
+	resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
+
+	defer closeIfNonNil(t, resp)
+	if resp != nil {
+		t.Fatalf("hook returned response for dotted host: %+v, want nil (must broker)", resp)
+	}
+	if got := req.Header.Get("x-api-key"); got != "sk-secret" {
+		t.Fatalf("x-api-key = %q, want %q (dotted host must still broker)", got, "sk-secret")
+	}
+	if got := res.calls.Load(); got != 1 {
+		t.Fatalf("resolver.calls = %d, want 1", got)
+	}
+}
+
+// Canonicalization is single-application along the broker path: a malformed
+// double-dot authority survives the hook's one strip as "api.example.com.",
+// which matches no rule. It must therefore never be brokered — forwarded
+// untouched under passthrough with zero resolves, denied under block — no
+// matter how many boundaries the host crosses.
+func TestHook_DoubleDotHostNeverBrokers(t *testing.T) {
+	t.Parallel()
+
+	rule := broker.Rule{
+		Host:      "api.example.com",
+		SecretRef: "op://V/I/f",
+		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+	}
+
+	newReq := func() *http.Request {
+		req, err := http.NewRequest(http.MethodGet, "https://api.example.com..:443/v1/messages", http.NoBody)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		return req
+	}
+
+	t.Run("passthrough forwards untouched with zero injection", func(t *testing.T) {
+		t.Parallel()
+		res := &fakeResolver{value: "sk-secret"}
+		hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, nil)
+
+		req := newReq()
+		resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
+		defer closeIfNonNil(t, resp)
+		if resp != nil {
+			t.Fatalf("double-dot host under passthrough: want nil (forward untouched), got %+v", resp)
+		}
+		if got := res.calls.Load(); got != 0 {
+			t.Fatalf("resolver.calls = %d, want 0 (malformed host must never be brokered)", got)
+		}
+		if _, ok := req.Header["X-Api-Key"]; ok {
+			t.Fatalf("x-api-key injected for a malformed double-dot host")
+		}
+	})
+
+	t.Run("block denies at the hook", func(t *testing.T) {
+		t.Parallel()
+		res := &fakeResolver{value: "sk-secret"}
+		hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchBlock, 0, nil)
+
+		resp := hook(newReq()) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
+		defer closeIfNonNil(t, resp)
+		if resp == nil {
+			t.Fatalf("double-dot host under block: want non-nil 502, got nil")
+		}
+		if resp.StatusCode != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502", resp.StatusCode)
+		}
+		if got := res.calls.Load(); got != 0 {
+			t.Fatalf("resolver.calls = %d, want 0", got)
+		}
+	})
+}
+
 func TestHook_ResolverErrorReturns502(t *testing.T) {
 	t.Parallel()
 
