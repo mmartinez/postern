@@ -45,6 +45,13 @@ token:
 Never put the token value itself in the config or on a command line. The config
 names *where* the token lives, not the token.
 
+On macOS the OS-keychain step resolves against the **login Keychain**: the
+backend probe prefers the Keychain backend over every other store, so
+`source: keychain` (and the keychain step of `source: auto`) reads and writes
+the token there. On macOS the local CA that `postern ca install` anchors lives
+at `~/.postern/trust/ca.pem`; see [security.md](security.md) for the trust
+mechanics.
+
 ## `credstores`
 
 The multi-vendor form. Each entry names a vendor and how to get its token.

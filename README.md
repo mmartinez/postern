@@ -53,8 +53,8 @@ configured provider; adding a new provider is a single package. See
 
 > **Status:** early development. The proxy works end-to-end, and the release
 > pipeline (checksum-verified binaries, SBOMs, and a signed multi-arch container
-> image) publishes from the first tagged release (`v0.1.0`) onward. **Linux
-> amd64/arm64 only** — macOS and Windows are deferred until there is demand.
+> image) publishes from the first tagged release (`v0.1.0`) onward. **Linux and
+> macOS amd64/arm64** are supported; Windows is deferred until there is demand.
 
 ## Install
 
@@ -110,6 +110,10 @@ postern server            # run the proxy
 # in the agent's shell, wire HTTPS_PROXY + CA trust in one step:
 eval "$(postern bootstrap)"
 ```
+
+On macOS, `postern ca install` triggers an authorization prompt and trusts the
+CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes that
+trust setting and deletes the certificate from the keychain.
 
 `postern config validate` checks a config with line-numbered errors, and
 `postern rules list` shows the loaded rules (never the resolved credentials).
