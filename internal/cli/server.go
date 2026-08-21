@@ -120,7 +120,7 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 			// watching a non-existent default-path file would just log noise.
 			var reloadWG sync.WaitGroup
 			if bundle.engine != nil && bundle.cfgPath != "" {
-				watcher := config.NewWatcher(bundle.cfgPath)
+				watcher := config.NewWatcherWithLogger(bundle.cfgPath, logger)
 				events, werr := watcher.Watch(ctx)
 				if werr != nil {
 					logger.Warn("hot reload disabled",
