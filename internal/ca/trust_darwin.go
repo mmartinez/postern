@@ -121,13 +121,23 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	if err != nil {
 		return anchorPath, fmt.Errorf("resolve login keychain: %w", err)
 	}
+	// Ground truth for the rollback decision: was this exact certificate in
+	// the keychain before this run? Files can be stale (a manually deleted
+	// keychain entry leaves anchor/state behind), so presence is probed, not
+	// inferred. A probe failure degrades conservatively: the identity is
+	// treated as not pre-existing, so a later failure rolls the registration
+	// back instead of leaving possibly-new trust behind.
+	presentBefore, err := b.keychainHashes()
+	if err != nil {
+		presentBefore = nil
+	}
 	anchorPath, err = writeAnchor(location, certPEM)
 	if err != nil {
 		return anchorPath, err
 	}
 
 	fail := func(cause error, registered bool) (string, error) {
-		if rbErr := b.rollbackInstall(anchorPath, certPEM, hash, keychain, snap, registered); rbErr != nil {
+		if rbErr := b.rollbackInstall(anchorPath, hash, keychain, presentBefore, snap, registered); rbErr != nil {
 			return anchorPath, errors.Join(cause, rbErr)
 		}
 		return anchorPath, cause
@@ -176,19 +186,37 @@ func snapshotTrustFiles(anchorPath string) (trustFilesSnapshot, error) {
 	return snap, nil
 }
 
+// keychainHashes returns the SHA-256 hashes of every certificate the login
+// keychain currently holds under the postern common name. Unparseable
+// entries are skipped rather than fatal: the map is a presence probe, not an
+// inventory.
+func (b darwinTrust) keychainHashes() (map[string]bool, error) {
+	certs, err := b.findKeychainCerts()
+	if err != nil {
+		return nil, err
+	}
+	hashes := make(map[string]bool, len(certs))
+	for _, cert := range certs {
+		hash, err := certSHA256Hex(cert)
+		if err != nil {
+			continue
+		}
+		hashes[hash] = true
+	}
+	return hashes, nil
+}
+
 // rollbackInstall undoes every mutation a failed install made: the keychain
 // registration this run added and the on-disk anchor and state files. The
-// revocation is skipped when certPEM is the identity this host already had
-// installed before the attempt (identical anchor bytes or state hash): its
-// trust predates this run, and removing it would destroy the pre-existing
+// revocation is skipped when the exact certificate was already in the
+// keychain before the run (presentBefore, probed before any mutation): its
+// presence predates this run, and removing it would destroy the pre-existing
 // installation while the restored files still describe it as installed.
 // Best effort: every rollback failure is returned so it is surfaced
 // alongside the original error instead of silently swallowed.
-func (b darwinTrust) rollbackInstall(anchorPath string, certPEM []byte, hash, keychain string, snap trustFilesSnapshot, registered bool) error {
+func (b darwinTrust) rollbackInstall(anchorPath, hash, keychain string, presentBefore map[string]bool, snap trustFilesSnapshot, registered bool) error {
 	var errs []error
-	alreadyTrusted := (snap.anchorOK && bytes.Equal(snap.anchor, certPEM)) ||
-		(snap.stateOK && strings.TrimSpace(string(snap.state)) == hash)
-	if registered && !alreadyTrusted {
+	if registered && !presentBefore[hash] {
 		if _, err := b.run("remove-trusted-cert", anchorPath); err != nil {
 			errs = append(errs, fmt.Errorf("rollback revoke trust settings: %w", err))
 		}

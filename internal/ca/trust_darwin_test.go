@@ -99,14 +99,18 @@ func TestInstallTrustAt_ExecutesAddTrustedCert(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(home, ".postern", "trust", "ca.pem"), path)
 
-	require.Len(t, rec.calls, 1, "install must invoke security exactly once")
+	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	require.Len(t, rec.calls, 2, "install probes keychain presence, then registers trust")
+	require.Equal(t,
+		[]string{"find-certificate", "-a", "-c", caCommonName, "-p", keychain},
+		rec.calls[0])
 	require.Equal(t,
 		[]string{
 			"add-trusted-cert", "-r", "trustRoot",
-			"-k", filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
+			"-k", keychain,
 			path,
 		},
-		rec.calls[0])
+		rec.calls[1])
 
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -198,18 +202,17 @@ func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "write trust state")
 
-	require.Len(t, rec.calls, 3, "register, then roll back revoke+delete")
+	require.Len(t, rec.calls, 4, "probe + register, then roll back revoke+delete")
 	require.Equal(t,
 		[]string{
 			"add-trusted-cert", "-r", "trustRoot",
 			"-k", keychain, anchor,
 		},
-		rec.calls[0])
-	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[1])
+		rec.calls[1])
+	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[2])
 	require.Equal(t,
 		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, newPEM), keychain},
-		rec.calls[2], "the newly registered generation must be rolled back")
-
+		rec.calls[3], "the newly registered generation must be rolled back")
 	got, readErr := os.ReadFile(anchor)
 	require.NoError(t, readErr)
 	require.Equal(t, prevPEM, got,
@@ -241,12 +244,22 @@ func TestInstallTrustAt_SameCARereinstallFailureKeepsTrust(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(trustDir, 0o700) })
 
 	rec := &securityRecorder{}
+	// The keychain probe must observe the certificate so the rollback skip
+	// is grounded in real pre-existing presence, not stale disk state.
+	rec.handle = func(args []string) ([]byte, error) {
+		if args[0] == "find-certificate" {
+			return certPEM, nil
+		}
+		return nil, nil
+	}
 	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "write trust state")
-
-	require.Len(t, rec.calls, 1, "no revoke/delete for an identity that was already trusted")
-	require.Equal(t, "add-trusted-cert", rec.calls[0][0])
+	require.Len(t, rec.calls, 2, "probe runs, but no revoke/delete for an identity already in the keychain")
+	require.Equal(t,
+		[]string{"find-certificate", "-a", "-c", caCommonName, "-p",
+			filepath.Join(home, "Library", "Keychains", "login.keychain-db")},
+		rec.calls[0])
+	require.Equal(t, "add-trusted-cert", rec.calls[1][0])
 
 	gotAnchor, readErr := os.ReadFile(anchor)
 	require.NoError(t, readErr)
@@ -303,14 +316,20 @@ func TestInstallTrustAt_DirectoryArgMatchesSharedContract(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(dir, "postern.crt"), path)
 
-	require.Len(t, rec.calls, 1)
+	require.Len(t, rec.calls, 2)
+	require.Equal(t,
+		[]string{
+			"find-certificate", "-a", "-c", caCommonName, "-p",
+			filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
+		},
+		rec.calls[0])
 	require.Equal(t,
 		[]string{
 			"add-trusted-cert", "-r", "trustRoot",
 			"-k", filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
 			path,
 		},
-		rec.calls[0])
+		rec.calls[1])
 
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)
