@@ -41,6 +41,17 @@ const (
 	// bytes within seconds, so a conn still under this total after
 	// stalledConnTimeout is stalled by definition; raw-tunnel peers and
 	// handshakes cross it immediately.
+	//
+	// The threshold is a heuristic, not a security boundary: any fixed byte
+	// count admits padding, so a hostile client can cross 128 bytes and
+	// then stall, landing in the 10m tier. This is accepted deliberately.
+	// A padded but VALID TLS ClientHello produces a genuinely established
+	// tunnel — the real upstream responds — and the activity-based 10m
+	// idle tier is the correct bound for it, matching standard L4-proxy
+	// idle semantics. Padded garbage is rejected by the upstream and the
+	// relay error closes the conn naturally. The threat model
+	// (docs/security.md) treats agents as local or LAN-scoped, and the
+	// per-conn cost stays bounded by the tier-2 ceiling either way.
 	minProgressBytes = 128
 )
 
