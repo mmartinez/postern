@@ -376,6 +376,11 @@ jobs:
               exit 1
             fi
           done
+          all_sboms=(dist/*.sbom.spdx.json)
+          if [ "${#all_sboms[@]}" -ne "${#archives[@]}" ]; then
+            echo "unexpected extra SBOMs: found ${#all_sboms[@]}, expected ${#archives[@]}" >&2
+            exit 1
+          fi
       - name: verify release image (uid 65532, entrypoint, no baked token)
         run: |
           amd64="$(docker images --filter=reference='ghcr.io/mmartinez/postern:*-amd64' --format '{{.Repository}}:{{.Tag}}' | head -1)"
