@@ -98,6 +98,12 @@ func uninstallTrustAt(location string) ([]string, error) {
 //
 // The user-authentication dialog add-trusted-cert triggers is expected;
 // per-user trust settings deliberately avoid sudo.
+//
+// A failure after add-trusted-cert succeeded (the only such step is the
+// state-file write) rolls the registration back — remove-trusted-cert plus
+// delete-certificate — so a reported install failure never leaves the
+// certificate trusted, and a failed reinstall never leaves a stale state
+// hash that could later misdirect lost-anchor recovery.
 func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	anchorPath, err := writeAnchor(location, certPEM)
 	if err != nil {
@@ -107,17 +113,34 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	if err != nil {
 		return anchorPath, err
 	}
+	hash, err := certSHA256Hex(certPEM)
+	if err != nil {
+		return anchorPath, fmt.Errorf("digest trust anchor: %w", err)
+	}
 	if _, err := b.run("add-trusted-cert", "-r", "trustRoot", "-k", keychain, anchorPath); err != nil {
 		return anchorPath, fmt.Errorf("register trust anchor: %w", err)
 	}
-	hash, err := certSHA256Hex(certPEM)
-	if err != nil {
-		return anchorPath, err
-	}
 	if err := writeStateFile(anchorStatePath(anchorPath), hash); err != nil {
-		return anchorPath, err
+		if rbErr := b.rollbackRegistration(anchorPath, hash, keychain); rbErr != nil {
+			return anchorPath, errors.Join(fmt.Errorf("write trust state: %w", err), rbErr)
+		}
+		return anchorPath, fmt.Errorf("write trust state: %w", err)
 	}
 	return anchorPath, nil
+}
+
+// rollbackRegistration undoes a completed add-trusted-cert after a later
+// install step failed. Best effort: any rollback failure is returned so it
+// is surfaced alongside the original error instead of silently swallowed.
+func (b darwinTrust) rollbackRegistration(anchorPath, hash, keychain string) error {
+	var errs []error
+	if _, err := b.run("remove-trusted-cert", anchorPath); err != nil {
+		errs = append(errs, fmt.Errorf("rollback revoke trust settings: %w", err))
+	}
+	if _, err := b.run("delete-certificate", "-Z", hash, keychain); err != nil {
+		errs = append(errs, fmt.Errorf("rollback delete keychain certificate: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // uninstall revokes the CA's user trust settings (security

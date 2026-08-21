@@ -138,6 +138,39 @@ func TestInstallTrustAt_PersistsSha256StateFile(t *testing.T) {
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
+// TestInstallTrustAt_StateWriteFailureRollsBackTrust pins the rollback: when
+// add-trusted-cert has already registered the certificate but persisting the
+// SHA-256 state fails, install must undo the registration instead of
+// reporting a failed install that actually left the CA trusted.
+func TestInstallTrustAt_StateWriteFailureRollsBackTrust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	certPEM := darwinFixtureCA(t)
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(anchor), 0o700))
+	// Occupy the state path with a directory so the atomic rename inside
+	// writeStateFile fails after the trust registration already succeeded.
+	require.NoError(t, os.Mkdir(filepath.Join(home, ".postern", "trust", "ca.sha256"), 0o700))
+
+	rec := &securityRecorder{}
+	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "write trust state")
+
+	require.Len(t, rec.calls, 3, "register, then roll back revoke+delete")
+	require.Equal(t,
+		[]string{
+			"add-trusted-cert", "-r", "trustRoot",
+			"-k", keychain, anchor,
+		},
+		rec.calls[0])
+	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[1])
+	require.Equal(t,
+		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
+		rec.calls[2])
+}
+
 // TestInstallTrustAt_DirectoryArgMatchesSharedContract pins the half of the
 // dispatch contract the platform-independent suites rely on: a directory
 // argument yields <dir>/postern.crt, byte-identical contents, mode 0644, and
