@@ -127,7 +127,7 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	}
 
 	fail := func(cause error, registered bool) (string, error) {
-		if rbErr := b.rollbackInstall(anchorPath, hash, keychain, snap, registered); rbErr != nil {
+		if rbErr := b.rollbackInstall(anchorPath, certPEM, hash, keychain, snap, registered); rbErr != nil {
 			return anchorPath, errors.Join(cause, rbErr)
 		}
 		return anchorPath, cause
@@ -176,13 +176,19 @@ func snapshotTrustFiles(anchorPath string) (trustFilesSnapshot, error) {
 	return snap, nil
 }
 
-// rollbackInstall undoes every mutation a failed install made: the completed
-// keychain registration (when registered is true) and the on-disk anchor and
-// state files. Best effort: every rollback failure is returned so it is
-// surfaced alongside the original error instead of silently swallowed.
-func (b darwinTrust) rollbackInstall(anchorPath, hash, keychain string, snap trustFilesSnapshot, registered bool) error {
+// rollbackInstall undoes every mutation a failed install made: the keychain
+// registration this run added and the on-disk anchor and state files. The
+// revocation is skipped when certPEM is the identity this host already had
+// installed before the attempt (identical anchor bytes or state hash): its
+// trust predates this run, and removing it would destroy the pre-existing
+// installation while the restored files still describe it as installed.
+// Best effort: every rollback failure is returned so it is surfaced
+// alongside the original error instead of silently swallowed.
+func (b darwinTrust) rollbackInstall(anchorPath string, certPEM []byte, hash, keychain string, snap trustFilesSnapshot, registered bool) error {
 	var errs []error
-	if registered {
+	alreadyTrusted := (snap.anchorOK && bytes.Equal(snap.anchor, certPEM)) ||
+		(snap.stateOK && strings.TrimSpace(string(snap.state)) == hash)
+	if registered && !alreadyTrusted {
 		if _, err := b.run("remove-trusted-cert", anchorPath); err != nil {
 			errs = append(errs, fmt.Errorf("rollback revoke trust settings: %w", err))
 		}

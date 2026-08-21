@@ -220,6 +220,42 @@ func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
 		"the previous state hash must survive the failed reinstall")
 }
 
+// TestInstallTrustAt_SameCARereinstallFailureKeepsTrust pins the reinstall
+// edge: when the failed install is a re-run for the certificate this host
+// ALREADY has installed, the rollback must not revoke or delete it. Its
+// trust predates the run, and removing it while the restored files still
+// describe it as installed would leave the host untrusted but reporting
+// installed.
+func TestInstallTrustAt_SameCARereinstallFailureKeepsTrust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	certPEM := darwinFixtureCA(t)
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+	statePath := filepath.Join(home, ".postern", "trust", "ca.sha256")
+	trustDir := filepath.Dir(anchor)
+	require.NoError(t, os.MkdirAll(trustDir, 0o700))
+	require.NoError(t, writeFileMode(anchor, certPEM, 0o644))
+	hash := pemSHA256Hex(t, certPEM)
+	require.NoError(t, writeFileMode(statePath, []byte(hash), 0o600))
+	require.NoError(t, os.Chmod(trustDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(trustDir, 0o700) })
+
+	rec := &securityRecorder{}
+	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "write trust state")
+
+	require.Len(t, rec.calls, 1, "no revoke/delete for an identity that was already trusted")
+	require.Equal(t, "add-trusted-cert", rec.calls[0][0])
+
+	gotAnchor, readErr := os.ReadFile(anchor)
+	require.NoError(t, readErr)
+	require.Equal(t, certPEM, gotAnchor)
+	gotState, readErr := os.ReadFile(statePath)
+	require.NoError(t, readErr)
+	require.Equal(t, hash, strings.TrimSpace(string(gotState)))
+}
+
 // TestRestoreTrustFiles_RestoresContents unit-tests the file half of the
 // snapshot/restore pair, including the branch that writes previous state
 // content back rather than deleting it.
