@@ -201,3 +201,50 @@ func TestWatcher_ClosesCleanly(t *testing.T) {
 		t.Fatal("events channel did not close within 1s of Close()")
 	}
 }
+
+// TestWatcher_RecoversAfterWatchDeath covers the silent-death failure mode:
+// fsnotify removes a parent-directory watch without emitting any error when
+// the directory itself is deleted or replaced (IN_IGNORED / IN_DELETE_SELF).
+// The watcher keeps looking healthy but no events ever arrive again. The
+// stat-poll fallback must notice the next edit and still fire a reload.
+func TestWatcher_RecoversAfterWatchDeath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(watchedValidConfig), 0o600))
+
+	w := config.NewWatcher(path)
+	t.Cleanup(func() { _ = w.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	events, err := w.Watch(ctx)
+	require.NoError(t, err)
+
+	// Replace the watched directory out from under the watcher. The
+	// inotify watch dies silently; nothing is delivered afterwards.
+	require.NoError(t, os.RemoveAll(dir))
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	writeAtomic(t, path, []byte(watchedSecondValidConfig))
+
+	// Bound: one poll interval to notice, plus the debounce window, plus
+	// scheduler slack. A tick landing inside the delete/recreate window can
+	// surface a transient missing-file lint first, so drain until the real
+	// reload arrives.
+	deadline := time.After(8 * time.Second) // one poll interval (5s) + debounce (100ms) + slack
+	for {
+		select {
+		case ev := <-events:
+			if ev.New == nil {
+				continue // transient unreadable-file lint; keep waiting
+			}
+			require.Len(t, ev.New.Rules, 1)
+			require.Equal(t, "api.anthropic.com", ev.New.Rules[0].Host)
+			return
+		case <-deadline:
+			t.Fatal("no reload event after watch death and edit")
+		}
+	}
+}
