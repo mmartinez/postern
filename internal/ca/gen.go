@@ -62,6 +62,11 @@ type CA struct {
 // and ca.Save use, without re-stating the "ca.pem" filename.
 func CertPath(dir string) string { return filepath.Join(dir, caCertFile) }
 
+// caCommonName is the subject common name every postern CA carries. The
+// macOS trust backend matches it when recovering a lost anchor from the
+// login keychain, so it must stay in sync with Generate's subject below.
+const caCommonName = "Postern Local CA"
+
 // Generate produces a fresh ECDSA P-256 self-signed CA whose validity window
 // runs from now to now + 10 years. The CA is returned in memory only; call
 // Save to persist it.
@@ -79,7 +84,7 @@ func Generate(now time.Time) (*CA, error) {
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "Postern Local CA",
+			CommonName:   caCommonName,
 			Organization: []string{"Postern"},
 		},
 		NotBefore:             now,
