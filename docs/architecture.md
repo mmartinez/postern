@@ -46,13 +46,18 @@ agent                     postern (127.0.0.1:1701)                 upstream
    the postern CA for hosts it actually brokers. (When no broker is configured
    at all, postern falls back to intercepting every host.)
    Inner requests on an intercepted tunnel are bound to the CONNECT
-   authority; a decrypted request naming any other host fails closed with a 502.
+   authority; a decrypted request naming any other authority (host and port)
+   fails closed with a 502.
 
 2. **Match.** For an intercepted host the decrypted request's host (with any
    `:port` stripped) is matched against the YAML-declared rules — first match
    wins. Host patterns are either a literal hostname or a single-`*` glob
-   (`*.example.com`, matching one label like a TLS wildcard). A host that
-   matches no rule is tunneled at `CONNECT` without decryption (the default
+   (`*.example.com`, matching one label like a TLS wildcard). A single
+   trailing dot is stripped from the wire host and from the rule pattern
+   alike, exactly once, so a dotted FQDN decides identically to its bare
+   form; a malformed multi-dot authority matches nothing and falls through
+   to the configured `passthrough`/`block` policy. A host that matches no
+   rule is tunneled at `CONNECT` without decryption (the default
    `passthrough` behavior); `block` rejects the `CONNECT` instead.
 
 3. **Resolve.** The matched rule's `secret_ref` (e.g. `op://Vault/Item/field`)
@@ -67,6 +72,9 @@ agent                     postern (127.0.0.1:1701)                 upstream
 5. **Forward.** Postern forwards the now-authenticated request and streams the
    response back to the agent without buffering, so server-sent events and other
    incremental responses arrive as they are produced.
+
+Tunnel lifetime: hijacked tunnels are activity-tracked, not deadline-bound. A connection that has moved fewer than 128 bytes of total progress is closed after ~30s of silence, and an established tunnel after ~10m of sustained two-way silence (any activity resets the timer, so live SSE streams are not cut).
+Shutdown drains open tunnels within the remaining budget before force-closing whatever is still alive.
 
 If resolution or injection fails at step 3 or 4, postern **fails closed**: it
 returns a generic `502` to the agent and never contacts the upstream. See
@@ -97,9 +105,9 @@ any other private key.
 | `internal/credstore/onepassword` | Provider for 1Password Service Accounts (`op://`), backed by the 1Password Go SDK. Registered by default. |
 | `internal/credstore/bitwarden` | Provider for Bitwarden Secrets Manager (`bw://`), shelling out to the `bws` CLI. Registered by default. |
 | `internal/credstore/oauth2` | Provider that mints short-lived bearer tokens (`oauth2://`) via `golang.org/x/oauth2` (client-credentials / refresh-token grants). Registered by default. |
-| `internal/config` | YAML schema, strict-mode loader, line-numbered validator, and the fsnotify-backed hot-reload watcher. |
+| `internal/config` | YAML schema, strict-mode loader, line-numbered validator, and the fsnotify-backed hot-reload watcher with a 5s stat-poll fallback that survives silent watch death (watcher errors are logged at Warn). |
 | `internal/token` | Service-account token resolution chain (file → env → keychain) and the OS-keychain-backed store. |
-| `internal/runtime` | Assembles the proxy listener, wires the broker hook, and owns graceful shutdown. |
+| `internal/runtime` | Assembles the proxy listener, wires the broker hook, and owns graceful shutdown, connection tracking, and tunnel reaping. |
 | `internal/cli` | Cobra commands: `config`, `token`, `ca`, `server`, `rules`, `bootstrap`. |
 | `internal/logging` | slog factory (text/JSON, level, color) and the per-request summary handler. |
 

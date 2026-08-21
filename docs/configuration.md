@@ -89,6 +89,8 @@ proxy:
 | `on_no_match` | no | What to do with a `CONNECT` to a host that matches no rule. `passthrough` (default) tunnels the connection untouched — postern does **not** terminate TLS, so the agent reaches the real upstream with the real certificate and only needs to trust the postern CA for brokered hosts. `block` rejects the `CONNECT` with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). See [security.md](security.md#egress-containment-with-on_no_match). |
 | `max_body_bytes` | no | Cap (in bytes) on how much of a request body postern buffers when a rule rewrites the body (`inject.in` includes `body`). Default 1 MiB when unset or `0`. A larger body is rejected with `413 Request Entity Too Large` and never reaches the upstream. Bound at startup; a hot-reload edit warns and does not take effect (a per-rule `inject.max_body_bytes` override does hot-reload). |
 
+The timeout budget around the proxy itself is fixed constants, not YAML options: outbound dial 10s, TCP keep-alive 30s, upstream TLS handshake 10s, response-header wait 30s, and idle pooled upstream connections reaped after 90s; on the inbound side, idle keep-alive connections are closed after 2m and request headers must arrive within 30s.
+
 ### `proxy.cache`
 
 Credential resolution is a background concern: the request/inject path reads
@@ -143,7 +145,7 @@ rules:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `host` | yes* | A literal hostname (`api.example.com`) or a single-`*` glob (`*.example.com`, matching exactly one label). **Do not use a wildcard on a multi-tenant or shared-suffix domain** (e.g. `*.s3.amazonaws.com`, `*.blob.core.windows.net`): any host an attacker can register under that suffix would also match the rule and receive the injected credential. Reserve wildcards for single-tenant domains you control. |
+| `host` | yes* | A literal hostname (`api.example.com`) or a single-`*` glob (`*.example.com`, matching exactly one label). A trailing-dot literal (`api.example.com.`) is accepted and normalized once at load; a malformed multi-dot host on the wire matches no rule and falls through to `on_no_match`. **Do not use a wildcard on a multi-tenant or shared-suffix domain** (e.g. `*.s3.amazonaws.com`, `*.blob.core.windows.net`): any host an attacker can register under that suffix would also match the rule and receive the injected credential. Reserve wildcards for single-tenant domains you control. |
 | `secret_ref` | yes | A `<scheme>://<rest>` URI the matching provider resolves (e.g. `op://VAULT/ITEM/FIELD`). Omit when using `routes` (each route carries its own). |
 | `inject` | yes* | How to attach the resolved credential — see below. |
 | `injects` | no | Several header injections fed by the rule's one `secret_ref`, for a host that authenticates the same credential through two different headers. Mutually exclusive with `inject`, `routes`, and `template`; see below. |
