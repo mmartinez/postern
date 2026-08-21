@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/elazarl/goproxy"
 
@@ -123,6 +124,11 @@ func New(cfg Config) (*Proxy, error) {
 			// TLS fingerprint. postern never decrypts what it does not broker.
 			return goproxy.OkConnect, host
 		default:
+			// Bind every inner request on this tunnel to the CONNECT
+			// authority: goproxy copies ctx.UserData onto each MITM'd
+			// request's fresh ProxyCtx, where the inner-request guard
+			// uses it to reject anything naming another host.
+			ctx.UserData = strings.ToLower(stripPort(host))
 			return &goproxy.ConnectAction{
 				Action:    goproxy.ConnectMitm,
 				TLSConfig: tlsConfig,
@@ -130,6 +136,10 @@ func New(cfg Config) (*Proxy, error) {
 		}
 	}))
 
+	// Registered before the logging/pre-upstream handlers so a malformed
+	// or non-brokered inner request is rejected before anything
+	// dereferences req.URL.
+	installInnerGuard(gp, cfg.Logger)
 	installHandlers(gp, cfg.Logger)
 	installPreUpstream(gp, cfg.Logger, cfg.PreUpstreamHandler)
 

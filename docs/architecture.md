@@ -45,6 +45,8 @@ agent                     postern (127.0.0.1:1701)                 upstream
    reaches the real upstream with the real certificate and only needs to trust
    the postern CA for hosts it actually brokers. (When no broker is configured
    at all, postern falls back to intercepting every host.)
+   Inner requests on an intercepted tunnel are bound to the CONNECT
+   authority; a decrypted request naming any other host fails closed with a 502.
 
 2. **Match.** For an intercepted host the decrypted request's host (with any
    `:port` stripped) is matched against the YAML-declared rules — first match
