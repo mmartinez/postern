@@ -37,8 +37,9 @@ func TestInstallAndUninstallTrust_UsesXDGUserDir(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, c.CertPEM, got)
 
-	_, err = ca.UninstallTrust()
+	_, revoked, err := ca.UninstallTrust()
 	require.NoError(t, err)
+	require.Empty(t, revoked)
 	_, statErr := os.Stat(path)
 	require.True(t, os.IsNotExist(statErr))
 }

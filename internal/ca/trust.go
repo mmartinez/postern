@@ -45,12 +45,17 @@ func InstallTrustAt(dir string, certPEM []byte) (string, error) {
 }
 
 // UninstallTrustAt revokes platform trust for the CA anchored under location
-// and removes the persisted anchor, returning its path. Idempotent: a
-// missing anchor is a success no-op, and on macOS a missing anchor with the
-// certificate still in the login keychain is recovered from the keychain so
-// revocation never silently depends on the file surviving.
-func UninstallTrustAt(dir string) (string, error) {
-	return uninstallTrustAt(dir)
+// and removes the persisted anchor, returning the anchor path plus the
+// SHA-256 hashes (of DER) of every trusted certificate actually revoked.
+// The hash list is empty when there was nothing to revoke. Idempotent: a
+// missing anchor is not automatically a no-op — on macOS a missing anchor
+// with the certificate still in the login keychain is recovered from the
+// keychain (exact-hash match against the persisted state file, falling back
+// to every common-name match) so revocation never silently depends on the
+// file surviving or narrows to the wrong generation.
+func UninstallTrustAt(dir string) (anchor string, revoked []string, err error) {
+	revoked, err = uninstallTrustAt(dir)
+	return resolveAnchorPath(dir), revoked, err
 }
 
 // writeAnchor is the shared file-drop half of trust installation: resolve
@@ -114,11 +119,12 @@ func InstallTrust(certPEM []byte) (string, error) {
 }
 
 // UninstallTrust revokes platform trust for the CA at the OS-specific default
-// trust location and removes it, returning the (former) path on success.
-func UninstallTrust() (string, error) {
+// trust location and removes it, returning the (former) path and the hashes
+// of every revoked trusted certificate.
+func UninstallTrust() (anchor string, revoked []string, err error) {
 	dir, err := defaultTrustDir()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	return UninstallTrustAt(dir)
 }

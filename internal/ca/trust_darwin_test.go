@@ -70,6 +70,16 @@ func securityNotFoundErr(t *testing.T, args []string) error {
 		"SecKeychainSearchCopyNext: The specified item could not be found in the keychain.")
 }
 
+// pemSHA256Hex returns the SHA-256 (of DER) of a PEM-encoded certificate,
+// the value persisted in the state file and matched by delete-certificate -Z.
+func pemSHA256Hex(t *testing.T, certPEM []byte) string {
+	t.Helper()
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block)
+	sum := sha256.Sum256(block.Bytes)
+	return hex.EncodeToString(sum[:])
+}
+
 func TestDefaultTrustDir_PemUnderPosternConfigDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -106,10 +116,34 @@ func TestInstallTrustAt_ExecutesAddTrustedCert(t *testing.T) {
 	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 }
 
+// TestInstallTrustAt_PersistsSha256StateFile pins the install half of the
+// P1 fix: the SHA-256 (of DER) of the registered certificate is persisted
+// next to the anchor, 0600, so a later uninstall can disambiguate keychain
+// generations by hash when the anchor PEM is lost.
+func TestInstallTrustAt_PersistsSha256StateFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	rec := &securityRecorder{}
+	certPEM := darwinFixtureCA(t)
+
+	_, err := darwinTrust{run: rec.run}.install(filepath.Join(home, ".postern", "trust", "ca.pem"), certPEM)
+	require.NoError(t, err)
+
+	statePath := filepath.Join(home, ".postern", "trust", "ca.sha256")
+	got, err := os.ReadFile(statePath)
+	require.NoError(t, err, "install must persist the certificate hash for later uninstall")
+	require.Equal(t, pemSHA256Hex(t, certPEM), strings.TrimSpace(string(got)))
+	info, err := os.Stat(statePath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
 // TestInstallTrustAt_DirectoryArgMatchesSharedContract pins the half of the
 // dispatch contract the platform-independent suites rely on: a directory
 // argument yields <dir>/postern.crt, byte-identical contents, mode 0644, and
-// the derived path (not the raw argument) handed to security(1).
+// the derived path (not the raw argument) handed to security(1). The
+// sibling SHA-256 state file follows the same derivation
+// (postern.crt -> postern.sha256).
 func TestInstallTrustAt_DirectoryArgMatchesSharedContract(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -136,6 +170,9 @@ func TestInstallTrustAt_DirectoryArgMatchesSharedContract(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+	stateGot, err := os.ReadFile(filepath.Join(dir, "postern.sha256"))
+	require.NoError(t, err)
+	require.Equal(t, pemSHA256Hex(t, certPEM), strings.TrimSpace(string(stateGot)))
 }
 
 func TestUninstallTrustAt_RevokesTrustAndDeletesKeychainCert(t *testing.T) {
@@ -145,27 +182,26 @@ func TestUninstallTrustAt_RevokesTrustAndDeletesKeychainCert(t *testing.T) {
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
 	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 
-	installRec := &securityRecorder{}
-	_, err := darwinTrust{run: installRec.run}.install(anchor, certPEM)
+	seedRec := &securityRecorder{}
+	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
 	require.NoError(t, err)
 	rec := &securityRecorder{}
 
-	path, err := darwinTrust{run: rec.run}.uninstall(anchor)
+	revoked, err := darwinTrust{run: rec.run}.uninstall(anchor)
 	require.NoError(t, err)
-	require.Equal(t, anchor, path)
 
+	hash := pemSHA256Hex(t, certPEM)
+	require.Equal(t, []string{hash}, revoked, "the revoked certificate's hash must be reported")
 	require.Len(t, rec.calls, 2, "uninstall must both revoke trust and delete the keychain cert")
 	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[0])
-
-	block, _ := pem.Decode(certPEM)
-	require.NotNil(t, block)
-	sum := sha256.Sum256(block.Bytes)
 	require.Equal(t,
-		[]string{"delete-certificate", "-Z", hex.EncodeToString(sum[:]), keychain},
+		[]string{"delete-certificate", "-Z", hash, keychain},
 		rec.calls[1])
 
 	_, statErr := os.Stat(anchor)
 	require.True(t, os.IsNotExist(statErr), "anchor pem should be gone after uninstall")
+	_, statErr = os.Stat(filepath.Join(home, ".postern", "trust", "ca.sha256"))
+	require.True(t, os.IsNotExist(statErr), "state file should be gone after uninstall")
 }
 
 // TestUninstallTrustAt_AnchorMissingRecoversFromKeychain covers the security
@@ -180,6 +216,12 @@ func TestUninstallTrustAt_AnchorMissingRecoversFromKeychain(t *testing.T) {
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
 	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 
+	// A prior install persisted the state file; only the PEM was lost.
+	seedRec := &securityRecorder{}
+	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(anchor))
+
 	rec := &securityRecorder{}
 	var revokedPem string
 	rec.handle = func(args []string) ([]byte, error) {
@@ -193,24 +235,20 @@ func TestUninstallTrustAt_AnchorMissingRecoversFromKeychain(t *testing.T) {
 		return nil, nil
 	}
 
-	path, err := darwinTrust{run: rec.run}.uninstall(anchor)
+	revoked, err := darwinTrust{run: rec.run}.uninstall(anchor)
 	require.NoError(t, err)
-	require.Equal(t, anchor, path)
+	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked)
 
 	require.Len(t, rec.calls, 3, "recovery must probe, revoke trust, then delete from keychain")
 	require.Equal(t,
-		[]string{"find-certificate", "-c", caCommonName, "-p", keychain},
+		[]string{"find-certificate", "-a", "-c", caCommonName, "-p", keychain},
 		rec.calls[0])
 	require.NotEqual(t, anchor, revokedPem, "revocation must use the recovered copy, not the missing anchor")
 	require.True(t, strings.HasSuffix(revokedPem, ".pem"), "recovered anchor must be materialized as a PEM file")
 	_, statErr := os.Stat(revokedPem)
 	require.True(t, os.IsNotExist(statErr), "recovered temp copy must be cleaned up")
-
-	block, _ := pem.Decode(certPEM)
-	require.NotNil(t, block)
-	sum := sha256.Sum256(block.Bytes)
 	require.Equal(t,
-		[]string{"delete-certificate", "-Z", hex.EncodeToString(sum[:]), keychain},
+		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
 		rec.calls[2])
 }
 
@@ -226,11 +264,107 @@ func TestUninstallTrustAt_AnchorMissingCertAbsentIsNoOp(t *testing.T) {
 		return nil, securityNotFoundErr(t, args)
 	}
 
-	path, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
+	revoked, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
 	require.NoError(t, err, "uninstall must be idempotent")
-	require.Equal(t, filepath.Join(home, ".postern", "trust", "ca.pem"), path)
+	require.Empty(t, revoked, "nothing was revoked")
 	require.Len(t, rec.calls, 1, "only the keychain probe may run")
 	require.Equal(t, "find-certificate", rec.calls[0][0], "no revocation without a located certificate")
+}
+
+// TestUninstallTrustAt_StateHashSelectsCorrectGeneration pins the P1 fix:
+// regeneration leaves older, still-trusted Postern CAs in the login
+// keychain, all sharing the common name. With the anchor PEM lost, uninstall
+// must pick the generation recorded in the state file by exact SHA-256, not
+// whichever common-name match the keychain returns first.
+func TestUninstallTrustAt_StateHashSelectsCorrectGeneration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stalePEM := darwinFixtureCA(t) // earlier generation, still trusted
+	certPEM := darwinFixtureCA(t)  // installed generation: distinct key + serial
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+
+	seedRec := &securityRecorder{}
+	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(anchor), "simulate the lost anchor PEM")
+
+	rec := &securityRecorder{}
+	var revokedPemContent []byte
+	rec.handle = func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			blob := append(append([]byte{}, stalePEM...), certPEM...)
+			return blob, nil // find-certificate -a output: every generation
+		case "remove-trusted-cert":
+			revokedPemContent, _ = os.ReadFile(args[1])
+			return nil, nil
+		}
+		return nil, nil
+	}
+
+	revoked, err := darwinTrust{run: rec.run}.uninstall(anchor)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked,
+		"exactly the installed generation must be revoked")
+	require.Len(t, rec.calls, 3)
+	require.Equal(t,
+		[]string{"find-certificate", "-a", "-c", caCommonName, "-p", keychain},
+		rec.calls[0])
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block)
+	require.Equal(t, string(pem.EncodeToMemory(block)), string(revokedPemContent),
+		"revocation must target the state-hash match, not the stale generation")
+	require.Equal(t,
+		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
+		rec.calls[2])
+	require.NotContains(t, rec.calls[2], pemSHA256Hex(t, stalePEM),
+		"the stale generation's hash must never be deleted via name-only recovery")
+}
+
+// TestUninstallTrustAt_NoStateRevokesAllMatches covers resolution path 3:
+// with neither anchor nor state file, uninstall fails wide — revoking every
+// common-name match — and reports each revoked hash.
+func TestUninstallTrustAt_NoStateRevokesAllMatches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pemA := darwinFixtureCA(t)
+	pemB := darwinFixtureCA(t)
+	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+
+	rec := &securityRecorder{}
+	var revokedPems []string
+	rec.handle = func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			return append(append([]byte{}, pemA...), pemB...), nil
+		case "remove-trusted-cert":
+			content, _ := os.ReadFile(args[1])
+			revokedPems = append(revokedPems, string(content))
+			return nil, nil
+		}
+		return nil, nil
+	}
+
+	revoked, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{pemSHA256Hex(t, pemA), pemSHA256Hex(t, pemB)}, revoked,
+		"every common-name match must be reported as revoked")
+
+	require.Len(t, rec.calls, 5, "probe plus revoke+delete per matched certificate")
+	canonical := func(certPEM []byte) string {
+		block, _ := pem.Decode(certPEM)
+		require.NotNil(t, block)
+		return string(pem.EncodeToMemory(block))
+	}
+	require.ElementsMatch(t, []string{canonical(pemA), canonical(pemB)}, revokedPems)
+	require.ElementsMatch(t,
+		[][]string{
+			{"delete-certificate", "-Z", pemSHA256Hex(t, pemA), keychain},
+			{"delete-certificate", "-Z", pemSHA256Hex(t, pemB), keychain},
+		},
+		[][]string{rec.calls[1], rec.calls[3]})
 }
 
 // TestUninstallTrustAt_KeychainProbeFailureSurfacesError ensures a real

@@ -36,7 +36,9 @@ func installTrustAt(dir string, certPEM []byte) (string, error) {
 }
 
 // uninstallTrustAt on Linux removes the anchor file; the per-user updater
-// drops it from the trust bundle on its next run.
-func uninstallTrustAt(dir string) (string, error) {
-	return removeAnchor(dir)
+// drops it from the trust bundle on its next run. There is no keychain-style
+// registration to revoke, so no hashes are ever reported.
+func uninstallTrustAt(dir string) ([]string, error) {
+	_, err := removeAnchor(dir)
+	return nil, err
 }
