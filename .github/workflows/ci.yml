@@ -317,13 +317,26 @@ jobs:
           # Expected archive set derived from the goreleaser config
           # (name_template x goos/goarch matrix), so adding targets there
           # (e.g. darwin) updates this assertion with no edit.
+          #
+          # Single-host runs emit only their own GOOS: every builds[] entry
+          # carries a host-GOOS skip template
+          # (`{{ eq/ne .Runtime.Goos ... }}`, see .goreleaser.yaml), so an
+          # ubuntu run emits just the linux archives and a macos run just
+          # the darwin ones. Filter the matrix to the running host GOOS to
+          # mirror that. This job runs per-GOOS on a runner matrix unchanged
+          # if it ever splits that way.
+          host_goos=$(go env GOOS)
           ext=$(grep -m1 'formats:' "$cfg" | sed -E 's/.*\[(.*)\].*/\1/')
           tmpl=$(awk '/^    name_template:/{sub(/^    name_template: */,"");gsub(/"/,"");print;exit}' "$cfg")
+          # sort -u: each builds[] entry repeats the goos/goarch lists, and
+          # all archives share one name_template, so the archive set is the
+          # deduped (os, arch) cross product, not the per-build concatenation.
           matrix() {
-            awk -v k="$1" '$0 ~ "^    " k ":" {on=1;next} on && /^      - /{sub(/^      - */,"");print;next} on{on=0}' "$cfg"
+            awk -v k="$1" '$0 ~ "^    " k ":" {on=1;next} on && /^      - /{sub(/^      - */,"");print;next} on{on=0}' "$cfg" | sort -u
           }
           archives=()
           for goos in $(matrix goos); do
+            [ "$goos" = "$host_goos" ] || continue
             for goarch in $(matrix goarch); do
               pat=$tmpl
               pat=${pat//'{{ .Version }}'/*}
@@ -332,6 +345,10 @@ jobs:
               archives+=("${pat}.${ext}")
             done
           done
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "no expected archives for host GOOS $host_goos; check matrix/skip templates" >&2
+            exit 1
+          fi
 
           # nullglob + array counting: an unmatched glob yields zero entries
           # instead of aborting under set -e before our own error message.
