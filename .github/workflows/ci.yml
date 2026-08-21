@@ -90,6 +90,14 @@ jobs:
       # though no Bitwarden tests run in the default suite.
       - run: go build -tags bitwarden ./...
       - run: go vet -tags bitwarden ./...
+      # Cross-compile gate for non-linux targets: CI runners are ubuntu-only,
+      # so darwin-only files (internal/ca/trust_darwin.go et al) would never
+      # be compiled by the steps above. CGO_ENABLED=0 keeps this a pure
+      # typecheck; full cgo-on-SDK darwin builds are exercised by the release
+      # pipeline's macos runner (landing in a sibling PR).
+      - run: |
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./...
 
   test:
     name: test
@@ -106,6 +114,21 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+  # Native macOS unit run: catches darwin-only failures (internal/ca trust
+  # store) that the ubuntu cross-compile gate cannot see. The cgo-dependent
+  # keyring e2e stays linux-gated (token-keyring-e2e); those tests sit behind
+  # a build tag and self-skip here.
+  test-macos:
+    name: test (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race ./...
 
   vuln:
     name: vuln
@@ -280,12 +303,15 @@ jobs:
           # --skip=sign: PRs have no OIDC token / cosign; the image still builds
           # so the verify step below runs. Signing is exercised by release.yml.
           args: release --snapshot --clean --skip=sign
-      - name: assert release artifacts (2 archives, checksums, 2 SBOMs)
+      - name: assert release artifacts (>= 2 archives, checksums, >= 2 SBOMs)
         run: |
           set -euo pipefail
           ls -la dist/*.tar.gz dist/checksums.txt dist/*.sbom.spdx.json
-          test "$(ls dist/*.tar.gz | wc -l)" -eq 2
-          test "$(ls dist/*.sbom.spdx.json | wc -l)" -eq 2
+          # >= rather than ==: darwin build targets landing in a sibling PR
+          # grow the archive/SBOM count. Still fails on zero/missing artifacts:
+          # under set -e, ls of an unmatched glob aborts the step.
+          test "$(ls dist/*.tar.gz | wc -l)" -ge 2
+          test "$(ls dist/*.sbom.spdx.json | wc -l)" -ge 2
       - name: verify release image (uid 65532, entrypoint, no baked token)
         run: |
           amd64="$(docker images --filter=reference='ghcr.io/mmartinez/postern:*-amd64' --format '{{.Repository}}:{{.Tag}}' | head -1)"
