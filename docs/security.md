@@ -100,9 +100,23 @@ When a token must be referenced in human-facing output, it is masked to a
 
 **Local CA.** `postern ca install` generates a CA at `~/.postern/ca.{pem,key}`
 (`0600` files under a `0700` directory) and adds the certificate to the system
-trust store. `postern ca uninstall [--purge]` reverses it. The CA private key
-never leaves the machine and is used only to mint short-lived per-host leaf
+trust store. On macOS it instead anchors the certificate at
+`~/.postern/trust/ca.pem` and records a **user-domain** trust setting in your
+login keychain via `/usr/bin/security add-trusted-cert`: per-user, not
+system-wide, which is why no `sudo` is required (the authorization prompt the
+command triggers is expected). System-wide (admin-domain) trust is a deliberate
+follow-up, not current behavior. `postern ca uninstall [--purge]` reverses it:
+on macOS that revokes the user trust setting (`security remove-trusted-cert`),
+deletes the certificate from the login keychain
+(`security delete-certificate -Z`), and removes the anchor PEM. The CA private
+key never leaves the machine and is used only to mint short-lived per-host leaf
 certificates at request time.
+
+**`SSL_CERT_FILE` and GUI clients.** `postern bootstrap` prints an
+`SSL_CERT_FILE` export unconditionally. On macOS that variable is honored by Go
+programs and OpenSSL-linked CLIs (such as `curl`), but GUI apps and browsers
+ignore it: an agent that is a browser or other GUI client needs the keychain
+trust installed by `postern ca install` instead.
 
 **Service-account token.** Postern obtains the credential vendor's
 service-account token through a resolution chain. With `source: auto` it tries,
