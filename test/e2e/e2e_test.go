@@ -25,7 +25,7 @@ func TestHTTPSBrokeredInjection(t *testing.T) {
 	e := newEnv(t)
 	idp := startIdP(t, e)
 	up := startUpstream(t, e)
-	proc := startPostern(t, e, renderConfig(freePort(t), idp.URL, "127.0.0.1", "passthrough"))
+	proc := startPostern(t, e, renderConfig(idp.URL, "127.0.0.1", "passthrough"))
 	client := proxiedClient(t, proc.proxyURL, e.caPEM)
 
 	target := fmt.Sprintf("https://127.0.0.1:%s/", up.port)
@@ -69,7 +69,7 @@ func TestPlainHTTPInjectionFailsClosed(t *testing.T) {
 	e := newEnv(t)
 	idp := startIdP(t, e)
 	up := startUpstream(t, e)
-	proc := startPostern(t, e, renderConfig(freePort(t), idp.URL, "127.0.0.1", "passthrough"))
+	proc := startPostern(t, e, renderConfig(idp.URL, "127.0.0.1", "passthrough"))
 	client := proxiedClient(t, proc.proxyURL, e.caPEM)
 
 	target := fmt.Sprintf("http://127.0.0.1:%s/", up.port)
@@ -97,7 +97,7 @@ func TestFailClosedOnResolverFailure(t *testing.T) {
 	e := newEnv(t)
 	idp := startIdP(t, e)
 	up := startUpstream(t, e)
-	proc := startPostern(t, e, renderConfig(freePort(t), idp.URL, "127.0.0.1", "passthrough"))
+	proc := startPostern(t, e, renderConfig(idp.URL, "127.0.0.1", "passthrough"))
 	client := proxiedClient(t, proc.proxyURL, e.caPEM)
 
 	idp.srv.Close() // token URL now points at a closed port
@@ -117,7 +117,7 @@ func TestHotReloadSwapsRuleHost(t *testing.T) {
 	e := newEnv(t)
 	idp := startIdP(t, e)
 	up := startUpstream(t, e)
-	proc := startPostern(t, e, renderConfig(freePort(t), idp.URL, "localhost", "block"))
+	proc := startPostern(t, e, renderConfig(idp.URL, "localhost", "block"))
 	client := proxiedClient(t, proc.proxyURL, e.caPEM)
 
 	oldURL := fmt.Sprintf("https://localhost:%s/", up.port)
@@ -133,7 +133,7 @@ func TestHotReloadSwapsRuleHost(t *testing.T) {
 	baselineReqs := up.Requests()
 
 	// Swap the rule's host; credstores stay identical so the reload applies.
-	proc.rewriteConfig(t, renderConfig(freePort(t), idp.URL, "127.0.0.1", "block"))
+	proc.rewriteConfig(t, renderConfig(idp.URL, "127.0.0.1", "block"))
 
 	// Poll within the watcher's poll interval + debounce window until the
 	// new host brokers. During the transition the old ruleset still serves,
@@ -146,7 +146,10 @@ func TestHotReloadSwapsRuleHost(t *testing.T) {
 			swapped = true
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		// 10ms poll cadence against a 10s cap; the watcher's stat-poll
+		// fallback runs on a 5s interval, so no fixed delay coordinates us
+		// with the server — each attempt observes current ruleset state.
+		time.Sleep(10 * time.Millisecond)
 	}
 	require.True(t, swapped, "new host never brokered after reload\nlogs:\n%s", proc.logs.String())
 

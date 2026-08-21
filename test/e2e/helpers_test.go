@@ -32,8 +32,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// listenRe extracts the port from the config's `listen: 127.0.0.1:<port>`.
-var listenRe = regexp.MustCompile(`(?m)^\s*listen:\s*127\.0\.0\.1:(\d+)\s*$`)
+// boundAddrRe extracts the actual bound address from the server's
+// "proxy listening" log line. Test configs declare `listen: 127.0.0.1:0`
+// so the OS assigns the port at bind time (no allocate-then-close race);
+// the real address is only observable here.
+var boundAddrRe = regexp.MustCompile(`proxy listening addr=(\S+)`)
 
 const clientSecretEnv = "POSTERN_E2E_CLIENT_SECRET"
 
@@ -250,9 +253,11 @@ func (u *upstreamStub) Hosts() []string {
 	return append([]string(nil), u.hosts...)
 }
 
-// renderConfig writes the YAML config for one scenario. ruleHost is the
-// brokered host; onNoMatch is "passthrough" or "block".
-func renderConfig(listenPort int, tokenURL, ruleHost, onNoMatch string) []byte {
+// renderConfig writes the YAML config for one scenario. The proxy listens
+// on 127.0.0.1:0 so the OS assigns the port at bind time; the tests read
+// the actual address from the server's log (see boundAddrRe). ruleHost is
+// the brokered host; onNoMatch is "passthrough" or "block".
+func renderConfig(tokenURL, ruleHost, onNoMatch string) []byte {
 	return []byte(fmt.Sprintf(`credstores:
   - name: e2e-idp
     provider: oauth2
@@ -266,7 +271,7 @@ func renderConfig(listenPort int, tokenURL, ruleHost, onNoMatch string) []byte {
 
 proxy:
   cache_ttl: 30s
-  listen: 127.0.0.1:%d
+  listen: 127.0.0.1:0
   on_no_match: %s
 
 rules:
@@ -276,7 +281,7 @@ rules:
       type: header
       name: authorization
       template: "Bearer {{ CREDENTIAL }}"
-`, clientSecretEnv, tokenURL, listenPort, onNoMatch, ruleHost))
+`, clientSecretEnv, tokenURL, onNoMatch, ruleHost))
 }
 
 // posternProc is one running `postern server` subprocess.
@@ -297,11 +302,6 @@ type posternProc struct {
 func startPostern(t *testing.T, e *env, cfg []byte) *posternProc {
 	t.Helper()
 
-	// The listen address comes from the config the caller rendered; derive
-	// the readiness address from it so client and server agree on the port.
-	m := listenRe.FindSubmatch(cfg)
-	require.NotNil(t, m, "config must declare proxy.listen: 127.0.0.1:<port>")
-	addr := "127.0.0.1:" + string(m[1])
 	cfgPath := filepath.Join(e.home, "config.yaml")
 	require.NoError(t, os.WriteFile(cfgPath, cfg, 0o600))
 
@@ -318,12 +318,10 @@ func startPostern(t *testing.T, e *env, cfg []byte) *posternProc {
 	cmd.Stderr = logs
 
 	p := &posternProc{
-		cfgPath:  cfgPath,
-		addr:     addr,
-		proxyURL: "http://" + addr,
-		logs:     logs,
-		done:     make(chan struct{}),
-		cmd:      cmd,
+		cfgPath: cfgPath,
+		logs:    logs,
+		done:    make(chan struct{}),
+		cmd:     cmd,
 	}
 	require.NoError(t, cmd.Start())
 	go func() {
@@ -338,6 +336,9 @@ func startPostern(t *testing.T, e *env, cfg []byte) *posternProc {
 	return p
 }
 
+// waitReady polls the subprocess log for the bound listener address and
+// confirms it accepts connections. Polls every 10ms against a generous
+// deadline; no fixed startup delay.
 func waitReady(t *testing.T, p *posternProc) {
 	t.Helper()
 
@@ -348,14 +349,18 @@ func waitReady(t *testing.T, p *posternProc) {
 			t.Fatalf("postern exited during startup: %v\nlogs:\n%s", p.waitResult(), p.logs.String())
 		default:
 		}
-		conn, err := net.DialTimeout("tcp", p.addr, 250*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return
+		if m := boundAddrRe.FindStringSubmatch(p.logs.String()); m != nil {
+			p.addr = m[1]
+			p.proxyURL = "http://" + p.addr
+			conn, err := net.DialTimeout("tcp", p.addr, 250*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				return
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("postern not listening on %s within %v\nlogs:\n%s", p.addr, readyTimeout, p.logs.String())
+	t.Fatalf("postern not listening within %v\nlogs:\n%s", readyTimeout, p.logs.String())
 }
 
 func (p *posternProc) stop() {
@@ -414,16 +419,6 @@ func proxiedClient(t *testing.T, proxyURL string, caPEM []byte) *http.Client {
 		},
 		Timeout: 15 * time.Second,
 	}
-}
-
-func freePort(t *testing.T) int {
-	t.Helper()
-
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := l.Addr().(*net.TCPAddr).Port
-	require.NoError(t, l.Close())
-	return port
 }
 
 // get performs a GET through the client and returns status + body.
