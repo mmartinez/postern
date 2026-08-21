@@ -85,12 +85,12 @@ func uninstallTrustAt(location string) ([]string, error) {
 	return darwinTrust{run: osSecurity}.uninstall(location)
 }
 
-// install persists the anchor PEM at the resolved anchor path, marks it as a
-// trusted root in the user trust domain via
+// install persists the anchor PEM at the resolved anchor path, records the
+// certificate's SHA-256 (of DER) in a sibling state file, and only then
+// marks it as a trusted root in the user trust domain via
 //
 //	security add-trusted-cert -r trustRoot -k <login keychain> <pem>
 //
-// and records the certificate's SHA-256 (of DER) in a sibling state file.
 // The state file is the identity record uninstall falls back to when the
 // anchor PEM is lost: the common name is shared by every generation of the
 // CA, so the hash is what disambiguates the right certificate in a keychain
@@ -99,14 +99,15 @@ func uninstallTrustAt(location string) ([]string, error) {
 // The user-authentication dialog add-trusted-cert triggers is expected;
 // per-user trust settings deliberately avoid sudo.
 //
-// Install is atomic on failure: the previous anchor PEM and state file are
-// snapshotted before anything is mutated, and any failure after that point
-// restores the exact pre-install pairing and (when add-trusted-cert already
-// completed) revokes the registration. A failed install therefore never
-// leaves a trusted certificate, and a failed reinstall never leaves the new
-// anchor paired with the previous hash — a mismatch that would later send
-// anchor-present uninstall at an already-rolled-back certificate while the
-// previously installed generation stayed trusted.
+// Ordering is the failure story: every fallible step but the last one only
+// touches files. The previous anchor PEM and state file are snapshotted
+// first (an unreadable file aborts before any mutation — rollback could not
+// faithfully restore content it never read), and any failure before
+// registration restores the exact pre-install pairing. add-trusted-cert runs
+// last: when it succeeds there is nothing left to fail, and when it fails no
+// trust was established, so a reported install failure never leaves the
+// certificate trusted and never leaves a new anchor paired with the previous
+// hash.
 func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	anchorPath := resolveAnchorPath(location)
 	snap, err := snapshotTrustFiles(anchorPath)
@@ -121,34 +122,24 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	if err != nil {
 		return anchorPath, fmt.Errorf("resolve login keychain: %w", err)
 	}
-	// Ground truth for the rollback decision: was this exact certificate in
-	// the keychain before this run? Files can be stale (a manually deleted
-	// keychain entry leaves anchor/state behind), so presence is probed, not
-	// inferred. An unanswerable probe aborts the install before any
-	// mutation: guessing either way corrupts state on failure — skipping
-	// rollback could leave new trust behind, running it could destroy
-	// pre-existing trust.
-	presentBefore, err := b.keychainHashes()
-	if err != nil {
-		return anchorPath, fmt.Errorf("probe login keychain: %w", err)
-	}
-	anchorPath, err = writeAnchor(location, certPEM)
-	if err != nil {
-		return anchorPath, err
-	}
-
-	fail := func(cause error, registered bool) (string, error) {
-		if rbErr := b.rollbackInstall(anchorPath, hash, keychain, presentBefore, snap, registered); rbErr != nil {
+	fail := func(cause error) (string, error) {
+		if rbErr := restoreTrustFiles(snap, anchorPath); rbErr != nil {
 			return anchorPath, errors.Join(cause, rbErr)
 		}
 		return anchorPath, cause
 	}
 
-	if _, err := b.run("add-trusted-cert", "-r", "trustRoot", "-k", keychain, anchorPath); err != nil {
-		return fail(fmt.Errorf("register trust anchor: %w", err), false)
+	anchorPath, err = writeAnchor(location, certPEM)
+	if err != nil {
+		// writeAnchor can fail after truncating the anchor (os.WriteFile then
+		// chmod), so even this first write goes through the restore path.
+		return fail(fmt.Errorf("write trust anchor: %w", err))
 	}
 	if err := writeStateFile(anchorStatePath(anchorPath), hash); err != nil {
-		return fail(fmt.Errorf("write trust state: %w", err), true)
+		return fail(fmt.Errorf("write trust state: %w", err))
+	}
+	if _, err := b.run("add-trusted-cert", "-r", "trustRoot", "-k", keychain, anchorPath); err != nil {
+		return fail(fmt.Errorf("register trust anchor: %w", err))
 	}
 	return anchorPath, nil
 }
@@ -185,50 +176,6 @@ func snapshotTrustFiles(anchorPath string) (trustFilesSnapshot, error) {
 		return snap, fmt.Errorf("snapshot trust state: %w", err)
 	}
 	return snap, nil
-}
-
-// keychainHashes returns the SHA-256 hashes of every certificate the login
-// keychain currently holds under the postern common name. Unparseable
-// entries are skipped rather than fatal: the map is a presence probe, not an
-// inventory.
-func (b darwinTrust) keychainHashes() (map[string]bool, error) {
-	certs, err := b.findKeychainCerts()
-	if err != nil {
-		return nil, err
-	}
-	hashes := make(map[string]bool, len(certs))
-	for _, cert := range certs {
-		hash, err := certSHA256Hex(cert)
-		if err != nil {
-			continue
-		}
-		hashes[hash] = true
-	}
-	return hashes, nil
-}
-
-// rollbackInstall undoes every mutation a failed install made: the keychain
-// registration this run added and the on-disk anchor and state files. The
-// revocation is skipped when the exact certificate was already in the
-// keychain before the run (presentBefore, probed before any mutation): its
-// presence predates this run, and removing it would destroy the pre-existing
-// installation while the restored files still describe it as installed.
-// Best effort: every rollback failure is returned so it is surfaced
-// alongside the original error instead of silently swallowed.
-func (b darwinTrust) rollbackInstall(anchorPath, hash, keychain string, presentBefore map[string]bool, snap trustFilesSnapshot, registered bool) error {
-	var errs []error
-	if registered && !presentBefore[hash] {
-		if _, err := b.run("remove-trusted-cert", anchorPath); err != nil {
-			errs = append(errs, fmt.Errorf("rollback revoke trust settings: %w", err))
-		}
-		if _, err := b.run("delete-certificate", "-Z", hash, keychain); err != nil {
-			errs = append(errs, fmt.Errorf("rollback delete keychain certificate: %w", err))
-		}
-	}
-	if err := restoreTrustFiles(snap, anchorPath); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
 }
 
 // restoreTrustFiles puts the anchor and state files back to their pre-install

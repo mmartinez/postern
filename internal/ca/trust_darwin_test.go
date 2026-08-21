@@ -99,18 +99,14 @@ func TestInstallTrustAt_ExecutesAddTrustedCert(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(home, ".postern", "trust", "ca.pem"), path)
 
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
-	require.Len(t, rec.calls, 2, "install probes keychain presence, then registers trust")
-	require.Equal(t,
-		[]string{"find-certificate", "-a", "-c", caCommonName, "-p", keychain},
-		rec.calls[0])
+	require.Len(t, rec.calls, 1, "install must invoke security exactly once")
 	require.Equal(t,
 		[]string{
 			"add-trusted-cert", "-r", "trustRoot",
-			"-k", keychain,
+			"-k", filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
 			path,
 		},
-		rec.calls[1])
+		rec.calls[0])
 
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -171,13 +167,11 @@ func TestInstallTrustAt_UnreadableStateAbortsBeforeMutation(t *testing.T) {
 }
 
 // TestInstallTrustAt_FailedReinstallRestoresPreviousPairing covers the
-// failed-reinstall regression: registration succeeds but persisting the new
-// state hash fails (unwritable trust dir; the existing anchor file itself
-// stays writable), so install rolls back the registration and restores the
-// PREVIOUS anchor and state pairing. Otherwise the new anchor would be left
-// paired with the old hash and a later uninstall would target the
-// already-rolled-back certificate while the previous generation stayed
-// trusted.
+// failed-reinstall regression: the state-file write fails before any
+// keychain mutation (registration is intentionally last), so install must
+// restore the PREVIOUS anchor and state pairing and never have touched the
+// keychain. Otherwise a new anchor could be left paired with the old hash
+// and a later uninstall would target the wrong certificate.
 func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -185,15 +179,14 @@ func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
 	newPEM := darwinFixtureCA(t)
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
 	statePath := filepath.Join(home, ".postern", "trust", "ca.sha256")
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 	trustDir := filepath.Dir(anchor)
 	require.NoError(t, os.MkdirAll(trustDir, 0o700))
 	require.NoError(t, writeFileMode(anchor, prevPEM, 0o644))
 	prevHash := pemSHA256Hex(t, prevPEM)
 	require.NoError(t, writeFileMode(statePath, []byte(prevHash), 0o600))
 	// The anchor FILE stays writable, but no new temp file can be created in
-	// a directory without the write bit, failing the state write after
-	// add-trusted-cert already succeeded.
+	// a directory without the write bit, failing the state write before
+	// add-trusted-cert ever runs.
 	require.NoError(t, os.Chmod(trustDir, 0o500))
 	t.Cleanup(func() { _ = os.Chmod(trustDir, 0o700) })
 
@@ -201,18 +194,9 @@ func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
 	_, err := darwinTrust{run: rec.run}.install(anchor, newPEM)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "write trust state")
+	require.Empty(t, rec.calls,
+		"no keychain command may run when file persistence fails first")
 
-	require.Len(t, rec.calls, 4, "probe + register, then roll back revoke+delete")
-	require.Equal(t,
-		[]string{
-			"add-trusted-cert", "-r", "trustRoot",
-			"-k", keychain, anchor,
-		},
-		rec.calls[1])
-	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[2])
-	require.Equal(t,
-		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, newPEM), keychain},
-		rec.calls[3], "the newly registered generation must be rolled back")
 	got, readErr := os.ReadFile(anchor)
 	require.NoError(t, readErr)
 	require.Equal(t, prevPEM, got,
@@ -223,13 +207,11 @@ func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
 		"the previous state hash must survive the failed reinstall")
 }
 
-// TestInstallTrustAt_SameCARereinstallFailureKeepsTrust pins the reinstall
-// edge: when the failed install is a re-run for the certificate this host
-// ALREADY has installed, the rollback must not revoke or delete it. Its
-// trust predates the run, and removing it while the restored files still
-// describe it as installed would leave the host untrusted but reporting
-// installed.
-func TestInstallTrustAt_SameCARereinstallFailureKeepsTrust(t *testing.T) {
+// TestInstallTrustAt_SameCARereinstallFailureKeepsFilesIntact pins the same
+// guarantee for a re-run over the identical certificate: the failed install
+// leaves both files byte-identical and the keychain untouched, so the
+// pre-existing installation survives a failed reinstall.
+func TestInstallTrustAt_SameCARereinstallFailureKeepsFilesIntact(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	certPEM := darwinFixtureCA(t)
@@ -244,24 +226,9 @@ func TestInstallTrustAt_SameCARereinstallFailureKeepsTrust(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(trustDir, 0o700) })
 
 	rec := &securityRecorder{}
-	// The keychain probe must observe the certificate so the rollback skip
-	// is grounded in real pre-existing presence, not stale disk state.
-	rec.handle = func(args []string) ([]byte, error) {
-		if args[0] == "find-certificate" {
-			return certPEM, nil
-		}
-		return nil, nil
-	}
 	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
 	require.Error(t, err)
-	require.Len(t, rec.calls, 2, "probe runs, but no revoke/delete for an identity already in the keychain")
-	require.Equal(t,
-		[]string{
-			"find-certificate", "-a", "-c", caCommonName, "-p",
-			filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
-		},
-		rec.calls[0])
-	require.Equal(t, "add-trusted-cert", rec.calls[1][0])
+	require.Empty(t, rec.calls, "the keychain must not be touched for an already-installed CA")
 
 	gotAnchor, readErr := os.ReadFile(anchor)
 	require.NoError(t, readErr)
@@ -318,20 +285,14 @@ func TestInstallTrustAt_DirectoryArgMatchesSharedContract(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(dir, "postern.crt"), path)
 
-	require.Len(t, rec.calls, 2)
-	require.Equal(t,
-		[]string{
-			"find-certificate", "-a", "-c", caCommonName, "-p",
-			filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
-		},
-		rec.calls[0])
+	require.Len(t, rec.calls, 1)
 	require.Equal(t,
 		[]string{
 			"add-trusted-cert", "-r", "trustRoot",
 			"-k", filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
 			path,
 		},
-		rec.calls[1])
+		rec.calls[0])
 
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -572,27 +533,6 @@ func TestInstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
 	require.Contains(t, err.Error(), "exit status 44")
 	require.Contains(t, err.Error(), "SecTrustSettingsAddTrusted failed",
 		"security's stderr must be surfaced to the caller")
-}
-
-// TestInstallTrustAt_ProbeFailureAbortsBeforeMutation pins the probe
-// discipline: when keychain presence cannot be determined, install aborts
-// before touching anything. Guessing either way corrupts state on a later
-// failure: skipping rollback could leave new trust behind, running it could
-// destroy pre-existing trust.
-func TestInstallTrustAt_ProbeFailureAbortsBeforeMutation(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	rec := failingRunner(51, "SecKeychainSearchCopyNext failed\n")
-	certPEM := darwinFixtureCA(t)
-	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-
-	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "probe login keychain")
-	require.Len(t, rec.calls, 1, "only the failed probe may run")
-
-	_, statErr := os.Stat(anchor)
-	require.True(t, os.IsNotExist(statErr), "no anchor may be written when presence is unknown")
 }
 
 func TestUninstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
