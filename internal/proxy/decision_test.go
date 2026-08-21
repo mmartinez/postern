@@ -44,6 +44,24 @@ func TestDecideConnect(t *testing.T) {
 			want:             modeReject,
 		},
 		{
+			// RFC 3986 §3.2.2: "api.anthropic.com." is the fully-qualified
+			// spelling of "api.anthropic.com"; curl and Go's net/http both
+			// put the dotted authority on the wire verbatim. The decision
+			// boundary must canonicalize it or brokered hosts tunnel (or,
+			// under block, get rejected) on a syntactic difference.
+			name:            "trailing-dot FQDN target is intercepted",
+			host:            "api.anthropic.com.:443",
+			shouldIntercept: matchAnthropic,
+			want:            modeMITM,
+		},
+		{
+			name:             "double trailing dot is not canonicalized away",
+			host:             "api.anthropic.com..:443",
+			shouldIntercept:  matchAnthropic,
+			blockNonBrokered: true,
+			want:             modeReject,
+		},
+		{
 			name:            "nil shouldIntercept intercepts everything (back-compat)",
 			host:            "example.com:443",
 			shouldIntercept: nil,

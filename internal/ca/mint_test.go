@@ -141,6 +141,29 @@ func TestMint_CacheEvictsLRUEntry(t *testing.T) {
 	require.NotSame(t, a1, a2, "evicted entry should be re-minted, not returned from cache")
 }
 
+// A host sent with an RFC 3986 §3.2.2 trailing dot ("example.com.") is the
+// same logical host as its bare spelling: Mint must key both to one LRU
+// entry and mint one leaf whose SAN carries the bare name — crypto/x509's
+// hostname matching does not tolerate a dotted SAN, so a leaf minted under
+// the dotted spelling would fail exactly the Go clients whose CONNECT it
+// was minted for.
+func TestMint_TrailingDotSharesLeafAndSANIsBare(t *testing.T) {
+	t.Parallel()
+	_, m := newMinter(t, 4)
+
+	dotted, err := m.Mint("example.com.")
+	require.NoError(t, err)
+	bare, err := m.Mint("example.com")
+	require.NoError(t, err)
+	require.Same(t, dotted, bare, "dotted and bare spellings must share one cached leaf")
+
+	parsed, err := x509.ParseCertificate(dotted.Certificate[0])
+	require.NoError(t, err)
+	require.Contains(t, parsed.DNSNames, "example.com")
+	require.NotContains(t, parsed.DNSNames, "example.com.",
+		"a trailing-dot SAN would fail Go client hostname verification")
+}
+
 func TestNewMinter_RejectsNonPositiveCapacity(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

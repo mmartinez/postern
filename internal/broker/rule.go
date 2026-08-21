@@ -162,17 +162,33 @@ func (r Rule) usesBodySurface() bool {
 	return false
 }
 
+// canonicalHost normalizes a hostname for comparison by stripping exactly one
+// trailing dot — the RFC 3986 §3.2.2 fully-qualified spelling of the same
+// name, which curl and Go's net/http put on the wire verbatim. More than one
+// trailing dot is left alone: that is a malformed name, not an FQDN, and must
+// not silently match.
+//
+// This helper is deliberately duplicated in internal/proxy and internal/ca:
+// the packages are decoupled by design (the broker must not import the proxy
+// package, and neither may import ca's callers), and a one-line string op is
+// not worth a new coupling point.
+func canonicalHost(host string) string {
+	return strings.TrimSuffix(host, ".")
+}
+
 // Match reports whether the rule's host pattern matches host. Comparison is
-// case-insensitive (DNS hostnames are case-insensitive per RFC 4343). The
-// glob form follows TLS-wildcard semantics: "*" matches exactly one DNS
-// label and never crosses a dot, so "*.example.com" matches
-// "api.example.com" but neither "example.com" nor "a.b.example.com".
+// case-insensitive (DNS hostnames are case-insensitive per RFC 4343), and
+// canonicalHost is applied to both sides, so a rule and a request host agree
+// whether or not either carries the RFC 3986 §3.2.2 trailing dot. The glob
+// form follows TLS-wildcard semantics: "*" matches exactly one DNS label and
+// never crosses a dot, so "*.example.com" matches "api.example.com" but
+// neither "example.com" nor "a.b.example.com".
 //
 // host should be the bare hostname without a port. Callers that hold a
 // host:port value (e.g. CONNECT targets) must strip the port first.
 func (r Rule) Match(host string) bool {
-	pattern := strings.ToLower(r.Host)
-	h := strings.ToLower(host)
+	pattern := strings.ToLower(canonicalHost(r.Host))
+	h := strings.ToLower(canonicalHost(host))
 
 	if !strings.HasPrefix(pattern, "*.") {
 		return pattern == h

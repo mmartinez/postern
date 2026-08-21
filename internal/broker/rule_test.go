@@ -33,6 +33,17 @@ func TestRuleMatch(t *testing.T) {
 		{"glob mismatched suffix", "*.example.com", "example.org", false},
 		{"glob empty label rejected", "*.example.com", ".example.com", false},
 		{"glob case-insensitive", "*.GOOGLEAPIS.com", "Translate.googleapis.COM", true},
+
+		// RFC 3986 §3.2.2 lets a client send a host with one trailing dot
+		// ("api.example.com." is the fully-qualified spelling of
+		// "api.example.com"), and both curl and Go's net/http put the dotted
+		// authority on the wire verbatim. Match canonicalizes by stripping
+		// exactly one trailing dot from each side so the two spellings are
+		// the same host; more than one dot is a malformed name, not an FQDN.
+		{"literal matches trailing-dot FQDN host", "api.example.com", "api.example.com.", true},
+		{"literal pattern with trailing dot matches undotted host", "api.example.com.", "api.example.com", true},
+		{"wildcard matches trailing-dot FQDN", "*.example.com", "api.example.com.", true},
+		{"only one trailing dot is stripped", "api.example.com", "api.example.com..", false},
 	}
 
 	for _, tc := range cases {

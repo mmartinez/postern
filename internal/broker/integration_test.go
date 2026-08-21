@@ -287,6 +287,66 @@ func TestE2E_BrokerSignsOAuth1ThroughMITMProxy(t *testing.T) {
 	require.Equal(t, int64(1), upstreamHits.Load())
 }
 
+// TestE2E_BrokerInjectsForTrailingDotHost proves the dotted-FQDN form a real
+// client puts on the wire (RFC 3986 §3.2.2; both curl and Go's net/http
+// forward the authority verbatim) brokers end to end: the CONNECT authority
+// "localhost.:<port>" is intercepted, the hook matches the canonicalized
+// host, and the credential reaches the upstream. Without canonicalization
+// this request tunneled (or was blocked under on_no_match: block) despite
+// addressing the same logical host as the rule.
+func TestE2E_BrokerInjectsForTrailingDotHost(t *testing.T) {
+	t.Parallel()
+
+	var upstreamHits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		upstreamHits.Add(1)
+		if got := req.Header.Get("x-api-key"); got != "sk-from-resolver" {
+			t.Errorf("upstream saw x-api-key=%q, want %q", got, "sk-from-resolver")
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(upstream.Close)
+
+	root := fixtureCA(t)
+	minter := fixtureMinter(t, root)
+
+	// The rule is written bare while the client targets the dotted FQDN
+	// "localhost." — canonicalization is what makes the two meet.
+	engine := broker.NewEngine([]broker.Rule{{
+		Host:      "localhost",
+		SecretRef: "op://Agents/Anthropic/api_key",
+		Injection: broker.InjectSpec{
+			Type:     broker.InjectHeader,
+			Name:     "x-api-key",
+			Template: "{{ CREDENTIAL }}",
+		},
+	}})
+	res := &fakeResolver{value: "sk-from-resolver"}
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+
+	p, err := proxy.New(proxy.Config{
+		CA:                 root,
+		Minter:             minter,
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		UpstreamTLS:        upstreamTLS(t, upstream),
+		PreUpstreamHandler: hook,
+	})
+	require.NoError(t, err)
+
+	client := clientThroughProxy(t, startProxy(t, p), root)
+	// Same upstream listener, addressed by the dotted FQDN: Go forwards the
+	// CONNECT authority verbatim, and "localhost." still resolves to
+	// 127.0.0.1 so goproxy's upstream dial reaches the httptest server.
+	port := strings.TrimPrefix(upstream.URL, "https://127.0.0.1:")
+	resp, err := client.Get("https://localhost.:" + port + "/")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(1), upstreamHits.Load())
+	require.Equal(t, int64(1), res.calls.Load(), "broker must fire for the dotted-host request")
+}
+
 // Fixture helpers below mirror the patterns used in
 // internal/proxy/proxy_test.go (kept local rather than exported to avoid
 // growing the proxy package's public surface for test plumbing).
