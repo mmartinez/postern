@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -75,6 +76,52 @@ func installInnerGuard(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 		}
 		return req, nil
 	})
+}
+
+// installConnectionErrHandler wires goproxy's ConnectionErrHandler so every
+// connection-level failure surfaces the constant anti-oracle body. Without
+// it goproxy's httpError writes the raw err.Error() to the client socket —
+// for a tunnel-dial failure that is a parseable 502 whose body names
+// internal addresses and OS error text: a network-topology oracle for a
+// hostile agent.
+//
+// goproxy also invokes the handler mid-tunnel on hijacked byte streams
+// (copy errors after the 200 Connection established frame is out), so the
+// hijacked branch mirrors goproxy's raw HTTP/1.1 frame shape with the
+// constant body, ignores write errors, and never assumes the peer still
+// speaks HTTP.
+func installConnectionErrHandler(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
+	gp.ConnectionErrHandler = func(w io.Writer, ctx *goproxy.ProxyCtx, err error) {
+		host := ""
+		if ctx != nil && ctx.Req != nil && ctx.Req.URL != nil {
+			host = ctx.Req.URL.Host
+		}
+		logger.Debug("upstream connection error",
+			slog.String("host", host),
+			slog.Any("err", err),
+		)
+		switch rw := w.(type) {
+		case http.ResponseWriter:
+			// Same shape http.Error produces, minus the extra newline —
+			// the body must stay byte-identical to badGatewayBody.
+			rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			rw.Header().Set("X-Content-Type-Options", "nosniff")
+			rw.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(rw, badGatewayBody)
+		case interface{ ResponseWriter() http.ResponseWriter }:
+			// goproxy's HTTP/2 tunnel path wraps the stream; unwrap it so
+			// the client still gets a real HTTP response object.
+			http.Error(rw.ResponseWriter(), badGatewayBody, http.StatusBadGateway)
+		default:
+			// Hijacked raw stream (tunnel dial failure, mid-tunnel copy
+			// error). Same frame goproxy's httpError raw branch emits, but
+			// with the constant body.
+			frame := fmt.Sprintf(
+				"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+				len(badGatewayBody), badGatewayBody)
+			_, _ = io.WriteString(w, frame)
+		}
+	}
 }
 
 // installPreUpstream wires the user-supplied PreUpstreamHandler into the

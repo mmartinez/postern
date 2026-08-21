@@ -27,6 +27,13 @@ import (
 // budget gets a 504 from the http.Server.
 const shutdownBudget = 10 * time.Second
 
+// idleTimeout reaps silent keep-alive connections on the inbound server.
+// With IdleTimeout unset net/http never closes an idle conn (ReadTimeout is
+// deliberately unset so streaming responses are never cut), so agents that
+// hold connections open would accumulate server goroutines forever. Not
+// configurable via YAML; a knob can be added later if ever needed.
+const idleTimeout = 2 * time.Minute
+
 // Options carries the resolved configuration runtime needs. CLI populates
 // it from cobra flags and config files; tests construct it inline.
 type Options struct {
@@ -57,6 +64,12 @@ type Options struct {
 	// BlockNonBrokered rejects the CONNECT for non-brokered hosts instead of
 	// tunneling them — the connect-time form of on_no_match: block.
 	BlockNonBrokered bool
+
+	// TestIdleTimeout overrides the inbound server's 2m IdleTimeout for
+	// tests that cannot wait out the production default. Zero keeps the
+	// default. Test-only: production wiring never sets it and it is not
+	// exposed through YAML configuration.
+	TestIdleTimeout time.Duration
 }
 
 // Runtime is the constructed-but-not-yet-running postern server. Build it
@@ -102,6 +115,11 @@ func New(opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("init proxy: %w", err)
 	}
 
+	idle := idleTimeout
+	if opts.TestIdleTimeout > 0 {
+		idle = opts.TestIdleTimeout
+	}
+
 	return &Runtime{
 		opts:   opts,
 		proxy:  p,
@@ -110,6 +128,7 @@ func New(opts Options) (*Runtime, error) {
 			Addr:              opts.Addr,
 			Handler:           p.Handler(),
 			ReadHeaderTimeout: 30 * time.Second,
+			IdleTimeout:       idle,
 		},
 	}, nil
 }
