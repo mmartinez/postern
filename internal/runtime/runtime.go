@@ -92,6 +92,12 @@ type Options struct {
 	// TestShutdownBudget overrides the 10s graceful shutdown budget, like
 	// TestStalledConnTimeout. Zero keeps the default. Test-only.
 	TestShutdownBudget time.Duration
+
+	// TestReapHook, when non-nil, runs once for each connection the inbound
+	// reaper closes during eviction. Tests use it to observe reap events
+	// deterministically instead of polling a wall clock. Test-only:
+	// production wiring never sets it.
+	TestReapHook func()
 }
 
 // Runtime is the constructed-but-not-yet-running postern server. Build it
@@ -277,6 +283,9 @@ func (r *Runtime) reapOnce() {
 		r.opts.Logger.Debug("reaped idle connection",
 			slog.String("remote", c.RemoteAddr().String()))
 		_ = c.Close()
+		if r.opts.TestReapHook != nil {
+			r.opts.TestReapHook()
+		}
 	}
 }
 
