@@ -23,8 +23,11 @@ import (
 )
 
 // shutdownBudget is the upper bound on graceful drain time: SIGTERM must
-// drain in-flight requests within 10s — anything still in-flight after the
-// budget gets a 504 from the http.Server.
+// finish shutting down within 10s. net/http's Shutdown ignores hijacked
+// connections entirely, and goproxy hijacks every CONNECT — so no 504 can
+// ever be surfaced to a live tunnel. Instead the runtime tracks hijacked
+// conns (see conntrack.go), waits out the remaining budget for them to
+// finish naturally, and force-closes any still alive when it expires.
 const shutdownBudget = 10 * time.Second
 
 // idleTimeout reaps silent keep-alive connections on the inbound server.
@@ -70,6 +73,25 @@ type Options struct {
 	// default. Test-only: production wiring never sets it and it is not
 	// exposed through YAML configuration.
 	TestIdleTimeout time.Duration
+
+	// TestStalledConnTimeout overrides the inbound reaper's 30s
+	// zero-progress threshold for tests that cannot wait out the production
+	// default. Zero keeps the default. Test-only: production wiring never
+	// sets it and it is deliberately not exposed through YAML configuration.
+	TestStalledConnTimeout time.Duration
+
+	// TestTunnelIdleTimeout overrides the inbound reaper's 10m
+	// sustained-inactivity threshold, like TestStalledConnTimeout.
+	// Zero keeps the default. Test-only.
+	TestTunnelIdleTimeout time.Duration
+
+	// TestReapInterval overrides the inbound reaper's 30s scan interval,
+	// like TestStalledConnTimeout. Zero keeps the default. Test-only.
+	TestReapInterval time.Duration
+
+	// TestShutdownBudget overrides the 10s graceful shutdown budget, like
+	// TestStalledConnTimeout. Zero keeps the default. Test-only.
+	TestShutdownBudget time.Duration
 }
 
 // Runtime is the constructed-but-not-yet-running postern server. Build it
@@ -81,6 +103,13 @@ type Runtime struct {
 	minter *ca.Minter
 
 	addr atomic.Value // string, populated once the listener is up
+
+	conns *connRegistry // live accepted conns; drain barrier at shutdown
+
+	stalledConnTimeout time.Duration
+	tunnelIdleTimeout  time.Duration
+	reapInterval       time.Duration
+	shutdownBudget     time.Duration
 }
 
 // New constructs a Runtime from opts. It performs validation but does not
@@ -120,17 +149,36 @@ func New(opts Options) (*Runtime, error) {
 		idle = opts.TestIdleTimeout
 	}
 
-	return &Runtime{
+	rt := &Runtime{
 		opts:   opts,
 		proxy:  p,
 		minter: minter,
+		conns:  newConnRegistry(),
 		srv: &http.Server{
 			Addr:              opts.Addr,
 			Handler:           p.Handler(),
 			ReadHeaderTimeout: 30 * time.Second,
 			IdleTimeout:       idle,
 		},
-	}, nil
+
+		stalledConnTimeout: stalledConnTimeout,
+		tunnelIdleTimeout:  tunnelIdleTimeout,
+		reapInterval:       reapInterval,
+		shutdownBudget:     shutdownBudget,
+	}
+	if opts.TestStalledConnTimeout > 0 {
+		rt.stalledConnTimeout = opts.TestStalledConnTimeout
+	}
+	if opts.TestTunnelIdleTimeout > 0 {
+		rt.tunnelIdleTimeout = opts.TestTunnelIdleTimeout
+	}
+	if opts.TestReapInterval > 0 {
+		rt.reapInterval = opts.TestReapInterval
+	}
+	if opts.TestShutdownBudget > 0 {
+		rt.shutdownBudget = opts.TestShutdownBudget
+	}
+	return rt, nil
 }
 
 // Addr returns the listener's actual bind address, or "" if Run hasn't yet
@@ -144,9 +192,11 @@ func (r *Runtime) Addr() string {
 }
 
 // Run binds the listener and serves until ctx is cancelled or the server
-// errors. On cancellation it gracefully shuts down within shutdownBudget.
-// The returned error is nil for clean shutdowns and non-nil for bind
-// failures or serve-level errors.
+// errors. On cancellation it gracefully shuts down within shutdownBudget:
+// http.Server.Shutdown first for non-hijacked traffic, then a bounded wait
+// on live tunnels, then force-close of whatever is left. The returned error
+// is nil for clean shutdowns and non-nil for bind failures or serve-level
+// errors.
 func (r *Runtime) Run(ctx context.Context) error {
 	listener, err := net.Listen("tcp", r.opts.Addr)
 	if err != nil {
@@ -155,12 +205,16 @@ func (r *Runtime) Run(ctx context.Context) error {
 	r.addr.Store(listener.Addr().String())
 	r.opts.Logger.Info("proxy listening", slog.String("addr", listener.Addr().String()))
 
+	reapCtx, stopReaper := context.WithCancel(context.Background())
+	defer stopReaper()
+	go r.reapLoop(reapCtx)
+
 	serveErr := make(chan error, 1)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := r.srv.Serve(listener)
+		err := r.srv.Serve(&trackingListener{Listener: listener, reg: r.conns})
 		if errors.Is(err, http.ErrServerClosed) {
 			serveErr <- nil
 			return
@@ -170,19 +224,82 @@ func (r *Runtime) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		r.opts.Logger.Info("shutdown requested", slog.Duration("budget", shutdownBudget))
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+		r.opts.Logger.Info("shutdown requested", slog.Duration("budget", r.shutdownBudget))
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), r.shutdownBudget)
 		defer cancel()
+		var shutdownErr error
 		if err := r.srv.Shutdown(shutdownCtx); err != nil {
 			r.opts.Logger.Warn("shutdown error", slog.Any("err", err))
-			wg.Wait()
-			return err
+			shutdownErr = err
 		}
+		drained, forced := r.drainConns(shutdownCtx)
+		r.opts.Logger.Info("shutdown drain complete",
+			slog.Int("drained", drained),
+			slog.Int("force_closed", forced))
 		wg.Wait()
-		return nil
+		return shutdownErr
 	case err := <-serveErr:
 		wg.Wait()
 		return err
+	}
+}
+
+// reapLoop evicts stalled and idle conns until ctx is cancelled. Closing a
+// tracked conn unblocks whichever goproxy goroutine (MITM read loop, tunnel
+// relay) is parked inside it, so eviction tears down the whole tunnel.
+func (r *Runtime) reapLoop(ctx context.Context) {
+	ticker := time.NewTicker(r.reapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.reapOnce()
+		}
+	}
+}
+
+func (r *Runtime) reapOnce() {
+	now := time.Now()
+	var stale []*trackedConn
+	r.conns.each(func(c *trackedConn) {
+		idle, insufficientProgress := c.idleFor(now)
+		limit := r.tunnelIdleTimeout
+		if insufficientProgress {
+			limit = r.stalledConnTimeout
+		}
+		if idle > limit {
+			stale = append(stale, c)
+		}
+	})
+	for _, c := range stale {
+		r.opts.Logger.Debug("reaped idle connection",
+			slog.String("remote", c.RemoteAddr().String()))
+		_ = c.Close()
+	}
+}
+
+// drainConns waits for tracked conns to finish naturally within ctx's
+// remaining budget, then force-closes the rest. It returns how many drained
+// versus how many were force-closed.
+func (r *Runtime) drainConns(ctx context.Context) (drained, forced int) {
+	total := r.conns.count()
+	if total == 0 {
+		return 0, 0
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			forced = r.conns.closeAll()
+			return total - forced, forced
+		case <-ticker.C:
+			if r.conns.count() == 0 {
+				return total, 0
+			}
+		}
 	}
 }
 
