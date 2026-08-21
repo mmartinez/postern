@@ -83,7 +83,9 @@ func serveRelease(t *testing.T, tag, asset string, tarball []byte, sum, checksum
 // stdout, stderr, and the run error.
 func runInstall(t *testing.T, env map[string]string) (string, string, error) {
 	t.Helper()
-	cmd := exec.Command("sh", installScript(t))
+	// Absolute interpreter path: one test runs with a hermetic PATH that
+	// deliberately excludes everything but the tools install.sh needs.
+	cmd := exec.Command("/bin/sh", installScript(t))
 	cmd.Env = append(os.Environ(), "POSTERN_OS=linux")
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -156,4 +158,84 @@ func TestInstallUnsupportedArchAborts(t *testing.T) {
 	require.Contains(t, strings.ToLower(stderr), "unsupported architecture")
 	_, statErr := os.Stat(filepath.Join(installDir, "postern"))
 	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+// TestInstallDarwinHappyPath pins the darwin asset naming against the
+// goreleaser name_template (postern_<ver>_<os>_<arch>.tar.gz) for both new
+// darwin targets, and proves the script end-to-end on the darwin path.
+func TestInstallDarwinHappyPath(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			t.Parallel()
+			const tag, ver = "v1.2.3", "1.2.3"
+			asset := "postern_" + ver + "_darwin_" + arch + ".tar.gz"
+			tarball, sum := fakeTarball(t, "#!/bin/sh\necho 'postern fake "+ver+"'\n")
+			srv := serveRelease(t, tag, asset, tarball, sum, "")
+			installDir := t.TempDir()
+
+			_, stderr, err := runInstall(t, map[string]string{
+				"POSTERN_OS":          "darwin",
+				"POSTERN_ARCH":        arch,
+				"POSTERN_VERSION":     tag,
+				"POSTERN_BASE_URL":    srv.URL,
+				"POSTERN_INSTALL_DIR": installDir,
+			})
+			require.NoError(t, err, "install.sh failed; stderr:\n%s", stderr)
+
+			out, runErr := exec.Command(filepath.Join(installDir, "postern")).Output()
+			require.NoError(t, runErr)
+			require.Contains(t, string(out), "postern fake "+ver)
+		})
+	}
+}
+
+func TestInstallUnsupportedOSAborts(t *testing.T) {
+	t.Parallel()
+	installDir := t.TempDir()
+	_, stderr, err := runInstall(t, map[string]string{
+		"POSTERN_OS":          "windows",
+		"POSTERN_ARCH":        "amd64",
+		"POSTERN_VERSION":     "v1.2.3",
+		"POSTERN_BASE_URL":    "http://127.0.0.1:0", // must never be reached
+		"POSTERN_INSTALL_DIR": installDir,
+	})
+	require.Error(t, err, "install.sh should reject an unsupported OS")
+	require.Contains(t, strings.ToLower(stderr), "unsupported os")
+	_, statErr := os.Stat(filepath.Join(installDir, "postern"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+// TestInstallShasumFallbackOnDarwin exercises the checksum-tool fallback a
+// stock macOS host hits: no GNU sha256sum, only shasum -a 256. The test PATH
+// contains exactly the external tools install.sh needs, sha256sum excluded.
+func TestInstallShasumFallbackOnDarwin(t *testing.T) {
+	if _, err := exec.LookPath("shasum"); err != nil {
+		t.Skip("shasum not available on this host")
+	}
+	bin := t.TempDir()
+	for _, tool := range []string{"mktemp", "rm", "awk", "tar", "mkdir", "install", "shasum", "curl", "gzip"} {
+		path, err := exec.LookPath(tool)
+		require.NoError(t, err, "missing %s for hermetic PATH", tool)
+		require.NoError(t, os.Symlink(path, filepath.Join(bin, tool)))
+	}
+	// t.Setenv forbids t.Parallel; env is inherited by the script below.
+	t.Setenv("PATH", bin)
+
+	const tag, ver = "v1.2.3", "1.2.3"
+	asset := "postern_" + ver + "_darwin_arm64.tar.gz"
+	tarball, sum := fakeTarball(t, "#!/bin/sh\necho 'postern fake "+ver+"'\n")
+	srv := serveRelease(t, tag, asset, tarball, sum, "")
+	installDir := t.TempDir()
+
+	_, stderr, err := runInstall(t, map[string]string{
+		"POSTERN_OS":          "darwin",
+		"POSTERN_ARCH":        "arm64",
+		"POSTERN_VERSION":     tag,
+		"POSTERN_BASE_URL":    srv.URL,
+		"POSTERN_INSTALL_DIR": installDir,
+	})
+	require.NoError(t, err, "install.sh failed; stderr:\n%s", stderr)
+	_, statErr := os.Stat(filepath.Join(installDir, "postern"))
+	require.NoError(t, statErr)
 }
