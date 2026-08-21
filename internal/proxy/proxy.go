@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/elazarl/goproxy"
 
@@ -64,6 +65,17 @@ type Config struct {
 	// instead of tunneling them — the connect-time form of on_no_match: block.
 	// It is ignored when ShouldIntercept is nil (every host is intercepted).
 	BlockNonBrokered bool
+
+	// TestDialTimeout overrides the outbound dialer's 10s connect timeout
+	// for tests that cannot wait out the production default. Zero keeps
+	// the default. Test-only: production wiring never sets it and it is
+	// deliberately not exposed through YAML configuration.
+	TestDialTimeout time.Duration
+
+	// TestResponseHeaderTimeout overrides the outbound transport's 30s
+	// response-header timeout for the same reason. Zero keeps the default.
+	// Test-only, like TestDialTimeout.
+	TestResponseHeaderTimeout time.Duration
 }
 
 // Proxy is the postern HTTPS proxy. Construct one with New; expose its
@@ -92,10 +104,11 @@ func New(cfg Config) (*Proxy, error) {
 	// goproxy's default logger writes to stderr; mute it — we log via slog.
 	gp.Logger = mutedLogger{}
 
+	tr := newUpstreamTransport(cfg)
 	if cfg.UpstreamTLS != nil {
-		// goproxy reuses its Tr for upstream dials, so cloning preserves
-		// any other defaults (proxy chain, MaxIdleConns) the package set.
-		gp.Tr.TLSClientConfig = cfg.UpstreamTLS.Clone()
+		// Cloning preserves any other defaults (proxy chain, MaxIdleConns)
+		// the caller set on its config.
+		tr.TLSClientConfig = cfg.UpstreamTLS.Clone()
 	} else {
 		// Production path: dial upstreams with system trust. Set the verifying
 		// config explicitly rather than inheriting goproxy's transport default
@@ -103,8 +116,9 @@ func New(cfg Config) (*Proxy, error) {
 		// certificate verification is a load-bearing security invariant and
 		// must not silently depend on a library default that a future version
 		// could flip. InsecureSkipVerify stays false (the zero value).
-		gp.Tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
+	gp.Tr = tr
 
 	tlsConfig := mitmTLSConfig(cfg.Minter)
 	gp.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
@@ -145,8 +159,64 @@ func New(cfg Config) (*Proxy, error) {
 	installInnerGuard(gp, cfg.Logger)
 	installHandlers(gp, cfg.Logger)
 	installPreUpstream(gp, cfg.Logger, cfg.PreUpstreamHandler)
+	installConnectionErrHandler(gp, cfg.Logger)
 
 	return &Proxy{cfg: cfg, server: gp}, nil
+}
+
+// Outbound timeout budget. goproxy's default transport sets zero timeouts,
+// so an upstream that accepts TCP but never responds would pin a goroutine
+// and a file descriptor forever. These constants bound each phase of the
+// upstream exchange; they are deliberately not configurable via YAML — a
+// knob can be added later if an operator ever needs one.
+const (
+	// upstreamDialTimeout bounds the TCP connect for upstream requests and
+	// CONNECT tunnels alike: goproxy dials tunnels through Tr.DialContext.
+	upstreamDialTimeout = 10 * time.Second
+
+	// upstreamKeepAlive is the TCP keep-alive period for upstream conns.
+	upstreamKeepAlive = 30 * time.Second
+
+	// upstreamTLSHandshakeTimeout bounds the upstream TLS handshake.
+	upstreamTLSHandshakeTimeout = 10 * time.Second
+
+	// upstreamResponseHeaderTimeout bounds how long postern waits for an
+	// upstream to start responding. It does not bound the body: streaming
+	// (SSE) responses may legitimately run for minutes.
+	upstreamResponseHeaderTimeout = 30 * time.Second
+
+	// upstreamIdleConnTimeout reaps pooled-but-silent upstream conns.
+	upstreamIdleConnTimeout = 90 * time.Second
+
+	// upstreamExpectContinueTimeout bounds the wait for an upstream's
+	// 100-continue reply.
+	upstreamExpectContinueTimeout = 1 * time.Second
+)
+
+// newUpstreamTransport builds the transport goproxy uses for ALL upstream
+// traffic: plain proxied requests, MITM'd inner requests (ctx.RoundTrip),
+// and CONNECT tunnel dials (goproxy prefers Tr.DialContext when set).
+func newUpstreamTransport(cfg Config) *http.Transport {
+	dialTimeout := upstreamDialTimeout
+	if cfg.TestDialTimeout > 0 {
+		dialTimeout = cfg.TestDialTimeout
+	}
+	headerTimeout := upstreamResponseHeaderTimeout
+	if cfg.TestResponseHeaderTimeout > 0 {
+		headerTimeout = cfg.TestResponseHeaderTimeout
+	}
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: upstreamKeepAlive,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   upstreamTLSHandshakeTimeout,
+		ResponseHeaderTimeout: headerTimeout,
+		IdleConnTimeout:       upstreamIdleConnTimeout,
+		ExpectContinueTimeout: upstreamExpectContinueTimeout,
+	}
 }
 
 // Handler returns the proxy's net/http handler. Mount it on any http.Server

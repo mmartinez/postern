@@ -12,7 +12,10 @@ a missing token, a vendor outage, a malformed reference, or a panic anywhere in
 the hook chain — results in a generic `502 Bad Gateway` to the agent, and the
 upstream is **not contacted**. The error reason returned to the client is
 deliberately generic ("credential resolution failed") so the agent cannot tell
-a missing token from a network blip from a misconfigured rule.
+a missing token from a network blip from a misconfigured rule. Connection-level
+failures — a tunnel that cannot dial, or a mid-tunnel copy error — return the
+same generic `502` body rather than the underlying error text, so a hostile
+agent cannot use postern's errors to probe internal network topology.
 
 This is an enforced invariant, not a convention: integration tests assert that
 on a resolver error the upstream-side request counter stays at zero.
