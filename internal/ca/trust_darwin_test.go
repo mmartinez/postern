@@ -84,11 +84,13 @@ func TestUninstallTrustAt_RevokesTrustAndDeletesKeychainCert(t *testing.T) {
 	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 
 	// Stub before install: the real security(1) would fail on CI (no login
-	// keychain) and the stub only records, which is all these tests observe.
-	calls := stubSecurity(t)
+	// keychain). A first recorder covers setup; a fresh one captures only
+	// the uninstall invocations asserted below.
+	stubSecurity(t)
 
 	_, err := InstallTrustAt(anchor, certPEM)
 	require.NoError(t, err)
+	calls := stubSecurity(t)
 
 	path, err := UninstallTrustAt(anchor)
 	require.NoError(t, err)

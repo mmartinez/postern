@@ -333,27 +333,29 @@ jobs:
             done
           done
 
-          # Unquoted globs are deliberate: we are counting glob matches.
+          # nullglob + array counting: an unmatched glob yields zero entries
+          # instead of aborting under set -e before our own error message.
+          shopt -s nullglob
           for pat in "${archives[@]}"; do
-            n=$(ls dist/$pat 2>/dev/null | wc -l)
-            if [ "$n" -ne 1 ]; then
-              echo "expected exactly one artifact matching $pat, found $n" >&2
+            matches=(dist/$pat)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "expected exactly one artifact matching $pat, found ${#matches[@]}" >&2
               exit 1
             fi
           done
-          total=$(ls dist/*.${ext} 2>/dev/null | wc -l)
-          if [ "$total" -ne "${#archives[@]}" ]; then
-            echo "unexpected extra archives: found $total, expected ${#archives[@]}" >&2
+          all=(dist/*.${ext})
+          if [ "${#all[@]}" -ne "${#archives[@]}" ]; then
+            echo "unexpected extra archives: found ${#all[@]}, expected ${#archives[@]}" >&2
             exit 1
           fi
 
-          # One SBOM per archive, base-name matched (goreleaser renders
-          # documents as {{ .ArtifactName }}.sbom.spdx.json).
+          # One SBOM per archive: goreleaser renders documents as
+          # {{ .ArtifactName }}.sbom.spdx.json, i.e. the full archive
+          # filename plus the .sbom.spdx.json suffix.
           for pat in "${archives[@]}"; do
-            base=$(basename "${pat%.${ext}}")
-            n=$(ls dist/$base.sbom.spdx.json 2>/dev/null | wc -l)
-            if [ "$n" -ne 1 ]; then
-              echo "expected exactly one SBOM matching $base.sbom.spdx.json, found $n" >&2
+            sboms=(dist/$pat.sbom.spdx.json)
+            if [ "${#sboms[@]}" -ne 1 ]; then
+              echo "expected exactly one SBOM matching $pat.sbom.spdx.json, found ${#sboms[@]}" >&2
               exit 1
             fi
           done
