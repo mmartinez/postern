@@ -46,7 +46,6 @@ func TestProvider_ValidateSettings(t *testing.T) {
 }
 
 func TestProvider_ValidateSucceedsOnZeroExit(t *testing.T) {
-	t.Parallel()
 
 	// `bws secret list` returning an empty list (exit 0) is still a valid token.
 	script := writeScript(t, `echo "[]"`)
@@ -55,7 +54,6 @@ func TestProvider_ValidateSucceedsOnZeroExit(t *testing.T) {
 }
 
 func TestProvider_ValidateSelfHostedAddsServerURL(t *testing.T) {
-	t.Parallel()
 
 	// A self-hosted server_url must be forwarded to bws; the script asserts the
 	// --server-url flag arrives and exits 0 so Validate succeeds.
@@ -69,7 +67,6 @@ func TestProvider_ValidateSelfHostedAddsServerURL(t *testing.T) {
 }
 
 func TestProvider_ValidateFailsClosedOnNonZeroExit(t *testing.T) {
-	t.Parallel()
 
 	script := writeScript(t, `exit 1`)
 	p := NewProvider()
@@ -92,7 +89,6 @@ func TestProvider_ValidateRejectsBadSettings(t *testing.T) {
 }
 
 func TestProvider_NewResolverBuildsWorkingResolver(t *testing.T) {
-	t.Parallel()
 
 	script := writeScript(t, `echo '{"value":"sk-real"}'`)
 	p := NewProvider()
