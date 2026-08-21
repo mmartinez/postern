@@ -1,6 +1,7 @@
 # goreleaser v2 config.
 #
-# Scope: linux only. macOS support is deferred until there is demand.
+# Scope: linux (cross-compiled with zig on ubuntu) + darwin (built natively on
+# a macos runner; see the split-build flow in .github/workflows/release.yml).
 #
 # `make snapshot` and the snapshot CI job exercise everything below except
 # signing and ghcr push (those need a real tag run under GitHub OIDC — see
@@ -16,13 +17,18 @@ before:
     - go mod tidy
 
 builds:
-  # The credential SDK (internal/credstore/onepassword) forces CGO_ENABLED=1
-  # (its no-cgo path is a deliberate compile wall). A stock gcc only emits
-  # host-arch objects, so cross-compiling
+  # CGO status: darwin needs CGO_ENABLED=1 because the keyring backend links
+  # Security.framework (99designs/keyring). The vendored credential SDK ships
+  # a working !cgo variant, so it does not pin cgo either way.
+  #
+  # Linux: a stock gcc only emits host-arch objects, so cross-compiling
   # the C half of the matrix needs a cross C compiler: zig cc, pinned to a
   # glibc 2.31 floor so the binaries run on the distroless/base runtime image
   # (glibc 2.36) and on older hosts via the tarball install path.
   - id: postern
+    # Skip on macs, where the darwin build below runs instead; keeps linux
+    # snapshot runs linux-only. See the split-build flow in release.yml.
+    skip: '{{ eq .Runtime.Goos "darwin" }}'
     main: ./cmd/postern
     binary: postern
     env:
@@ -50,6 +56,51 @@ builds:
       - -X github.com/mmartinez/postern/internal/version.Version={{.Version}}
       - -X github.com/mmartinez/postern/internal/version.Commit={{.Commit}}
       - -X github.com/mmartinez/postern/internal/version.BuildDate={{.Date}}
+  # Darwin: cgo against Security.framework needs the real macOS SDK, which
+  # only exists on Apple hardware, so these targets build natively on the
+  # macos runner in release.yml and are skipped everywhere else (the host-GOOS
+  # `skip` filters keep every single goreleaser run on targets its host can
+  # actually build). Checksums for both runs are merged and signed by the
+  # publish job — a signature made inside one run could only cover that run's
+  # archives.
+  - id: postern-darwin
+    skip: '{{ ne .Runtime.Goos "darwin" }}'
+    main: ./cmd/postern
+    binary: postern
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    overrides:
+      # goreleaser picks no cross-arch C compiler by default; pin clang -arch
+      # so amd64 builds correctly on the arm64 macos runner (and vice versa).
+      - goos: darwin
+        goarch: amd64
+        env:
+          - CC=clang -arch x86_64
+          - CXX=clang++ -arch x86_64
+      - goos: darwin
+        goarch: arm64
+        env:
+          - CC=clang -arch arm64
+          - CXX=clang++ -arch arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/mmartinez/postern/internal/version.Version={{.Version}}
+      - -X github.com/mmartinez/postern/internal/version.Commit={{.Commit}}
+      - -X github.com/mmartinez/postern/internal/version.BuildDate={{.Date}}
+    hooks:
+      post:
+        # arm64 macOS refuses to run completely unsigned binaries; the linker
+        # ad-hoc signs by default, but sign explicitly so that does not depend
+        # on a toolchain default. Deliberately ad-hoc only: Developer ID
+        # signing + notarization is a tracked follow-up.
+        - cmd: codesign --sign - --force "{{ .Path }}"
 
 archives:
   - id: postern
@@ -65,8 +116,8 @@ checksum:
   name_template: "checksums.txt"
 
 # release-please publishes the GitHub Release (with CHANGELOG notes) and creates
-# the tag when the Release PR merges; the goreleaser job then uploads the
-# archives, checksums, SBOMs and cosign bundle onto that existing release.
+# the tag when the Release PR merges; the goreleaser jobs then upload the
+# archives, checksums, SBOMs and image onto that existing release.
 # mode: keep-existing preserves release-please's notes and appends the assets.
 # This requires repository release immutability to stay OFF — an immutable
 # release rejects asset uploads with HTTP 422. See .github/workflows/release.yml.
@@ -89,20 +140,11 @@ changelog:
       - Merge branch
 
 # === Signing ===
-# Keyless cosign (OIDC via GitHub Actions; no private key). Signs the checksums
-# file into a sigstore bundle — verifying it covers every artifact by digest.
-# --snapshot does NOT imply skipping this, so snapshot/PR runs pass --skip=sign
-# (there is no OIDC token or cosign there); a real tag run signs for real.
-signs:
-  - cmd: cosign
-    signature: "${artifact}.sigstore.json"
-    args:
-      - sign-blob
-      - "--bundle=${signature}"
-      - "${artifact}"
-      - "--yes"
-    artifacts: checksum
-    output: true
+# The checksums file is signed with keyless cosign (OIDC via GitHub Actions) in
+# .github/workflows/release.yml — AFTER the darwin and linux checksum slices
+# are merged, so the sigstore bundle covers every artifact by digest. It cannot
+# live here: each split run produces only its own slice of checksums.txt, and
+# there is no `signs` pipeline step that runs after a merge in OSS goreleaser.
 
 # === SBOM ===
 # syft produces an SPDX-JSON SBOM per archive. Runs in snapshot and release.

@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# postern installer — Linux amd64/arm64 only (macOS/Windows deferred).
+# postern installer — Linux and macOS, amd64/arm64 (Windows deferred).
 #
 # Downloads a release tarball and checksums.txt from GitHub, verifies the
 # tarball's sha256, and installs the binary to /usr/local/bin (override with
@@ -32,14 +32,14 @@ err() {
 }
 
 case "$OS" in
-linux) ;;
-*) err "unsupported OS '${OS}' (linux only; macOS/Windows deferred)" ;;
+linux | darwin) ;;
+*) err "unsupported OS '${OS}' (linux/darwin only; Windows deferred)" ;;
 esac
 
 case "$ARCH" in
 x86_64 | amd64) ARCH=amd64 ;;
 aarch64 | arm64) ARCH=arm64 ;;
-*) err "unsupported architecture '${ARCH}' (linux amd64/arm64 only)" ;;
+*) err "unsupported architecture '${ARCH}' (linux/darwin amd64/arm64 only)" ;;
 esac
 
 VERSION="${POSTERN_VERSION:-}"
@@ -65,7 +65,12 @@ curl -fsSL -o "${tmp}/checksums.txt" "${BASE_URL}/${VERSION}/checksums.txt" ||
 echo "postern: verifying checksum…"
 expected="$(awk -v f="$ASSET" '$2 == f {print $1}' "${tmp}/checksums.txt")"
 [ -n "$expected" ] || err "${ASSET} is missing from checksums.txt"
-actual="$(sha256sum "${tmp}/${ASSET}" | awk '{print $1}')"
+if command -v sha256sum >/dev/null 2>&1; then
+	actual="$(sha256sum "${tmp}/${ASSET}" | awk '{print $1}')"
+else
+	# macOS ships shasum instead of GNU coreutils' sha256sum.
+	actual="$(shasum -a 256 "${tmp}/${ASSET}" | awk '{print $1}')"
+fi
 [ "$expected" = "$actual" ] || err "checksum verification failed for ${ASSET}"
 
 tar -xzf "${tmp}/${ASSET}" -C "$tmp" postern || err "could not extract postern from ${ASSET}"
