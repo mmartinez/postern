@@ -110,9 +110,10 @@ func uninstallTrustAt(location string) ([]string, error) {
 // certificate it can find; see uninstall).
 //
 // The ordering is the failure story: the only fallible step after the anchor
-// write is the registration itself. When registration fails the freshly
-// persisted anchor file is removed best-effort, so a reported install
-// failure leaves neither trust settings nor a stale anchor behind.
+// write is the registration itself. When registration fails, a fresh anchor
+// file is removed again and an overwritten one gets its previous bytes
+// back, so a reported install failure leaves neither new trust settings nor
+// a disk/keychain mismatch behind.
 //
 // The user-authentication dialog add-trusted-cert triggers is expected;
 // per-user trust settings deliberately avoid sudo.
@@ -121,19 +122,62 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve login keychain: %w", err)
 	}
+	prior, err := snapshotPriorAnchor(resolveAnchorPath(location))
+	if err != nil {
+		return "", err
+	}
 	path, err := writeAnchor(location, certPEM)
 	if err != nil {
 		return path, err
 	}
 	if _, err := b.run("add-trusted-cert", "-r", "trustRoot", "-k", keychain, path); err != nil {
-		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		if rErr := restorePriorAnchor(resolveAnchorPath(location), prior); rErr != nil {
 			return path, errors.Join(
 				fmt.Errorf("register trust anchor: %w", err),
-				fmt.Errorf("remove trust anchor: %w", rmErr))
+				rErr)
 		}
 		return path, fmt.Errorf("register trust anchor: %w", err)
 	}
 	return path, nil
+}
+
+// trustFilesSnapshot holds the pre-install content of the persisted anchor.
+// ok=false means the file did not exist before the install, so a failed
+// registration removes it again rather than writing empty content.
+type trustFilesSnapshot struct {
+	content []byte
+	ok      bool
+}
+
+// snapshotPriorAnchor captures the current bytes of the anchor file. An
+// existing-but-unreadable anchor aborts the install before any mutation:
+// a failed registration could not faithfully restore content it never read.
+func snapshotPriorAnchor(anchorPath string) (trustFilesSnapshot, error) {
+	data, err := os.ReadFile(anchorPath)
+	switch {
+	case err == nil:
+		return trustFilesSnapshot{content: data, ok: true}, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return trustFilesSnapshot{}, nil
+	default:
+		return trustFilesSnapshot{}, fmt.Errorf("snapshot trust anchor: %w", err)
+	}
+}
+
+// restorePriorAnchor puts the anchor file back to its pre-install state
+// after a failed registration: absent before means removed again,
+// overwritten before means the previous bytes are written back.
+func restorePriorAnchor(anchorPath string, prior trustFilesSnapshot) error {
+	var err error
+	if prior.ok {
+		err = writeFileMode(anchorPath, prior.content, trustFileMode)
+	} else if err = os.Remove(anchorPath); errors.Is(err, fs.ErrNotExist) {
+		err = nil // a fresh install has nothing to clean
+	}
+	if err != nil {
+		return fmt.Errorf("restore trust anchor: %w", err)
+	}
+	return nil
 }
 
 // trustTarget is one certificate uninstall will revoke: pem holds the

@@ -197,6 +197,40 @@ func TestInstallTrustAt_FailedRegistrationRemovesAnchor(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "failed install must not leave the anchor behind")
 }
 
+// TestInstallTrustAt_FailedReinstallRestoresPriorAnchor pins the reinstall
+// half of the failure story: writeAnchor overwrites the previous anchor
+// before registration runs, so a failed reinstall must put the previous
+// bytes back instead of deleting the file. Otherwise disk and keychain
+// diverge — the previously trusted CA keeps its trust settings while its
+// persisted anchor is gone.
+func TestInstallTrustAt_FailedReinstallRestoresPriorAnchor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	priorPEM := darwinFixtureCA(t)
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+
+	seedRec := &securityRecorder{}
+	_, err := darwinTrust{run: seedRec.run}.install(anchor, priorPEM)
+	require.NoError(t, err)
+	newPEM := darwinFixtureCA(t)
+	rec := &securityRecorder{handle: func(args []string) ([]byte, error) {
+		if args[0] != "add-trusted-cert" {
+			return nil, nil
+		}
+		cmd := exec.Command("/bin/sh", "-c", "exit 51")
+		runErr := cmd.Run()
+		return nil, securityCmdError(args, runErr, "SecTrustSettingsAddTrusted failed\n")
+	}}
+
+	_, err = darwinTrust{run: rec.run}.install(anchor, newPEM)
+	require.Error(t, err)
+
+	got, readErr := os.ReadFile(anchor)
+	require.NoError(t, readErr, "the pre-existing anchor must survive a failed reinstall")
+	require.Equal(t, priorPEM, got,
+		"failed reinstall must restore the previous anchor bytes, not delete them")
+}
+
 // TestUninstallTrustAt_RevokesAnchorDirectlyAndLeavesKeychainEntry covers the
 // common uninstall: the anchor PEM is present and the same certificate sits
 // in the login keychain. The certificate must be revoked exactly once,
