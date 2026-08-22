@@ -17,8 +17,10 @@ rules:        # host → secret_ref → injection
 There are two ways to declare where credentials come from, and you use exactly
 one of them:
 
-- **Single vendor** — a top-level `token:` block. Postern synthesizes an
-  implicit credstore named `default` from it.
+- **Single vendor (legacy)** — a top-level `token:` block. Postern synthesizes
+  an implicit credstore named `default` from it, hardwired to the legacy
+  1Password provider (`op://` references). Bitwarden and OAuth2 credstores
+  require the `credstores:` form.
 - **Multiple vendors** — a `credstores:` list. Omit the top-level `token:`.
 
 Setting both is a validation error.
@@ -92,8 +94,8 @@ proxy:
 |---|---|---|
 | `listen` | yes | `host:port` the proxy binds. Point your agent's `HTTPS_PROXY` at this. |
 | `cache` | no | Credential cache settings (see below). |
-| `cache_ttl` | no | **Legacy alias for `cache.ttl`.** Go duration (`5m`, `30s`). Accepted for backward compatibility; prefer the `cache` block. Setting both `cache_ttl` and `cache.ttl` to different values is a config error. |
-| `on_no_match` | no | What to do with a `CONNECT` to a host that matches no rule. `passthrough` (default) tunnels the connection untouched — postern does **not** terminate TLS, so the agent reaches the real upstream with the real certificate and only needs to trust the postern CA for brokered hosts. `block` rejects the `CONNECT` with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). See [security.md](security.md#egress-containment-with-on_no_match). |
+| `cache_ttl` | yes* | **Legacy alias for `cache.ttl`.** Go duration (`5m`, `30s`). Required unless a `cache:` block supplies `ttl`; omitting both fails validation. Setting both to different values is a config error. |
+| `on_no_match` | no | What to do with a `CONNECT` to a host that matches no rule. `passthrough` (default) tunnels the connection untouched — postern does **not** terminate TLS, so the agent reaches the real upstream with the real certificate and only needs to trust the postern CA for brokered hosts. `block` rejects the `CONNECT` with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). Only meaningful when at least one rule exists: a config with zero rules starts brokerless, which intercepts every host and applies neither policy. See [security.md](security.md#egress-containment-with-on_no_match). |
 | `max_body_bytes` | no | Cap (in bytes) on how much of a request body postern buffers when a rule rewrites the body (`inject.in` includes `body`). Default 1 MiB when unset or `0`. A larger body is rejected with `413 Request Entity Too Large` and never reaches the upstream. Bound at startup; a hot-reload edit warns and does not take effect (a per-rule `inject.max_body_bytes` override does hot-reload). |
 
 The timeout budget around the proxy itself is fixed constants, not YAML options: outbound dial 10s, TCP keep-alive 30s, upstream TLS handshake 10s, response-header wait 30s, and idle pooled upstream connections reaped after 90s; on the inbound side, idle keep-alive connections are closed after 2m and request headers must arrive within 30s.
@@ -104,23 +106,23 @@ Credential resolution is a background concern: the request/inject path reads
 from an in-memory cache keyed by `secret_ref` and essentially never calls the
 vault directly. Concurrent misses for the same reference collapse into a single
 vault call (single-flight); an entry past its `refresh_ahead` age is refreshed
-on a background goroutine while its current value keeps being served; and a
-transient vault failure (rate-limit, timeout) keeps serving the last-known-good
+on a background goroutine while its current value keeps being served; and
+a vault failure during a refresh — transient (rate-limit, timeout) or
+permanent (revocation, deleted secret) — keeps serving the last-known-good
 value up to `max_stale` instead of failing closed. A reference that was **never**
 successfully resolved still fails closed (HTTP 502) — that security guarantee is
 unchanged. One-time-password references are never cached.
 
 | Field | Required | Default | Meaning |
 |---|---|---|---|
-| `ttl` | no | `1h` | Nominal freshness window. Past `ttl` a value is served *stale* (and logged) while a refresh is attempted. |
-| `refresh_ahead` | no | 75% of `ttl` | Age at which a request triggers an asynchronous refresh, so the hot path never blocks on the vault and there is no cold window at expiry. Must be greater than zero and less than `ttl`. |
-| `max_stale` | no | `24h` | Hard age limit. A value older than `max_stale` is not served: the resolver re-resolves and fails closed on error. Must be `>= ttl`. |
+| `ttl` | no | `1h` at runtime (`config validate` still requires an explicit ttl via `cache_ttl` or `cache.ttl`) | Nominal freshness window. Past `ttl` a value is served *stale* (and logged) while a refresh is attempted. |
+| `refresh_ahead` | no | 75% of `ttl` | Age at which a request triggers an asynchronous refresh, so the hot path never blocks on the vault and there is no cold window at expiry. An explicit `0` is treated as unset; only negative values are rejected. Must be less than `ttl`. |
+| `max_stale` | no | `24h`, floored at `ttl` | Hard age limit. A value older than `max_stale` is not served: the resolver re-resolves and fails closed on error. Must be `>= ttl`. |
 
-All three are bound at startup; a hot-reload edit warns and does not take effect
-(restart `postern` to apply). The defaults are tuned for long-lived API tokens:
-the vault is queried at most once per reference per refresh interval, with
-exponential backoff (and jitter) after a transient failure so a rate-limited
-vault is not re-hammered.
+All three are bound at startup; a hot-reload edit warns and does not take
+effect
+(restart `postern` to apply). Refreshes are throttled by `ttl`, with jittered
+exponential backoff after a failure so a struggling vault is not re-hammered.
 
 > **Security note.** Serving a cached value when a refresh fails (up to
 > `max_stale`) means a credential revoked at the vault can keep being injected
@@ -152,7 +154,7 @@ rules:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `host` | yes* | A literal hostname (`api.example.com`) or a single-`*` glob (`*.example.com`, matching exactly one label). A trailing-dot literal (`api.example.com.`) is accepted and normalized once at load; a malformed multi-dot host on the wire matches no rule and falls through to `on_no_match`. **Do not use a wildcard on a multi-tenant or shared-suffix domain** (e.g. `*.s3.amazonaws.com`, `*.blob.core.windows.net`): any host an attacker can register under that suffix would also match the rule and receive the injected credential. Reserve wildcards for single-tenant domains you control. |
+| `host` | yes* | A literal hostname (`api.example.com`) or a single-`*` glob (`*.example.com`, matching exactly one label). A trailing-dot literal (`api.example.com.`) is accepted; matching strips exactly one trailing dot from both the wire host and the rule pattern, so it decides identically to its bare form. A malformed multi-dot host on the wire matches no rule and falls through to `on_no_match`. **Do not use a wildcard on a multi-tenant or shared-suffix domain** (e.g. `*.s3.amazonaws.com`, `*.blob.core.windows.net`): any host an attacker can register under that suffix would also match the rule and receive the injected credential. Reserve wildcards for single-tenant domains you control. |
 | `secret_ref` | yes | A `<scheme>://<rest>` URI the matching provider resolves (e.g. `op://VAULT/ITEM/FIELD`). Omit when using `routes` (each route carries its own). |
 | `inject` | yes* | How to attach the resolved credential — see below. |
 | `injects` | no | Several header injections fed by the rule's one `secret_ref`, for a host that authenticates the same credential through two different headers. Mutually exclusive with `inject`, `routes`, and `template`; see below. |
@@ -244,7 +246,7 @@ rules:
 | `header` | Raw. A value containing CR or LF is rejected (header-injection guard) and the request fails closed. |
 | `path` | `url.PathEscape` — escaped as a single path segment. |
 | `query` | `url.QueryEscape` — escaped as a query component. |
-| `body` | Chosen by `Content-Type`: `application/json` → JSON string-escaped; `application/x-www-form-urlencoded` → query-escaped; `multipart/*` → **skipped** (forwarded unmodified); anything else → raw. A body with a `Content-Encoding` (compressed) is **skipped** and forwarded unmodified. |
+| `body` | Chosen by `Content-Type`: `application/json` → JSON string-escaped; `application/x-www-form-urlencoded` → query-escaped; `multipart/*` → **skipped** (forwarded unmodified); anything else → raw. A body with a `Content-Encoding` other than `identity` is **skipped** and forwarded unmodified. |
 
 Notes:
 
@@ -345,9 +347,12 @@ rules:
   low-diversity, e.g. `tgMax`); it does not block boot, since the operator owns
   the trust decision. postern also **rejects** (fatal) tokens that overlap (one
   a substring of another), because substitution matches by substring.
-- **Surfaces** behave exactly as above: tokens are scanned for, and replaced on,
-  the surfaces named in `inject.in` (default `[header]`), with the same
-  per-surface encoding and the non-header charset restriction.
+- **Surfaces** behave as in the placeholder section: tokens are scanned for,
+  and replaced on, the surfaces named in `inject.in` (default `[header]`), with
+  the same per-surface encoding and the non-header charset restriction. One
+  difference: if the body surface is declared but the body is not scannable
+  (compressed or multipart), no route can be selected and the request **fails
+  closed with `502`** — it is not forwarded untouched.
 - **Substitution replaces _every_ occurrence on the declared surfaces.** Once a
   route is selected, the resolved credential is spliced in everywhere its token
   appears across those surfaces (e.g. every header value containing it). Do not
@@ -395,8 +400,8 @@ Errors block startup. Common errors:
   list; an entry that is not `type: header`, is missing `name` or `template`, or
   carries `in`/`max_body_bytes`; duplicate header names within one rule.
 
-Warnings (reported, non-fatal): a route `token` with low estimated entropy
-(below ~64 bits) — a guessability hint, not a hard failure.
+Errors (each blocks startup):
+
 - `proxy.max_body_bytes` (or a per-rule `inject.max_body_bytes`) negative; a
   per-rule `max_body_bytes` set without `body` in `inject.in`.
 - `cache_ttl` not greater than zero (when no `cache` block is set); `cache.ttl`
@@ -404,4 +409,9 @@ Warnings (reported, non-fatal): a route `token` with low estimated entropy
   `cache.ttl`; `cache.max_stale` less than `cache.ttl`; `listen` missing or not
   `host:port`.
 - A rule present but no credstore configured (set `token:` or `credstores:`).
-- Duplicate rule hosts or duplicate credstore names.
+- Duplicate rule hosts or duplicate credstore names (compared on the exact YAML
+  string; case or trailing-dot variants are not caught here).
+
+Warnings (reported, non-fatal): a route `token` whose estimated entropy is
+below ~64 bits (short or low-diversity, e.g. `tgMax`) — a guessability hint,
+not a hard failure.

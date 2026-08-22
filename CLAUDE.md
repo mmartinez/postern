@@ -1,6 +1,6 @@
 ## What postern is
 
-A credential-brokering HTTPS forward proxy for AI agents. The agent calls outbound APIs without auth headers (or with placeholder values); postern matches the request host against YAML-declared broker rules, resolves the rule's credential reference from a pluggable credential provider (1Password Service Accounts, Bitwarden Secrets Manager), and injects it before forwarding. The agent never holds the real credential.
+A credential-brokering HTTPS forward proxy for AI agents. The agent calls outbound APIs without auth headers (or with placeholder values); postern matches the request host against YAML-declared broker rules, resolves the rule's credential reference from a pluggable credential provider (1Password Service Accounts, Bitwarden Secrets Manager, OAuth2 token minting), and injects it before forwarding. The agent never holds the real credential.
 
 Apache-2.0 licensed.
 
@@ -11,7 +11,7 @@ The host needs only Docker, git, and the devcontainer CLI. **No Go toolchain on 
 - Start the env once: `devcontainer up --workspace-folder .`
 - Drop into a shell: `make shell`
 - Anything Go-related goes through `make <target>`. From the host these wrap `devcontainer exec`; inside the container they are direct invocations. The Makefile auto-detects which side it's on.
-- Bump tool versions in `.mise.toml` only. CI reads the same pins.
+- Bump tool versions in `.mise.toml`; the devcontainer reads these pins. CI pins Go/lint/goreleaser/zig separately in each workflow's env — bump both sides when a tool changes.
 
 If a command fails on the host with "command not found", the fix is to run it via `make` (or inside `make shell`), not to install the tool globally.
 
@@ -23,7 +23,7 @@ All Go work runs through `make`; on the host these wrap `devcontainer exec`.
 - `make build` — build `dist/postern`.
 - `make test` — full suite with `-race` and coverage.
 - `make lint` — golangci-lint.
-- `make ci` — lint + test + vuln + license check (what CI runs); run before pushing.
+- `make ci` — lint + test + vuln + license check (the core local gate; CI adds platform, format, gitleaks, and snapshot/image jobs on top); run before pushing.
 - `make snapshot` — local release build (binaries, archives, SBOMs, checksums; no publish/sign).
 - `make licenses` — regenerate `THIRD_PARTY_NOTICES.md` after any dependency change.
 
@@ -34,7 +34,7 @@ All Go work runs through `make`; on the host these wrap `devcontainer exec`.
 - `internal/proxy/` — the MITM proxy (goproxy) and request handler.
 - `internal/ca/` — local CA: generate, mint per-host leaf certs, OS trust-store integration.
 - `internal/config/` — YAML schema, strict loader, line-numbered validation.
-- `internal/credstore/` — provider registry plus the `onepassword/` and `bitwarden/` backends.
+- `internal/credstore/` — provider registry plus the `onepassword/`, `bitwarden/`, and `oauth2/` backends.
 - `internal/token/` — service-account token storage (file and OS keyring).
 - `internal/{runtime,logging,templates,version}/` — server assembly, slog setup, template rendering, build version.
 
@@ -53,7 +53,7 @@ Per slice:
 1. State scope before opening files. For non-trivial work, surface 2–3 viable approaches with tradeoffs and wait for review before coding.
 2. **TDD.** Failing test first → confirm RED → minimum implementation to GREEN → refactor with tests still green. Skip TDD only for pure docs/config changes with no behavioral impact.
 3. **Verify library/SDK shape against current docs before coding against it.** Training data is stale for the 1Password SDK, goproxy streaming semantics, 99designs/keyring backend enumeration, and several others.
-4. **Coverage gate:** ≥ 80% on the core packages (broker, config, token, onepassword). Lower bar acceptable on glue code that is already exercised by integration tests.
+4. **Coverage gate:** ≥ 80% on the core packages (broker, config, token, onepassword) — a project target, not yet enforced in CI. Lower bar acceptable on glue code that is already exercised by integration tests.
 5. One slice, one commit. Conventional commit message.
 
 ## Go conventions
@@ -95,7 +95,7 @@ We follow **Effective Go** and the **Google Go Style Guide**. The authoritative 
 
 ### State
 
-- **No global mutable state outside** `main`**.** Pass loggers, clocks, and configs explicitly. The one accepted exception is the `Version` string set by ldflags at build time.
+- **No global mutable state outside** `main`**.** Pass loggers, clocks, and configs explicitly. Accepted exceptions: the `Version` string set by ldflags at build time, and the credstore `defaultRegistry` populated by provider `init()` functions.
 - Logging is stdlib `log/slog` only, with an explicit logger passed in. Never log a credential value or a fingerprint of one.
 
 ### YAML & config
@@ -110,7 +110,7 @@ We follow **Effective Go** and the **Google Go Style Guide**. The authoritative 
 - Table-driven for anything with more than two cases. Subtests via `t.Run(tc.name, ...)`.
 - **No** `time.Sleep` **in tests.** Use injectable clocks (interface or a clock library).
 - **Never mock the database / keychain / SDK in tests whose job is to validate that the database / keychain / SDK works.** Use the real implementation, or a live test gated by an opt-in env var.
-- Race detector on always. Pre-push and CI both run with `-race`.
+- Race detector on the Linux CI job and pre-push; the native macOS test job currently runs without `-race`.
 - Integration tests live alongside the package they exercise (`*_integration_test.go`), build the binary with `go build`, and drive it via `exec.Cmd`. The install-script end-to-end test lives under `test/install/`.
 
 ## Releases
@@ -128,7 +128,7 @@ This is a credential-brokering tool — be paranoid about leakage.
 - Never write a credential, token, or secret value to **any** log, stdout, stderr, file, or test fixture. Use the masking helper when you need to reference one in output (`first4…last4` form).
 - A banned-strings gate blocks literal vendor brand names in Go and YAML files outside of the user-facing docs and the gate's own config. This protects against accidental trademark misuse.
 - gitleaks runs pre-commit and across full history in CI.
-- The runtime **fails closed**: any credential resolver error returns 502 to the agent and does **not** call the upstream. Tests must assert the upstream-side counter stayed at zero.
+- The runtime **fails closed**: a credential resolver error with no usable cached value returns 502 to the agent and does **not** call the upstream (a previously cached value keeps serving until `max_stale`; see docs/security.md). Tests must assert the upstream-side counter stayed at zero.
 
 ## Things never to do
 
@@ -137,7 +137,7 @@ This is a credential-brokering tool — be paranoid about leakage.
 - Bypass lefthook with `--no-verify`.
 - Skip TDD on behavioral code "for speed."
 - Use a regex when a single-`*` glob suffices for host patterns.
-- Add a dependency without regenerating `THIRD_PARTY_NOTICES.md`(run `make licenses`).
+- Add a dependency without regenerating `THIRD_PARTY_NOTICES.md` (run `make licenses`).
 - Add anything under `pkg/`. App code lives under `internal/`.
 
 ## When you finish a task

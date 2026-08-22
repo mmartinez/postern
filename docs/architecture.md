@@ -62,8 +62,11 @@ agent                     postern (127.0.0.1:1701)                 upstream
 
 3. **Resolve.** The matched rule's `secret_ref` (e.g. `op://Vault/Item/field`)
    is handed to the credstore provider registered for that URI scheme. Resolved
-   values are cached with a TTL and an LRU bound; one-time-password references
-   bypass the cache. Resolver errors are never cached.
+   values are cached with a TTL; entries are keyed by secret reference, never
+   evicted, and survive hot reloads — the cache footprint is bounded by the set
+   of references seen over the process lifetime. One-time-password references
+   bypass the cache. Failed resolutions are retried after a backoff window and
+   are never served as values.
 
 4. **Inject.** The resolved credential is rendered through the rule's template
    (`Bearer {{ CREDENTIAL }}`) and either set as a named header or substituted
@@ -84,11 +87,14 @@ returns a generic `502` to the agent and never contacts the upstream. See
 
 ## Trust boundary
 
-The real credential exists only inside the postern process and on the wire
-between postern and the upstream. It crosses to the agent's side **never**:
+The intended boundary: the real credential exists only inside the postern
+process and on the wire between postern and the upstream.
 
 - The agent holds no credential — only the placeholder it sent (if any).
-- `postern rules list` shows the `secret_ref`, never a resolved value.
+  Postern does not scrub upstream responses: an upstream that reflects the
+  injected credential back in its response can still expose it to the agent.
+- `postern rules list` shows rule-level fields (host and `secret_ref`), never
+  a resolved value.
 - Logs redact credential-bearing headers and never print a resolved secret.
 
 The local CA's private key is the other sensitive asset; it lives at
@@ -115,12 +121,15 @@ any other private key.
 
 ## Hot reload
 
-`postern server` watches the config file. On save it re-parses and re-validates;
+A started server with zero rules runs brokerless and does not watch the
+config file: adding the first rule requires a restart. Otherwise `postern
+server` watches the config file. On save it re-parses and re-validates;
 a clean parse atomically swaps the broker's ruleset so in-flight requests are
 unaffected. A config with a fatal lint is rejected and the previous ruleset
 keeps serving — the proxy never drops to an empty ruleset on a typo. Listener,
 cache, and token settings are bound at startup; changing them requires a
-restart, and postern logs a warning when a reload diverges on one of them.
+restart, and postern logs a warning when a reload diverges on one of them
+(changes to a credstore's `refresh_token` block are not currently detected).
 
 ## Pluggable credential vendors
 

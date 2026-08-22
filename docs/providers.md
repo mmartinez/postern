@@ -9,7 +9,8 @@ is some provider in the registry that claims that scheme.
 
 This document is the contract a new provider has to satisfy. If you
 follow it, you can drop a new credential vendor into postern as a single
-new sub-package; the broker, proxy, and CLI do not need to be edited.
+new sub-package plus one side-effect import; the broker and proxy do not
+need to be edited.
 
 ## The interface
 
@@ -72,6 +73,14 @@ type Resolver interface {
 the empty string. Implementations should reject a non-empty `vaultID` with a
 clear error so a misconfigured caller fails closed.
 
+A provider that needs a second secret alongside the service-account token
+(the OAuth2 `refresh_token` grant is the motivating case) additionally
+implements `credstore.SecondarySecretProvider`, which mirrors `Validate` and
+`NewResolver` with a `secondary` argument. When a credstore carries a
+`refresh_token:` block, the runtime resolves that block through the normal
+token chain and calls the secondary variants; a provider that does not
+implement the interface rejects a configured `refresh_token:` block at boot.
+
 ## Registration
 
 Providers self-register via `init()` against the process-wide registry,
@@ -113,7 +122,7 @@ internal/credstore/
   provider.go              # Provider interface + Registry types
   registry.go              # process-wide registry
   router.go                # SchemeRouter (broker.Resolver dispatcher)
-  cache.go                 # shared background-refreshing TTL/LRU cache (provider-agnostic)
+  cache.go                 # shared background-refreshing TTL cache (provider-agnostic; entries never evicted)
   onepassword/             # production provider (links the SDK)
     provider.go            # implements credstore.Provider
     client.go              # SDK construction + HealthCheck
@@ -152,9 +161,9 @@ credstores:
 
 > ⚠ The Provider's **Name** ("1password") and **Scheme** ("op") are
 > distinct on purpose. `provider:` references the Name; `secret_ref:`
-> uses the Scheme. Mixing them up surfaces as `unknown provider "op"`
-> at boot — the validator does not check provider names against the
-> registry to keep the config package decoupled from credstore.
+> uses the Scheme. `postern config validate` does check `provider:` against the
+> registry (via the registry facts the CLI supplies) and fails with a
+> line-numbered error for an unknown name.
 
 Per-rule routing is inferred from the `secret_ref` scheme. When the
 config has exactly one credstore for a given provider, rules don't need
@@ -306,6 +315,10 @@ seed; `refresh_token_path` only needs a durable mount (a hostPath/PVC, not an
 
 ### Config example
 
+The two blocks below are **alternatives**, not one config: postern supports
+exactly one credstore per provider today, and declaring two `oauth2` entries
+fails at boot because resolvers are keyed by scheme, not by the ref authority.
+
 ```yaml
 credstores:
   - name: corp                              # client_credentials grant
@@ -340,7 +353,7 @@ proxy:
 
 rules:
   - host: api.example.com
-    secret_ref: oauth2://corp               # authority selects the credstore by name
+    secret_ref: oauth2://corp               # scheme dispatches to the oauth2 credstore; the authority is ignored
     inject:
       type: header
       name: authorization
@@ -362,8 +375,9 @@ package myvendor
 
 Pair the tagged files with an untagged `doc.go` so `go build ./...`
 still succeeds (an empty package directory is an error in Go).
-CI compiles `go build -tags <tagname> ./...` on every PR so the
-contract stays honest even when no tests run in the default suite.
+CI's typecheck job compiles `go build -tags bitwarden ./...` explicitly;
+a provider shipped under a fresh tag gets no CI compile coverage until you
+add the same explicit step to `.github/workflows/ci.yml`.
 Once a provider graduates, drop the build tag and add its side-effect
 import to the default binary (the bitwarden provider followed this path).
 
@@ -387,5 +401,5 @@ import to the default binary (the bitwarden provider followed this path).
   and an opt-in CI workflow trigger. See
   `internal/credstore/onepassword/live_test.go` for the pattern.
 - The cache in `internal/credstore/cache.go` is generic and
-  provider-agnostic; consider reusing it rather than reimplementing
-  TTL/LRU in your provider.
+  provider-agnostic (TTL, refresh-ahead, serve-stale; entries are never
+  evicted); consider reusing it rather than reimplementing that logic.
