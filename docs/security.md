@@ -8,11 +8,13 @@ and does not defend against, and how it handles keys.
 
 Once a request matches a rule, postern must never let it reach the upstream
 without the injected credential. Any error in the resolve-or-inject path —
-a missing token, a vendor outage, a malformed reference, or a panic anywhere in
-the hook chain — results in a generic `502 Bad Gateway` to the agent, and the
+a missing token, a vendor outage, a malformed reference, or a panic inside the
+broker hook — results in a generic `502 Bad Gateway` to the agent, and the
 upstream is **not contacted**. The error body returned to the client is one
 generic constant ("postern: bad gateway") for every failure, so the agent
-cannot tell a missing token from a network blip from a misconfigured rule.
+cannot tell a missing token from a network blip from a misconfigured rule. One
+documented exception follows below: an already-cached value keeps serving while
+refreshes fail.
 Connection-level
 failures — a tunnel that cannot dial, or a mid-tunnel copy error — return the
 same generic `502` body rather than the underlying error text, so a hostile
@@ -63,11 +65,13 @@ When a token must be referenced in human-facing output, it is masked to a
 
 **Defended:**
 
-- *Credential theft from the agent.* The agent never holds the real secret, so
-  prompt injection or a compromised dependency in the agent has nothing to
-  exfiltrate beyond placeholders. This holds only for **correctly-scoped
-  rules** and a **process/uid boundary** between the agent and postern — see
-  the two caveats below.
+- *Credential theft from the agent.* The agent never holds the real secret by
+  construction, so prompt injection or a compromised dependency in the agent has
+  nothing to exfiltrate beyond placeholders. Two leaks remain possible: an
+  upstream that **reflects** the injected credential back in its response
+  (responses are forwarded unmodified), and anything covered by the caveats
+  below. This still requires **correctly-scoped rules** and a **process/uid
+  boundary** between the agent and postern.
 - *Accidental credential logging.* Redaction and the no-secret-in-logs rule
   reduce the chance a credential lands in a log aggregator.
 - *Silent auth bypass.* Fail-closed means a broker failure cannot degrade into
@@ -100,8 +104,12 @@ When a token must be referenced in human-facing output, it is masked to a
 ## Key and token handling
 
 **Local CA.** `postern ca install` generates a CA at `~/.postern/ca.{pem,key}`
-(`0600` files under a `0700` directory) and adds the certificate to the system
-trust store. On macOS it instead anchors the certificate at
+(`0600` files under a `0700` directory) and registers it with your trust
+store. On Linux that writes the anchor into your per-user ca-certificates
+directory (`~/.local/share/ca-certificates/postern.crt`); activate it with
+`update-ca-certificates --user` (Debian/Ubuntu) or your distribution's
+equivalent — postern drops the file but does not refresh the bundle itself.
+On macOS it instead anchors the certificate at
 `~/.postern/trust/ca.pem` and records a **user-domain** trust setting in your
 login keychain via `/usr/bin/security add-trusted-cert`: per-user, not
 system-wide, which is why no `sudo` is required (the authorization prompt the
@@ -111,7 +119,8 @@ on macOS that revokes the user-domain trust settings of every Postern CA
 certificate the login keychain reports (`security remove-trusted-cert`) and
 removes the anchor PEM; the keychain entries themselves deliberately stay,
 since a self-signed root without explicit trust settings is untrusted by
-macOS anyway.
+macOS anyway. On either platform, `--purge` additionally deletes the CA files
+themselves (`~/.postern/ca.pem` and `ca.key`).
 The CA private key never leaves the machine and is used only to mint
 short-lived per-host leaf certificates at request time.
 
@@ -155,6 +164,10 @@ broker rule:
   actually brokered.
 - `block` rejects the `CONNECT` with a `502` and never contacts the upstream —
   an allowlist-only egress policy for traffic flowing through the proxy.
+
+With zero rules at startup, none of this applies: postern starts brokerless,
+intercepts every `CONNECT`, and applies neither policy. Adding the first rule
+requires a restart.
 
 `block` governs only requests that reach the proxy. It is not a substitute for a
 network-level egress policy: anything that bypasses the proxy (raw sockets,

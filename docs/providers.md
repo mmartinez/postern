@@ -9,7 +9,8 @@ is some provider in the registry that claims that scheme.
 
 This document is the contract a new provider has to satisfy. If you
 follow it, you can drop a new credential vendor into postern as a single
-new sub-package; the broker, proxy, and CLI do not need to be edited.
+new sub-package plus one side-effect import; the broker and proxy do not
+need to be edited.
 
 ## The interface
 
@@ -160,9 +161,9 @@ credstores:
 
 > ⚠ The Provider's **Name** ("1password") and **Scheme** ("op") are
 > distinct on purpose. `provider:` references the Name; `secret_ref:`
-> uses the Scheme. Mixing them up surfaces as `unknown provider "op"`
-> at boot — the validator does not check provider names against the
-> registry to keep the config package decoupled from credstore.
+> uses the Scheme. `postern config validate` does check `provider:` against the
+> registry (via the registry facts the CLI supplies) and fails with a
+> line-numbered error for an unknown name.
 
 Per-rule routing is inferred from the `secret_ref` scheme. When the
 config has exactly one credstore for a given provider, rules don't need
@@ -352,7 +353,7 @@ proxy:
 
 rules:
   - host: api.example.com
-    secret_ref: oauth2://corp               # authority selects the credstore by name
+    secret_ref: oauth2://corp               # scheme dispatches to the oauth2 credstore; the authority is ignored
     inject:
       type: header
       name: authorization

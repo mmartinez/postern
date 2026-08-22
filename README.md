@@ -36,8 +36,11 @@ curl -x http://localhost:1701 \
 
 Postern matches `api.anthropic.com`, resolves `bw://…`/`op://…` from your vault,
 injects the key, and forwards the now-authenticated request. The upstream sees a
-valid call; the agent never touched the secret. On any resolver error postern
-**fails closed** with a `502` and never contacts the upstream.
+valid call; the agent never touched the secret. If the credential cannot be
+resolved (and no cached value is available to serve), postern **fails closed**
+with a `502` and never contacts the upstream. Upstream responses are forwarded
+unmodified: an upstream that echoes the injected credential back can still
+expose it to the agent ([docs/security.md](docs/security.md)).
 
 ## How it works
 
@@ -48,8 +51,8 @@ the credential, and forwards the request. The full request lifecycle and trust
 boundary are in [docs/architecture.md](docs/architecture.md).
 
 The matched rule's secret reference (`op://…` or `bw://…`) resolves from the
-configured provider; adding a new provider is a single package. See
-[docs/providers.md](docs/providers.md).
+configured provider; adding a new provider is a single package plus one import.
+See [docs/providers.md](docs/providers.md).
 
 > **Status:** early development. The proxy works end-to-end, and the release
 > pipeline (checksum-verified binaries, SBOMs, and a signed multi-arch container
@@ -100,9 +103,9 @@ example.
 From an installed binary (or `./dist/postern` when building from source):
 
 ```sh
-postern ca install        # generate a local CA and add it to your trust store
+postern ca install        # generate a local CA and register it (Linux: user trust anchor; macOS: login keychain)
 postern config init       # write a starter ~/.postern/config.yaml
-postern token set --stdin # store your vault service-account / machine token
+postern token set --stdin # store your 1Password service-account token (legacy single-vendor form)
 
 # edit ~/.postern/config.yaml to add rules for the APIs your agent calls, then:
 postern server            # run the proxy
@@ -116,8 +119,10 @@ CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes the
 trust settings (the certificate entry stays in the keychain, untrusted).
 
 `postern config validate` checks a config with line-numbered errors, and
-`postern rules list` shows the loaded rules (never the resolved credentials).
-Every field is documented in [docs/configuration.md](docs/configuration.md).
+`postern rules list` shows rule-level fields — host and `secret_ref` — never a
+resolved credential value (routes, `injects`, and OAuth1 references are not
+listed). Every field is documented in
+[docs/configuration.md](docs/configuration.md).
 
 A minimal config:
 
@@ -188,13 +193,15 @@ export HTTPS_PROXY=http://localhost:1701
 export SSL_CERT_FILE=/path/to/ca.pem                   # NODE_EXTRA_CA_CERTS for Node-based agents
 ```
 
-Rotating the CA (at its ~10-year expiry, or on key compromise) is just
-re-running `docker compose run --rm bootstrap` and redistributing `ca.pem`.
+Rotating the CA (at its ~10-year expiry, or on key compromise) means deleting
+the `./postern-ca` directory, re-running `docker compose run --rm bootstrap`,
+and redistributing the new `ca.pem` (`ca install` reuses an existing CA).
 
 ### systemd
 
-On a non-container Linux host, deliver the token with systemd's credential store
-so it never lands in the unit's environment or on disk unencrypted:
+On a non-container Linux host, deliver the token with systemd's credential
+store so it stays out of the unit's environment and lands in a read-only,
+per-service mount rather than a world-readable path:
 
 ```ini
 [Service]
