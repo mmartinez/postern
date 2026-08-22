@@ -31,7 +31,7 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 			if err != nil {
 				return nil, fmt.Errorf("rules[%d] (%s): %w", i, src.Host, err)
 			}
-			out[i] = Rule{Host: canonicalHost(src.Host), SecretRef: src.SecretRef, Injections: specs}
+			out[i] = Rule{Host: canonicalHost(src.Host), SecretRef: src.SecretRef, Paths: src.Paths, Methods: src.Methods, Injections: specs}
 			continue
 		}
 		t, err := injectTypeFromConfig(src.Inject.Type)
@@ -51,6 +51,8 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 		out[i] = Rule{
 			Host:      canonicalHost(src.Host),
 			SecretRef: src.SecretRef,
+			Paths:     src.Paths,
+			Methods:   src.Methods,
 			Injection: InjectSpec{
 				Type:         t,
 				Name:         src.Inject.Name,

@@ -80,7 +80,7 @@ func newRootCmd() *cobra.Command {
 
 	cmd.AddCommand(cli.NewCACmd(defaultCADir(), defaultTrustDir()))
 	cmd.AddCommand(cli.NewServerCmd(defaultCADir(), reg, store))
-	cmd.AddCommand(cli.NewRulesCmd())
+	cmd.AddCommand(cli.NewRulesCmd(reg))
 	cmd.AddCommand(cli.NewBootstrapCmd(defaultCADir()))
 
 	return cmd

@@ -98,6 +98,19 @@ type Options struct {
 	// deterministically instead of polling a wall clock. Test-only:
 	// production wiring never sets it.
 	TestReapHook func()
+	// AdminListen optionally starts a second, loopback-only HTTP listener
+	// exposing GET /healthz for container orchestrators and operators.
+	// Empty (the default) starts no admin listener and leaves behavior
+	// identical to a single-listener server.
+	AdminListen string
+
+	// HealthStatus is the status source the admin endpoint renders. It is
+	// an injected callback (rather than a config/broker import) because this
+	// package sits below both: the CLI wires a closure that aggregates
+	// ruleset version and credstore validation state. Required when
+	// AdminListen is set; New rejects the half-wired combination so an
+	// admin endpoint can never come up serving guesses about its own state.
+	HealthStatus func() HealthReport
 }
 
 // Runtime is the constructed-but-not-yet-running postern server. Build it
@@ -106,9 +119,11 @@ type Runtime struct {
 	opts   Options
 	proxy  *proxy.Proxy
 	srv    *http.Server
+	admin  *http.Server // nil unless opts.AdminListen is set
 	minter *ca.Minter
 
-	addr atomic.Value // string, populated once the listener is up
+	addr      atomic.Value // string, populated once the proxy listener is up
+	adminAddr atomic.Value // string, populated once the admin listener is up
 
 	conns *connRegistry // live accepted conns; drain barrier at shutdown
 
@@ -130,6 +145,9 @@ func New(opts Options) (*Runtime, error) {
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(discardWriter{}, nil))
+	}
+	if opts.AdminListen != "" && opts.HealthStatus == nil {
+		return nil, errors.New("admin_listen requires a HealthStatus source")
 	}
 
 	minter, err := ca.NewMinter(opts.CA, 1024, time.Now)
@@ -154,7 +172,6 @@ func New(opts Options) (*Runtime, error) {
 	if opts.TestIdleTimeout > 0 {
 		idle = opts.TestIdleTimeout
 	}
-
 	rt := &Runtime{
 		opts:   opts,
 		proxy:  p,
@@ -184,6 +201,9 @@ func New(opts Options) (*Runtime, error) {
 	if opts.TestShutdownBudget > 0 {
 		rt.shutdownBudget = opts.TestShutdownBudget
 	}
+	if opts.AdminListen != "" {
+		rt.admin = newAdminServer(opts.AdminListen, opts.HealthStatus)
+	}
 	return rt, nil
 }
 
@@ -197,17 +217,39 @@ func (r *Runtime) Addr() string {
 	return ""
 }
 
-// Run binds the listener and serves until ctx is cancelled or the server
-// errors. On cancellation it gracefully shuts down within shutdownBudget:
-// http.Server.Shutdown first for non-hijacked traffic, then a bounded wait
-// on live tunnels, then force-close of whatever is left. The returned error
-// is nil for clean shutdowns and non-nil for bind failures or serve-level
-// errors.
+// AdminAddr returns the admin listener's actual bind address, or "" when
+// no admin listener is configured (or Run hasn't bound it yet). Tests and
+// the CLI use it to learn the OS-assigned admin port.
+func (r *Runtime) AdminAddr() string {
+	if v := r.adminAddr.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+// Run binds the listeners and serves until ctx is cancelled or a server
+// errors. On cancellation both servers drain gracefully within the shutdown
+// budget: http.Server.Shutdown first for non-hijacked traffic, then a bounded
+// wait on live tunnels, then force-close of whatever is left. The returned
+// error is nil for clean shutdowns and non-nil for bind failures or
+// serve-level errors.
 func (r *Runtime) Run(ctx context.Context) error {
 	listener, err := net.Listen("tcp", r.opts.Addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", r.opts.Addr, err)
 	}
+
+	var adminListener net.Listener
+	if r.admin != nil {
+		adminListener, err = net.Listen("tcp", r.opts.AdminListen)
+		if err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("listen admin %s: %w", r.opts.AdminListen, err)
+		}
+		r.adminAddr.Store(adminListener.Addr().String())
+		r.opts.Logger.Info("admin listening", slog.String("addr", adminListener.Addr().String()))
+	}
+
 	r.addr.Store(listener.Addr().String())
 	r.opts.Logger.Info("proxy listening", slog.String("addr", listener.Addr().String()))
 
@@ -215,7 +257,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	defer stopReaper()
 	go r.reapLoop(reapCtx)
 
-	serveErr := make(chan error, 1)
+	serveErr := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -227,6 +269,18 @@ func (r *Runtime) Run(ctx context.Context) error {
 		}
 		serveErr <- err
 	}()
+	if r.admin != nil && adminListener != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := r.admin.Serve(adminListener)
+			if errors.Is(err, http.ErrServerClosed) {
+				serveErr <- nil
+				return
+			}
+			serveErr <- err
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -238,13 +292,33 @@ func (r *Runtime) Run(ctx context.Context) error {
 			r.opts.Logger.Warn("shutdown error", slog.Any("err", err))
 			shutdownErr = err
 		}
+		var adminErr error
+		if r.admin != nil {
+			adminErr = r.admin.Shutdown(shutdownCtx)
+		}
 		drained, forced := r.drainConns(shutdownCtx)
 		r.opts.Logger.Info("shutdown drain complete",
 			slog.Int("drained", drained),
 			slog.Int("force_closed", forced))
 		wg.Wait()
-		return shutdownErr
+		if shutdownErr != nil {
+			r.opts.Logger.Warn("shutdown error", slog.Any("err", shutdownErr))
+			return shutdownErr
+		}
+		if adminErr != nil {
+			r.opts.Logger.Warn("admin shutdown error", slog.Any("err", adminErr))
+			return adminErr
+		}
+		return nil
 	case err := <-serveErr:
+		// One listener failed at serve level; stop the other so the process
+		// doesn't linger half-alive until the context is cancelled.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+		defer cancel()
+		_ = r.srv.Shutdown(shutdownCtx)
+		if r.admin != nil {
+			_ = r.admin.Shutdown(shutdownCtx)
+		}
 		wg.Wait()
 		return err
 	}

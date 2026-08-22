@@ -127,6 +127,7 @@ func (v *validator) checkProxy(p *Proxy) {
 	if p.MaxBodyBytes < 0 {
 		v.add("proxy.max_body_bytes", fmt.Sprintf("max_body_bytes must be >= 0 (got %d); 0 means use the default", p.MaxBodyBytes), SeverityError)
 	}
+	v.checkAdminListen(p.AdminListen)
 }
 
 // checkCache validates the credential-cache configuration. Without a cache
@@ -243,6 +244,8 @@ func (v *validator) checkRule(base string, r Rule) {
 	} else if !isValidHostPattern(r.Host) {
 		v.add(base+".host", fmt.Sprintf("host %q must be a literal hostname or a single-* glob (e.g. *.example.com)", r.Host), SeverityError)
 	}
+
+	v.checkScoping(base, r)
 
 	if r.Injects != nil {
 		v.checkInjects(base, r)

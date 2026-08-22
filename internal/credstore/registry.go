@@ -2,7 +2,6 @@ package credstore
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 )
 
@@ -69,15 +68,19 @@ func (r *Registry) ForScheme(scheme string) (Provider, bool) {
 }
 
 // ForSecretRef extracts the URI scheme from secretRef and returns the
-// matching Provider. A secretRef must be of the form "<scheme>://<rest>";
-// inputs missing the "://" separator return (nil, false) so callers can
+// matching Provider. A secretRef must be of the form "<scheme>://<rest>"
+// or "<scheme>+<name>://<rest>" (see ParseQualifiedRef); the qualifier
+// names the credstore instance and is ignored here because a Registry is
+// keyed by provider, one per scheme — routing to the named store happens
+// in the name-keyed router (NameRouter), not in the provider lookup.
+// Inputs missing the "://" separator return (nil, false) so callers can
 // surface a clear "no provider for ref" error.
 func (r *Registry) ForSecretRef(secretRef string) (Provider, bool) {
-	i := strings.Index(secretRef, "://")
-	if i <= 0 {
+	scheme, _, ok := ParseQualifiedRef(secretRef)
+	if !ok {
 		return nil, false
 	}
-	return r.ForScheme(secretRef[:i])
+	return r.ForScheme(scheme)
 }
 
 // Providers returns a snapshot of every registered provider, in

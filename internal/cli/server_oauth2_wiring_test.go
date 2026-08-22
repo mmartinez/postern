@@ -89,13 +89,13 @@ func TestBuildCredStoreResolvers_RefreshTokenRoutesToSecondary(t *testing.T) {
 		RefreshToken: keychainToken("secondary"),
 	}}
 
-	resolvers, err := buildCredStoreResolvers(context.Background(), reg, stores, seededStore(t), discardLogger())
+	resolvers, err := buildCredStoreResolvers(context.Background(), reg, stores, seededStore(t), discardLogger(), nil)
 	require.NoError(t, err)
 	require.True(t, dp.usedSecondary, "a refresh_token block must drive the secondary path")
 	require.Equal(t, "client-secret-val", dp.gotToken)
 	require.Equal(t, "refresh-tok-val", dp.gotSecondary)
 
-	got, err := resolvers["oauth2"].Resolve(context.Background(), "", "oauth2://li")
+	got, err := resolvers["li"].Resolve(context.Background(), "", "oauth2://li")
 	require.NoError(t, err)
 	require.Equal(t, "client-secret-val:refresh-tok-val", got)
 }
@@ -112,11 +112,11 @@ func TestBuildCredStoreResolvers_NoRefreshUsesPrimaryPath(t *testing.T) {
 		Token:    keychainToken("primary"),
 	}}
 
-	resolvers, err := buildCredStoreResolvers(context.Background(), reg, stores, seededStore(t), discardLogger())
+	resolvers, err := buildCredStoreResolvers(context.Background(), reg, stores, seededStore(t), discardLogger(), nil)
 	require.NoError(t, err)
 	require.False(t, dp.usedSecondary, "no refresh_token block must use the single-secret path")
 
-	got, err := resolvers["oauth2"].Resolve(context.Background(), "", "oauth2://corp")
+	got, err := resolvers["corp"].Resolve(context.Background(), "", "oauth2://corp")
 	require.NoError(t, err)
 	require.Equal(t, "client-secret-val", got)
 }
@@ -134,7 +134,7 @@ func TestBuildCredStoreResolvers_RefreshBlockOnNonSecondaryProviderErrors(t *tes
 		RefreshToken: keychainToken("secondary"),
 	}}
 
-	_, err := buildCredStoreResolvers(context.Background(), reg, stores, seededStore(t), discardLogger())
+	_, err := buildCredStoreResolvers(context.Background(), reg, stores, seededStore(t), discardLogger(), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not accept a refresh_token block")
 }
