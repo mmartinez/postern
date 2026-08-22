@@ -35,14 +35,23 @@ var (
 // writeScript drops an executable POSIX shell script into a temp dir and
 // returns its path, standing in for the bws binary under test.
 //
+// The body is written to a temporary name and renamed onto the final path:
+// on overlayfs (every devcontainer) a just-closed O_WRONLY handle can
+// outlive close() long enough that an immediate fork/exec of the same inode
+// fails with ETXTBSY ("text file busy"). Renaming swaps the dentry to a
+// fresh inode no one holds open for writing, so the exec below is race-free
+// without sleeps or retries.
 // Tests that exec the script MUST NOT call t.Parallel: a fork in a
 // concurrently running test can transiently inherit this script's
 // write fd (fork happens before the writer's close), and the exec then
 // fails with ETXTBSY ("text file busy"). See golang/go#22220.
 func writeScript(t *testing.T, body string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "bws")
-	require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755))
+	dir := t.TempDir()
+	p := filepath.Join(dir, "bws")
+	tmp := filepath.Join(dir, "bws.tmp")
+	require.NoError(t, os.WriteFile(tmp, []byte("#!/bin/sh\n"+body+"\n"), 0o755))
+	require.NoError(t, os.Rename(tmp, p))
 	return p
 }
 
@@ -98,7 +107,11 @@ func TestNewExecRunner_LooksUpBwsOnPath(t *testing.T) {
 	// Not parallel: mutates PATH via t.Setenv.
 	dir := t.TempDir()
 	p := filepath.Join(dir, "bws")
-	require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\necho ok\n"), 0o755))
+	tmp := filepath.Join(dir, "bws.tmp")
+	require.NoError(t, os.WriteFile(tmp, []byte("#!/bin/sh\necho ok\n"), 0o755))
+	// Same tmp-then-rename dance as writeScript: this path is exec'd by
+	// newExecRunner's PATH lookup immediately after the write.
+	require.NoError(t, os.Rename(tmp, p))
 	t.Setenv("PATH", dir)
 
 	r, err := newExecRunner("")

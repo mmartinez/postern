@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"syscall"
+	"time"
 )
 
 // ErrBwsNotFound is returned by newExecRunner when the bws binary cannot be
@@ -45,19 +47,46 @@ func newExecRunner(bwsPathOverride string) (*execRunner, error) {
 
 // run executes the bws binary with args and a fully-specified env, returning
 // captured stdout. A non-zero exit maps to a wrapped error.
+//
+// A start failure with ETXTBSY is retried briefly: the errno means another
+// handle still has the binary open for writing, which happens legitimately
+// while a bws upgrade replaces the binary mid-request, and transiently under
+// heavy concurrent fork pressure on overlayfs containers (observed in the
+// test suite writing fresh fake binaries). Three attempts over ~75ms bounds
+// the added latency; any other error, or a persistent ETXTBSY, fails closed
+// immediately as before.
 func (e *execRunner) run(ctx context.Context, args, env []string) ([]byte, error) {
 	// bwsPath is resolved to an absolute path at construction (no PATH hijack)
 	// and args are a fixed verb list plus a shape-checked id and non-secret URL
 	// passed as argv (no shell), so there is no injection surface here.
-	cmd := exec.CommandContext(ctx, e.bwsPath, args...) //nolint:gosec // see comment above
-	cmd.Env = env
+	//
+	// The command is rebuilt on every attempt: exec.Cmd is single-use, and the
+	// retry below needs a fresh Start/Wait cycle each time.
+	buildCmd := func() *exec.Cmd {
+		cmd := exec.CommandContext(ctx, e.bwsPath, args...) //nolint:gosec // see comment above
+		cmd.Env = env
+		cmd.Stderr = io.Discard
+		return cmd
+	}
+
+	const attempts = 3
 	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	// Discard stderr: this is a credential broker, and bws diagnostics could
-	// echo request context. Keep that off the error path entirely so a secret
-	// can never reach a log through a wrapped *exec.ExitError.
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
+	var err error
+	for i := range attempts {
+		stdout.Reset()
+		cmd := buildCmd()
+		cmd.Stdout = &stdout
+		if err = cmd.Run(); !errors.Is(err, syscall.ETXTBSY) {
+			break
+		}
+		if last := attempts - 1; i < last {
+			select {
+			case <-ctx.Done():
+			case <-time.After(25 * time.Millisecond):
+			}
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("run bws: %w", err)
 	}
 	return stdout.Bytes(), nil
