@@ -17,6 +17,6 @@ func installTrustAt(dir string, certPEM []byte) (string, error) {
 	return "", ErrTrustUnsupported
 }
 
-func uninstallTrustAt(dir string) (string, error) {
-	return "", ErrTrustUnsupported
+func uninstallTrustAt(dir string) ([]string, error) {
+	return nil, ErrTrustUnsupported
 }

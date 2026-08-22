@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // trustAnchorFile is the on-disk name postern uses when copying the CA into
@@ -28,46 +29,71 @@ const trustDirMode os.FileMode = 0o755
 // surfaces this as a "manual instructions in the README" message.
 var ErrTrustUnsupported = errors.New("system trust install is not supported on this platform")
 
-// InstallTrustAt persists certPEM at the OS trust location and registers it
-// with the platform trust store. The location argument is the OS-specific
-// trust dir resolved by DefaultTrustDir: a directory on Linux, the anchor
-// certificate path on macOS. Per-GOOS installTrustAt implementations in
-// trust_<goos>.go do the real work; this exported form is the seam the ca
-// CLI invokes directly.
+// InstallTrustAt persists certPEM at location and registers it with the
+// platform trust store, returning the anchor file path.
+//
+// Contract, identical semantics on every GOOS: location is either a trust
+// directory — the anchor is written as <dir>/postern.crt — or an explicit
+// anchor file path ending in .pem or .crt (see resolveAnchorPath).
+// DefaultTrustDir returns whichever flavor the current platform prefers.
+// Platform-independent callers and tests can therefore pass a plain
+// directory and observe <dir>/postern.crt on Linux and macOS alike.
+// Per-GOOS installTrustAt implementations in trust_<goos>.go do the real
+// work; this exported form is the seam the ca CLI invokes directly.
 func InstallTrustAt(dir string, certPEM []byte) (string, error) {
 	return installTrustAt(dir, certPEM)
 }
 
-// UninstallTrustAt revokes platform trust and removes the persisted anchor,
-// returning the (former) path. A missing anchor is treated as success so the
-// operation is idempotent.
-func UninstallTrustAt(dir string) (string, error) {
-	return uninstallTrustAt(dir)
+// UninstallTrustAt revokes platform trust for the CA anchored under location
+// and removes the persisted anchor, returning the anchor path plus the
+// SHA-256 hashes (of DER) of every certificate whose trust was revoked.
+// The hash list is empty when there was nothing to revoke. Idempotent: on
+// macOS revocation never depends on the anchor file — when it is missing,
+// every certificate the login keychain holds under the Postern common name
+// is revoked instead, so uninstall cannot be bypassed by losing the file
+// and cannot leave a still-trusted generation behind in a multi-generation
+// keychain. The keychain entries themselves are left in place: a root
+// without explicit trust settings is untrusted by default (mkcert makes the
+// same choice), so revocation-only uninstall is one idempotent command with
+// no second phase to strand.
+func UninstallTrustAt(dir string) (anchor string, revoked []string, err error) {
+	revoked, err = uninstallTrustAt(dir)
+	return resolveAnchorPath(dir), revoked, err
 }
 
-// writeAnchor is the shared file-drop half of trust installation: write
-// certPEM to <dir>/postern.crt with mode 0644, creating dir (and any missing
-// parents) with mode 0755. GOOS-specific backends call this before any
-// platform trust registration step.
-// writeAnchor is the shared file-drop half of trust installation: write
-// certPEM to <dir>/postern.crt with mode 0644, creating dir (and any missing
-// parents) with mode 0755. GOOS-specific backends call this (or writeFileMode
-// for a full-path anchor) before any platform trust registration step.
-func writeAnchor(dir string, certPEM []byte) (string, error) {
-	if err := os.MkdirAll(dir, trustDirMode); err != nil {
+// writeAnchor is the shared file-drop half of trust installation: resolve
+// the anchor path from location (see resolveAnchorPath), create any missing
+// parent directories with mode 0755, then write certPEM with mode 0644.
+// GOOS-specific backends call this before any platform trust registration
+// step.
+func writeAnchor(location string, certPEM []byte) (string, error) {
+	path := resolveAnchorPath(location)
+	if err := os.MkdirAll(filepath.Dir(path), trustDirMode); err != nil {
 		return "", fmt.Errorf("create trust dir: %w", err)
 	}
-	path := filepath.Join(dir, trustAnchorFile)
 	if err := writeFileMode(path, certPEM, trustFileMode); err != nil {
 		return path, fmt.Errorf("write trust anchor: %w", err)
 	}
 	return path, nil
 }
 
+// resolveAnchorPath maps a trust location to its on-disk anchor file path,
+// the shared half of the InstallTrustAt/UninstallTrust contract. A location
+// ending in .pem or .crt (case-insensitive) is the anchor file itself;
+// anything else is a directory whose anchor is <location>/postern.crt.
+func resolveAnchorPath(location string) string {
+	switch ext := strings.ToLower(filepath.Ext(location)); ext {
+	case ".pem", ".crt":
+		return location
+	default:
+		return filepath.Join(location, trustAnchorFile)
+	}
+}
+
 // removeAnchor is the shared file-removal half of trust uninstallation. A
 // missing file is a no-op.
-func removeAnchor(dir string) (string, error) {
-	path := filepath.Join(dir, trustAnchorFile)
+func removeAnchor(location string) (string, error) {
+	path := resolveAnchorPath(location)
 	if err := os.Remove(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return path, nil
@@ -96,11 +122,12 @@ func InstallTrust(certPEM []byte) (string, error) {
 }
 
 // UninstallTrust revokes platform trust for the CA at the OS-specific default
-// trust location and removes it, returning the (former) path on success.
-func UninstallTrust() (string, error) {
+// trust location and removes it, returning the (former) path and the hashes
+// of every revoked trusted certificate.
+func UninstallTrust() (anchor string, revoked []string, err error) {
 	dir, err := defaultTrustDir()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	return UninstallTrustAt(dir)
 }

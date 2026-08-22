@@ -82,9 +82,10 @@ func TestUninstallTrustAt_RemovesFile(t *testing.T) {
 	_, err := ca.InstallTrustAt(dir, c.CertPEM)
 	require.NoError(t, err)
 
-	path, err := ca.UninstallTrustAt(dir)
+	path, revoked, err := ca.UninstallTrustAt(dir)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(dir, "postern.crt"), path)
+	require.Empty(t, revoked, "this GOOS has no keychain-style registration to revoke")
 
 	_, statErr := os.Stat(path)
 	require.True(t, os.IsNotExist(statErr), "trust file should be gone after uninstall")
@@ -93,8 +94,9 @@ func TestUninstallTrustAt_RemovesFile(t *testing.T) {
 func TestUninstallTrustAt_MissingFileIsNoOp(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	_, err := ca.UninstallTrustAt(dir)
+	_, revoked, err := ca.UninstallTrustAt(dir)
 	require.NoError(t, err, "uninstall must be idempotent")
+	require.Empty(t, revoked)
 }
 
 func TestInstallTrustAt_FailsWhenParentIsFile(t *testing.T) {

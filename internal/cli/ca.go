@@ -67,11 +67,14 @@ func newCAUninstallCmd(caDir, trustDir string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
 
-			path, err := ca.UninstallTrustAt(trustDir)
+			path, revoked, err := ca.UninstallTrustAt(trustDir)
 			if err != nil {
 				return fmt.Errorf("uninstall trust: %w", err)
 			}
 			_, _ = fmt.Fprintf(out, "Removed trust anchor at %s\n", path)
+			for _, hash := range revoked {
+				_, _ = fmt.Fprintf(out, "Revoked trusted certificate %s\n", hash)
+			}
 
 			if !purge {
 				_, _ = fmt.Fprintf(out, "Left CA files in %s (run with --purge to delete)\n", caDir)
