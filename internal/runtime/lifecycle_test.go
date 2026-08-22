@@ -173,6 +173,7 @@ func TestStalledHandshakeReaped(t *testing.T) {
 
 	start := time.Now()
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+
 	buf := make([]byte, 16)
 	_, err = c.Read(buf)
 	require.Error(t, err, "server must close the silent conn")
@@ -189,9 +190,6 @@ func TestIdleTunnelReapedAndGoroutinesSettle(t *testing.T) {
 	})
 	startRuntime(t, rt)
 
-	// Baseline taken with the runtime's own goroutines (serve, reaper) and
-	// the upstream accept loop already live.
-	before := goruntime.NumGoroutine()
 	client := dialTunnel(t, rt.Addr(), up.addr)
 	// The CONNECT exchange alone moves fewer than minProgressBytes, so push
 	// real tunnel traffic through to cross the progress threshold: this conn
@@ -213,14 +211,30 @@ func TestIdleTunnelReapedAndGoroutinesSettle(t *testing.T) {
 		t.Fatal("reaper never evicted the stalled tunnel")
 	}
 
-	// Leak check: after eviction the relay goroutines must actually exit.
-	// The bound is generous so scheduler noise under load cannot flake it,
-	// but a reaped tunnel that leaks its goroutines still fails here.
+	// Leak check scoped to this tunnel's relay goroutines: goproxy runs one
+	// copyAndClose per direction, and their stack frames name the function,
+	// so filtering a full stack dump on that frame ignores unrelated
+	// goroutine churn (GC workers, other tests' timers) that shifts a
+	// global NumGoroutine baseline. This test is serial, so any surviving
+	// copyAndClose stack belongs to a leaked tunnel relay.
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
-		now := goruntime.NumGoroutine()
-		assert.LessOrEqual(c, now, before+2,
-			fmt.Sprintf("relay goroutines must settle at baseline %d after reap; observed %d", before, now))
+		assert.Zero(c, relayGoroutines(),
+			"reaped tunnel must not leave goproxy relay goroutines behind")
 	}, 10*time.Second, 100*time.Millisecond)
+}
+
+// relayGoroutines counts live goroutine stacks carrying goproxy's tunnel
+// relay frame (one copyAndClose per direction).
+func relayGoroutines() int {
+	buf := make([]byte, 4<<20)
+	n := goruntime.Stack(buf, true)
+	count := 0
+	for _, gs := range strings.Split(string(buf[:n]), "\n\n") {
+		if strings.Contains(gs, "goproxy.copyAndClose(") {
+			count++
+		}
+	}
+	return count
 }
 
 // TestOneByteStalledConnReapedAtTier1 pins the insufficient-progress tier:
