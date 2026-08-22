@@ -461,18 +461,23 @@ func TestUninstallTrustAt_NoStateRevokesAllMatches(t *testing.T) {
 	t.Setenv("HOME", home)
 	pemA := darwinFixtureCA(t)
 	pemB := darwinFixtureCA(t)
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 
 	rec := &securityRecorder{}
-	var revokedPems []string
+	removePemAt := map[string]int{}  // canonical staged PEM -> call index
+	deleteHashAt := map[string]int{} // deleted SHA-256 -> call index
 	rec.handle = func(args []string) ([]byte, error) {
+		idx := len(rec.calls) - 1 // run records before dispatching to handle
 		switch args[0] {
 		case "find-certificate":
 			return append(append([]byte{}, pemA...), pemB...), nil
 		case "remove-trusted-cert":
 			content, _ := os.ReadFile(args[1])
-			revokedPems = append(revokedPems, string(content))
-			return nil, nil
+			if block, _ := pem.Decode(content); block != nil {
+				removePemAt[string(pem.EncodeToMemory(block))] = idx
+			}
+		case "delete-certificate":
+			require.Equal(t, "-Z", args[1], "keychain deletion selects by SHA-256")
+			deleteHashAt[args[2]] = idx
 		}
 		return nil, nil
 	}
@@ -482,19 +487,26 @@ func TestUninstallTrustAt_NoStateRevokesAllMatches(t *testing.T) {
 	require.ElementsMatch(t, []string{pemSHA256Hex(t, pemA), pemSHA256Hex(t, pemB)}, revoked,
 		"every common-name match must be reported as revoked")
 
+	// Pair commands per certificate rather than comparing global order:
+	// the keychain's enumeration order across the two matches must not
+	// matter, but each certificate still gets exactly one
+	// remove-trusted-cert (from its staged temp PEM) before exactly one
+	// keychain deletion of its own hash.
 	require.Len(t, rec.calls, 5, "probe plus revoke+delete per matched certificate")
 	canonical := func(certPEM []byte) string {
 		block, _ := pem.Decode(certPEM)
 		require.NotNil(t, block)
 		return string(pem.EncodeToMemory(block))
 	}
-	require.ElementsMatch(t, []string{canonical(pemA), canonical(pemB)}, revokedPems)
-	require.ElementsMatch(t,
-		[][]string{
-			{"delete-certificate", "-Z", pemSHA256Hex(t, pemA), keychain},
-			{"delete-certificate", "-Z", pemSHA256Hex(t, pemB), keychain},
-		},
-		[][]string{rec.calls[1], rec.calls[3]})
+	for _, certPEM := range [][]byte{pemA, pemB} {
+		hash := pemSHA256Hex(t, certPEM)
+		rmIdx, ok := removePemAt[canonical(certPEM)]
+		require.True(t, ok, "no remove-trusted-cert for %s", hash)
+		delIdx, ok := deleteHashAt[hash]
+		require.True(t, ok, "no delete-certificate for %s", hash)
+		require.Less(t, rmIdx, delIdx,
+			"trust settings must be revoked before that certificate's keychain deletion")
+	}
 }
 
 // TestUninstallTrustAt_KeychainProbeFailureSurfacesError ensures a real
