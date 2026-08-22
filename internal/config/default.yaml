@@ -49,6 +49,13 @@ rules:
       name: x-api-key
       template: "{{ CREDENTIAL }}"
 
+  # Optional request scoping: inject only for matching path prefixes and
+  # methods. Anything else fails closed with a generic 502 before the vault
+  # is touched. Omit either key to leave that dimension unrestricted.
+  # paths:
+  #   - /v1/messages
+  # methods:
+  #   - POST
   - host: api.openai.com
     secret_ref: op://Agents/OpenAI/api_key
     inject:

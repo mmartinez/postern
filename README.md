@@ -50,9 +50,10 @@ resolves the matched rule's secret reference from a credential provider, injects
 the credential, and forwards the request. The full request lifecycle and trust
 boundary are in [docs/architecture.md](docs/architecture.md).
 
-The matched rule's secret reference (`op://…` or `bw://…`) resolves from the
-configured provider; adding a new provider is a single package plus one import.
-See [docs/providers.md](docs/providers.md).
+The matched rule's secret reference (`op://…`, `bw://…`, optionally
+credstore-qualified as `op+name://…` when several accounts of one vendor are
+configured) resolves from the configured provider; adding a new provider is a
+single package plus one import. See [docs/providers.md](docs/providers.md).
 
 > **Status:** early development. The proxy works end-to-end, and the release
 > pipeline (checksum-verified binaries, SBOMs, and a signed multi-arch container
@@ -164,6 +165,7 @@ secret and the CA mounted read-only. It expects two files alongside it:
     file: /run/secrets/op_token
   proxy:
     listen: 0.0.0.0:1701
+    admin_listen: 127.0.0.1:1702   # loopback-only inside the container; probed by the compose healthcheck
     cache_ttl: 5m
   rules:
     - host: api.anthropic.com
@@ -173,6 +175,11 @@ secret and the CA mounted read-only. It expects two files alongside it:
         name: x-api-key
         template: "{{ CREDENTIAL }}"
   ```
+
+The compose file defines a `healthcheck` against `/healthz` on the admin
+listener, which requires `proxy.admin_listen` to be set in the mounted
+`config.yaml` (as above). The probe runs inside the container via `postern
+server healthcheck`, so the admin port is never published.
 
 postern's CA is generated once, then read-only for its ~10-year life (the proxy
 only reads it to sign per-host leaf certs in memory). Bootstrap it once, then
