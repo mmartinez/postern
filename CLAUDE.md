@@ -1,6 +1,6 @@
 ## What postern is
 
-A credential-brokering HTTPS forward proxy for AI agents. The agent calls outbound APIs without auth headers (or with placeholder values); postern matches the request host against YAML-declared broker rules, resolves the rule's credential reference from a pluggable credential provider (1Password Service Accounts, Bitwarden Secrets Manager), and injects it before forwarding. The agent never holds the real credential.
+A credential-brokering HTTPS forward proxy for AI agents. The agent calls outbound APIs without auth headers (or with placeholder values); postern matches the request host against YAML-declared broker rules, resolves the rule's credential reference from a pluggable credential provider (1Password Service Accounts, Bitwarden Secrets Manager, OAuth2 token minting), and injects it before forwarding. The agent never holds the real credential.
 
 Apache-2.0 licensed.
 
@@ -11,7 +11,7 @@ The host needs only Docker, git, and the devcontainer CLI. **No Go toolchain on 
 - Start the env once: `devcontainer up --workspace-folder .`
 - Drop into a shell: `make shell`
 - Anything Go-related goes through `make <target>`. From the host these wrap `devcontainer exec`; inside the container they are direct invocations. The Makefile auto-detects which side it's on.
-- Bump tool versions in `.mise.toml` only. CI reads the same pins.
+- Bump tool versions in `.mise.toml`; the devcontainer reads these pins. CI pins Go/lint/goreleaser/zig separately in each workflow's env — bump both sides when a tool changes.
 
 If a command fails on the host with "command not found", the fix is to run it via `make` (or inside `make shell`), not to install the tool globally.
 
@@ -34,7 +34,7 @@ All Go work runs through `make`; on the host these wrap `devcontainer exec`.
 - `internal/proxy/` — the MITM proxy (goproxy) and request handler.
 - `internal/ca/` — local CA: generate, mint per-host leaf certs, OS trust-store integration.
 - `internal/config/` — YAML schema, strict loader, line-numbered validation.
-- `internal/credstore/` — provider registry plus the `onepassword/` and `bitwarden/` backends.
+- `internal/credstore/` — provider registry plus the `onepassword/`, `bitwarden/`, and `oauth2/` backends.
 - `internal/token/` — service-account token storage (file and OS keyring).
 - `internal/{runtime,logging,templates,version}/` — server assembly, slog setup, template rendering, build version.
 
@@ -137,7 +137,7 @@ This is a credential-brokering tool — be paranoid about leakage.
 - Bypass lefthook with `--no-verify`.
 - Skip TDD on behavioral code "for speed."
 - Use a regex when a single-`*` glob suffices for host patterns.
-- Add a dependency without regenerating `THIRD_PARTY_NOTICES.md`(run `make licenses`).
+- Add a dependency without regenerating `THIRD_PARTY_NOTICES.md` (run `make licenses`).
 - Add anything under `pkg/`. App code lives under `internal/`.
 
 ## When you finish a task

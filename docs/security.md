@@ -10,9 +10,10 @@ Once a request matches a rule, postern must never let it reach the upstream
 without the injected credential. Any error in the resolve-or-inject path —
 a missing token, a vendor outage, a malformed reference, or a panic anywhere in
 the hook chain — results in a generic `502 Bad Gateway` to the agent, and the
-upstream is **not contacted**. The error reason returned to the client is
-deliberately generic ("credential resolution failed") so the agent cannot tell
-a missing token from a network blip from a misconfigured rule. Connection-level
+upstream is **not contacted**. The error body returned to the client is one
+generic constant ("postern: bad gateway") for every failure, so the agent
+cannot tell a missing token from a network blip from a misconfigured rule.
+Connection-level
 failures — a tunnel that cannot dial, or a mid-tunnel copy error — return the
 same generic `502` body rather than the underlying error text, so a hostile
 agent cannot use postern's errors to probe internal network topology.
@@ -106,11 +107,13 @@ login keychain via `/usr/bin/security add-trusted-cert`: per-user, not
 system-wide, which is why no `sudo` is required (the authorization prompt the
 command triggers is expected). System-wide (admin-domain) trust is a deliberate
 follow-up, not current behavior. `postern ca uninstall [--purge]` reverses it:
-on macOS that revokes the user trust setting (`security remove-trusted-cert`),
-deletes the certificate from the login keychain
-(`security delete-certificate -Z`), and removes the anchor PEM. The CA private
-key never leaves the machine and is used only to mint short-lived per-host leaf
-certificates at request time.
+on macOS that revokes the user-domain trust settings of every Postern CA
+certificate the login keychain reports (`security remove-trusted-cert`) and
+removes the anchor PEM; the keychain entries themselves deliberately stay,
+since a self-signed root without explicit trust settings is untrusted by
+macOS anyway.
+The CA private key never leaves the machine and is used only to mint
+short-lived per-host leaf certificates at request time.
 
 **`SSL_CERT_FILE` and GUI clients.** `postern bootstrap` prints an
 `SSL_CERT_FILE` export unconditionally. On macOS that variable is honored by Go

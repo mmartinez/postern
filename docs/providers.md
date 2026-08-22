@@ -72,6 +72,14 @@ type Resolver interface {
 the empty string. Implementations should reject a non-empty `vaultID` with a
 clear error so a misconfigured caller fails closed.
 
+A provider that needs a second secret alongside the service-account token
+(the OAuth2 `refresh_token` grant is the motivating case) additionally
+implements `credstore.SecondarySecretProvider`, which mirrors `Validate` and
+`NewResolver` with a `secondary` argument. When a credstore carries a
+`refresh_token:` block, the runtime resolves that block through the normal
+token chain and calls the secondary variants; a provider that does not
+implement the interface rejects a configured `refresh_token:` block at boot.
+
 ## Registration
 
 Providers self-register via `init()` against the process-wide registry,
@@ -113,7 +121,7 @@ internal/credstore/
   provider.go              # Provider interface + Registry types
   registry.go              # process-wide registry
   router.go                # SchemeRouter (broker.Resolver dispatcher)
-  cache.go                 # shared background-refreshing TTL/LRU cache (provider-agnostic)
+  cache.go                 # shared background-refreshing TTL cache (provider-agnostic; entries never evicted)
   onepassword/             # production provider (links the SDK)
     provider.go            # implements credstore.Provider
     client.go              # SDK construction + HealthCheck
@@ -306,6 +314,10 @@ seed; `refresh_token_path` only needs a durable mount (a hostPath/PVC, not an
 
 ### Config example
 
+The two blocks below are **alternatives**, not one config: postern supports
+exactly one credstore per provider today, and declaring two `oauth2` entries
+fails at boot because resolvers are keyed by scheme, not by the ref authority.
+
 ```yaml
 credstores:
   - name: corp                              # client_credentials grant
@@ -362,8 +374,9 @@ package myvendor
 
 Pair the tagged files with an untagged `doc.go` so `go build ./...`
 still succeeds (an empty package directory is an error in Go).
-CI compiles `go build -tags <tagname> ./...` on every PR so the
-contract stays honest even when no tests run in the default suite.
+CI's typecheck job compiles `go build -tags bitwarden ./...` explicitly;
+a provider shipped under a fresh tag gets no CI compile coverage until you
+add the same explicit step to `.github/workflows/ci.yml`.
 Once a provider graduates, drop the build tag and add its side-effect
 import to the default binary (the bitwarden provider followed this path).
 
@@ -387,5 +400,5 @@ import to the default binary (the bitwarden provider followed this path).
   and an opt-in CI workflow trigger. See
   `internal/credstore/onepassword/live_test.go` for the pattern.
 - The cache in `internal/credstore/cache.go` is generic and
-  provider-agnostic; consider reusing it rather than reimplementing
-  TTL/LRU in your provider.
+  provider-agnostic (TTL, refresh-ahead, serve-stale; entries are never
+  evicted); consider reusing it rather than reimplementing that logic.

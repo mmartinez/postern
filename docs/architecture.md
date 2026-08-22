@@ -62,8 +62,9 @@ agent                     postern (127.0.0.1:1701)                 upstream
 
 3. **Resolve.** The matched rule's `secret_ref` (e.g. `op://Vault/Item/field`)
    is handed to the credstore provider registered for that URI scheme. Resolved
-   values are cached with a TTL and an LRU bound; one-time-password references
-   bypass the cache. Resolver errors are never cached.
+   values are cached with a TTL; entries are keyed by secret reference and never
+   evicted, so the cache footprint is bounded by the configured rules. One-time-
+   password references bypass the cache. Resolver errors are never cached.
 
 4. **Inject.** The resolved credential is rendered through the rule's template
    (`Bearer {{ CREDENTIAL }}`) and either set as a named header or substituted

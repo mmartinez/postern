@@ -58,8 +58,8 @@ configured provider; adding a new provider is a single package. See
 
 ## Install
 
-> Prebuilt binaries and the container image publish from `v0.1.0` onward. Until
-> then, [build from source](#developing-postern).
+> Prebuilt binaries and the container image publish with every tagged release
+> (see [GitHub Releases](https://github.com/mmartinez/postern/releases)); you can also [build from source](#developing-postern).
 
 ### Binary
 
@@ -112,8 +112,8 @@ eval "$(postern bootstrap)"
 ```
 
 On macOS, `postern ca install` triggers an authorization prompt and trusts the
-CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes that
-trust setting and deletes the certificate from the keychain.
+CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes the
+trust settings (the certificate entry stays in the keychain, untrusted).
 
 `postern config validate` checks a config with line-numbered errors, and
 `postern rules list` shows the loaded rules (never the resolved credentials).
