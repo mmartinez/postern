@@ -46,13 +46,16 @@ func InstallTrustAt(dir string, certPEM []byte) (string, error) {
 
 // UninstallTrustAt revokes platform trust for the CA anchored under location
 // and removes the persisted anchor, returning the anchor path plus the
-// SHA-256 hashes (of DER) of every trusted certificate actually revoked.
-// The hash list is empty when there was nothing to revoke. Idempotent: a
-// missing anchor is not automatically a no-op — on macOS a missing anchor
-// with the certificate still in the login keychain is recovered from the
-// keychain (exact-hash match against the persisted state file, falling back
-// to every common-name match) so revocation never silently depends on the
-// file surviving or narrows to the wrong generation.
+// SHA-256 hashes (of DER) of every certificate whose trust was revoked.
+// The hash list is empty when there was nothing to revoke. Idempotent: on
+// macOS revocation never depends on the anchor file — when it is missing,
+// every certificate the login keychain holds under the Postern common name
+// is revoked instead, so uninstall cannot be bypassed by losing the file
+// and cannot leave a still-trusted generation behind in a multi-generation
+// keychain. The keychain entries themselves are left in place: a root
+// without explicit trust settings is untrusted by default (mkcert makes the
+// same choice), so revocation-only uninstall is one idempotent command with
+// no second phase to strand.
 func UninstallTrustAt(dir string) (anchor string, revoked []string, err error) {
 	revoked, err = uninstallTrustAt(dir)
 	return resolveAnchorPath(dir), revoked, err

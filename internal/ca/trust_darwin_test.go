@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -70,14 +69,35 @@ func securityNotFoundErr(t *testing.T, args []string) error {
 		"SecKeychainSearchCopyNext: The specified item could not be found in the keychain.")
 }
 
+// trustSettingsAbsentErrFor builds the error shape of a remove-trusted-cert
+// invocation against a certificate with no trust settings: exit status 1
+// with the SecTrustSettingsRemoveTrustSettings errSecItemNotFound diagnostic
+// in the captured stderr, wrapped exactly the way production wraps failures.
+func trustSettingsAbsentErrFor(t *testing.T, args []string) error {
+	t.Helper()
+	cmd := exec.Command("/bin/sh", "-c", "exit 1")
+	runErr := cmd.Run()
+	return securityCmdError(args, runErr,
+		"TrustSettings::deleteTrustSettings: SecTrustSettingsRemoveTrustSettings: The specified item could not be found in the keychain.")
+}
+
 // pemSHA256Hex returns the SHA-256 (of DER) of a PEM-encoded certificate,
-// the value persisted in the state file and matched by delete-certificate -Z.
+// the identity reported for every revoked certificate.
 func pemSHA256Hex(t *testing.T, certPEM []byte) string {
 	t.Helper()
 	block, _ := pem.Decode(certPEM)
 	require.NotNil(t, block)
 	sum := sha256.Sum256(block.Bytes)
 	return hex.EncodeToString(sum[:])
+}
+
+// canonicalPEM re-encodes a certificate the way the keychain enumeration
+// path does, so staged temp content can be compared byte-exactly.
+func canonicalPEM(t *testing.T, certPEM []byte) string {
+	t.Helper()
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block)
+	return string(pem.EncodeToMemory(block))
 }
 
 func TestDefaultTrustDir_PemUnderPosternConfigDir(t *testing.T) {
@@ -116,164 +136,10 @@ func TestInstallTrustAt_ExecutesAddTrustedCert(t *testing.T) {
 	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 }
 
-// TestInstallTrustAt_PersistsSha256StateFile pins the install half of the
-// P1 fix: the SHA-256 (of DER) of the registered certificate is persisted
-// next to the anchor, 0600, so a later uninstall can disambiguate keychain
-// generations by hash when the anchor PEM is lost.
-func TestInstallTrustAt_PersistsSha256StateFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	rec := &securityRecorder{}
-	certPEM := darwinFixtureCA(t)
-
-	_, err := darwinTrust{run: rec.run}.install(filepath.Join(home, ".postern", "trust", "ca.pem"), certPEM)
-	require.NoError(t, err)
-
-	statePath := filepath.Join(home, ".postern", "trust", "ca.sha256")
-	got, err := os.ReadFile(statePath)
-	require.NoError(t, err, "install must persist the certificate hash for later uninstall")
-	require.Equal(t, pemSHA256Hex(t, certPEM), strings.TrimSpace(string(got)))
-	info, err := os.Stat(statePath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-}
-
-// TestInstallTrustAt_UnreadableStateAbortsBeforeMutation pins the snapshot
-// discipline: an existing-but-unreadable state file must abort the install
-// up front. Rollback could not faithfully restore content it never read, so
-// proceeding risked deleting the previous CA's hash on failure and forcing
-// later uninstalls into the broad common-name fallback.
-func TestInstallTrustAt_UnreadableStateAbortsBeforeMutation(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	prevPEM := darwinFixtureCA(t)
-	newPEM := darwinFixtureCA(t)
-	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	require.NoError(t, os.MkdirAll(filepath.Dir(anchor), 0o700))
-	require.NoError(t, writeFileMode(anchor, prevPEM, 0o644))
-	// Occupy the state path with a directory: readable as neither file nor
-	// "absent", so the snapshot must refuse to continue.
-	require.NoError(t, os.Mkdir(filepath.Join(home, ".postern", "trust", "ca.sha256"), 0o700))
-
-	rec := &securityRecorder{}
-	_, err := darwinTrust{run: rec.run}.install(anchor, newPEM)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "snapshot trust state")
-	require.Empty(t, rec.calls, "no security invocation may run before the snapshot is trustworthy")
-
-	got, readErr := os.ReadFile(anchor)
-	require.NoError(t, readErr)
-	require.Equal(t, prevPEM, got, "the previous anchor must be untouched")
-}
-
-// TestInstallTrustAt_FailedReinstallRestoresPreviousPairing covers the
-// failed-reinstall regression: the state-file write fails before any
-// keychain mutation (registration is intentionally last), so install must
-// restore the PREVIOUS anchor and state pairing and never have touched the
-// keychain. Otherwise a new anchor could be left paired with the old hash
-// and a later uninstall would target the wrong certificate.
-func TestInstallTrustAt_FailedReinstallRestoresPreviousPairing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	prevPEM := darwinFixtureCA(t)
-	newPEM := darwinFixtureCA(t)
-	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	statePath := filepath.Join(home, ".postern", "trust", "ca.sha256")
-	trustDir := filepath.Dir(anchor)
-	require.NoError(t, os.MkdirAll(trustDir, 0o700))
-	require.NoError(t, writeFileMode(anchor, prevPEM, 0o644))
-	prevHash := pemSHA256Hex(t, prevPEM)
-	require.NoError(t, writeFileMode(statePath, []byte(prevHash), 0o600))
-	// The anchor FILE stays writable, but no new temp file can be created in
-	// a directory without the write bit, failing the state write before
-	// add-trusted-cert ever runs.
-	require.NoError(t, os.Chmod(trustDir, 0o500))
-	t.Cleanup(func() { _ = os.Chmod(trustDir, 0o700) })
-
-	rec := &securityRecorder{}
-	_, err := darwinTrust{run: rec.run}.install(anchor, newPEM)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "write trust state")
-	require.Empty(t, rec.calls,
-		"no keychain command may run when file persistence fails first")
-
-	got, readErr := os.ReadFile(anchor)
-	require.NoError(t, readErr)
-	require.Equal(t, prevPEM, got,
-		"a failed reinstall must restore the previous anchor bytes exactly")
-	gotState, readErr := os.ReadFile(statePath)
-	require.NoError(t, readErr)
-	require.Equal(t, prevHash, strings.TrimSpace(string(gotState)),
-		"the previous state hash must survive the failed reinstall")
-}
-
-// TestInstallTrustAt_SameCARereinstallFailureKeepsFilesIntact pins the same
-// guarantee for a re-run over the identical certificate: the failed install
-// leaves both files byte-identical and the keychain untouched, so the
-// pre-existing installation survives a failed reinstall.
-func TestInstallTrustAt_SameCARereinstallFailureKeepsFilesIntact(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	certPEM := darwinFixtureCA(t)
-	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	statePath := filepath.Join(home, ".postern", "trust", "ca.sha256")
-	trustDir := filepath.Dir(anchor)
-	require.NoError(t, os.MkdirAll(trustDir, 0o700))
-	require.NoError(t, writeFileMode(anchor, certPEM, 0o644))
-	hash := pemSHA256Hex(t, certPEM)
-	require.NoError(t, writeFileMode(statePath, []byte(hash), 0o600))
-	require.NoError(t, os.Chmod(trustDir, 0o500))
-	t.Cleanup(func() { _ = os.Chmod(trustDir, 0o700) })
-
-	rec := &securityRecorder{}
-	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
-	require.Error(t, err)
-	require.Empty(t, rec.calls, "the keychain must not be touched for an already-installed CA")
-
-	gotAnchor, readErr := os.ReadFile(anchor)
-	require.NoError(t, readErr)
-	require.Equal(t, certPEM, gotAnchor)
-	gotState, readErr := os.ReadFile(statePath)
-	require.NoError(t, readErr)
-	require.Equal(t, hash, strings.TrimSpace(string(gotState)))
-}
-
-// TestRestoreTrustFiles_RestoresContents unit-tests the file half of the
-// snapshot/restore pair, including the branch that writes previous state
-// content back rather than deleting it.
-func TestRestoreTrustFiles_RestoresContents(t *testing.T) {
-	dir := t.TempDir()
-	anchorPath := filepath.Join(dir, "ca.pem")
-	statePath := filepath.Join(dir, "ca.sha256")
-	require.NoError(t, os.WriteFile(anchorPath, []byte("prev-anchor"), 0o644))
-	require.NoError(t, os.WriteFile(statePath, []byte("prev-hash"), 0o600))
-
-	snap, err := snapshotTrustFiles(anchorPath)
-	require.NoError(t, err)
-	require.True(t, snap.anchorOK)
-	require.True(t, snap.stateOK)
-
-	require.NoError(t, os.WriteFile(anchorPath, []byte("mutated"), 0o644))
-	require.NoError(t, os.WriteFile(statePath, []byte("mutated"), 0o600))
-	require.NoError(t, restoreTrustFiles(snap, anchorPath))
-
-	gotAnchor, err := os.ReadFile(anchorPath)
-	require.NoError(t, err)
-	require.Equal(t, "prev-anchor", string(gotAnchor))
-	gotState, err := os.ReadFile(statePath)
-	require.NoError(t, err)
-	require.Equal(t, "prev-hash", string(gotState))
-	info, err := os.Stat(statePath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-}
-
 // TestInstallTrustAt_DirectoryArgMatchesSharedContract pins the half of the
 // dispatch contract the platform-independent suites rely on: a directory
 // argument yields <dir>/postern.crt, byte-identical contents, mode 0644, and
-// the derived path (not the raw argument) handed to security(1). The
-// sibling SHA-256 state file follows the same derivation
-// (postern.crt -> postern.sha256).
+// the derived path (not the raw argument) handed to security(1).
 func TestInstallTrustAt_DirectoryArgMatchesSharedContract(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -300,86 +166,159 @@ func TestInstallTrustAt_DirectoryArgMatchesSharedContract(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
-	stateGot, err := os.ReadFile(filepath.Join(dir, "postern.sha256"))
-	require.NoError(t, err)
-	require.Equal(t, pemSHA256Hex(t, certPEM), strings.TrimSpace(string(stateGot)))
 }
 
-func TestUninstallTrustAt_RevokesTrustAndDeletesKeychainCert(t *testing.T) {
+// TestInstallTrustAt_FailedRegistrationRemovesAnchor pins the install failure
+// story: registration is the only fallible step after the anchor write, and
+// when it fails the freshly persisted anchor file is removed so a reported
+// install failure leaves neither trust settings nor a stale anchor behind.
+func TestInstallTrustAt_FailedRegistrationRemovesAnchor(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	rec := &securityRecorder{handle: func(args []string) ([]byte, error) {
+		if args[0] != "add-trusted-cert" {
+			return nil, nil
+		}
+		cmd := exec.Command("/bin/sh", "-c", "exit 51")
+		runErr := cmd.Run()
+		return nil, securityCmdError(args, runErr, "SecTrustSettingsAddTrusted failed\n")
+	}}
 	certPEM := darwinFixtureCA(t)
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 
-	seedRec := &securityRecorder{}
-	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
-	require.NoError(t, err)
-	rec := &securityRecorder{}
-
-	revoked, err := darwinTrust{run: rec.run}.uninstall(anchor)
-	require.NoError(t, err)
-
-	hash := pemSHA256Hex(t, certPEM)
-	require.Equal(t, []string{hash}, revoked, "the revoked certificate's hash must be reported")
-	require.Len(t, rec.calls, 2, "uninstall must both revoke trust and delete the keychain cert")
-	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[0])
-	require.Equal(t,
-		[]string{"delete-certificate", "-Z", hash, keychain},
-		rec.calls[1])
+	_, err := darwinTrust{run: rec.run}.install(anchor, certPEM)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "add-trusted-cert")
+	require.Contains(t, err.Error(), "exit status 51")
+	require.Contains(t, err.Error(), "SecTrustSettingsAddTrusted failed",
+		"security's stderr must be surfaced to the caller")
 
 	_, statErr := os.Stat(anchor)
-	require.True(t, os.IsNotExist(statErr), "anchor pem should be gone after uninstall")
-	_, statErr = os.Stat(filepath.Join(home, ".postern", "trust", "ca.sha256"))
-	require.True(t, os.IsNotExist(statErr), "state file should be gone after uninstall")
+	require.True(t, os.IsNotExist(statErr), "failed install must not leave the anchor behind")
 }
 
-// TestUninstallTrustAt_AnchorMissingRecoversFromKeychain covers the security
-// fix: with the persisted PEM lost but the certificate still trusted in the
-// login keychain, uninstall must recover the certificate bytes by common
-// name, revoke its trust setting, and delete it from the keychain. Reporting
-// success without those commands would leave the CA trusted.
-func TestUninstallTrustAt_AnchorMissingRecoversFromKeychain(t *testing.T) {
+// TestUninstallTrustAt_RevokesAnchorDirectlyAndLeavesKeychainEntry covers the
+// common uninstall: the anchor PEM is present and the same certificate sits
+// in the login keychain. The certificate must be revoked exactly once,
+// through the anchor's real path (no temp staging for a deduplicated
+// candidate), and the keychain entry must be left in place — no
+// delete-certificate anywhere.
+func TestUninstallTrustAt_RevokesAnchorDirectlyAndLeavesKeychainEntry(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	certPEM := darwinFixtureCA(t)
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 
-	// A prior install persisted the state file; only the PEM was lost.
 	seedRec := &securityRecorder{}
 	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
 	require.NoError(t, err)
-	require.NoError(t, os.Remove(anchor))
-
 	rec := &securityRecorder{}
-	var revokedPem string
 	rec.handle = func(args []string) ([]byte, error) {
-		switch args[0] {
-		case "find-certificate":
+		if args[0] == "find-certificate" {
 			return certPEM, nil
-		case "remove-trusted-cert":
-			revokedPem = args[1]
-			return nil, nil
 		}
 		return nil, nil
 	}
 
 	revoked, err := darwinTrust{run: rec.run}.uninstall(anchor)
 	require.NoError(t, err)
-	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked)
 
-	require.Len(t, rec.calls, 3, "recovery must probe, revoke trust, then delete from keychain")
-	require.Equal(t,
-		[]string{"find-certificate", "-a", "-c", caCommonName, "-p", keychain},
-		rec.calls[0])
-	require.NotEqual(t, anchor, revokedPem, "revocation must use the recovered copy, not the missing anchor")
-	require.True(t, strings.HasSuffix(revokedPem, ".pem"), "recovered anchor must be materialized as a PEM file")
-	_, statErr := os.Stat(revokedPem)
-	require.True(t, os.IsNotExist(statErr), "recovered temp copy must be cleaned up")
-	require.Equal(t,
-		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
-		rec.calls[2])
+	hash := pemSHA256Hex(t, certPEM)
+	require.Equal(t, []string{hash}, revoked, "the revoked certificate's hash must be reported")
+	require.Len(t, rec.calls, 2, "keychain probe plus exactly one revocation")
+	require.Equal(t, []string{"remove-trusted-cert", anchor}, rec.calls[1],
+		"the anchor's real path must be passed to remove-trusted-cert")
+	for _, call := range rec.calls {
+		require.NotEqual(t, "delete-certificate", call[0],
+			"revocation-only uninstall never deletes keychain entries")
+	}
+
+	_, statErr := os.Stat(anchor)
+	require.True(t, os.IsNotExist(statErr), "anchor pem should be gone after uninstall")
+}
+
+// TestUninstallTrustAt_WideRevocationCoversBothGenerations pins the wide
+// revocation contract: when the login keychain holds two independently
+// generated Postern CAs, uninstall revokes the trust settings of BOTH —
+// one remove-trusted-cert per unique certificate, in any order — and issues
+// zero delete-certificate calls anywhere. Wide revocation is what makes a
+// multi-generation keychain safe by construction: name-based enumeration
+// cannot leave a still-trusted Postern generation behind.
+func TestUninstallTrustAt_WideRevocationCoversBothGenerations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pemA := darwinFixtureCA(t) // earlier generation, still trusted
+	pemB := darwinFixtureCA(t) // installed generation
+
+	rec := &securityRecorder{}
+	revokedPEM := map[string]bool{} // canonical staged PEM -> seen
+	rec.handle = func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			return append(append([]byte{}, pemA...), pemB...), nil
+		case "remove-trusted-cert":
+			content, _ := os.ReadFile(args[1])
+			if block, _ := pem.Decode(content); block != nil {
+				revokedPEM[canonicalPEM(t, content)] = true
+			}
+		}
+		return nil, nil
+	}
+
+	revoked, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
+	require.NoError(t, err)
+
+	require.ElementsMatch(t,
+		[]string{pemSHA256Hex(t, pemA), pemSHA256Hex(t, pemB)}, revoked,
+		"every same-name certificate must be reported as revoked")
+	require.Len(t, rec.calls, 3, "keychain probe plus one remove-trusted-cert per unique certificate")
+	removes := 0
+	for _, call := range rec.calls {
+		require.NotEqual(t, "delete-certificate", call[0],
+			"revocation-only uninstall never deletes keychain entries")
+		if call[0] == "remove-trusted-cert" {
+			removes++
+		}
+	}
+	require.Equal(t, 2, removes, "exactly one remove-trusted-cert per unique certificate")
+	require.True(t, revokedPEM[canonicalPEM(t, pemA)], "generation A's trust settings must be revoked")
+	require.True(t, revokedPEM[canonicalPEM(t, pemB)], "generation B's trust settings must be revoked")
+}
+
+// TestUninstallTrustAt_AnchorMissingRecoversFromKeychain covers the lost
+// anchor: with the persisted PEM gone but the certificate still trusted in
+// the login keychain, uninstall must recover the certificate bytes by common
+// name, stage them to a temp file, and revoke their trust settings. Reporting
+// success without that command would leave the CA trusted.
+func TestUninstallTrustAt_AnchorMissingRecoversFromKeychain(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	certPEM := darwinFixtureCA(t)
+
+	rec := &securityRecorder{}
+	var stagedPEM string
+	rec.handle = func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			return certPEM, nil
+		case "remove-trusted-cert":
+			stagedPEM = string(mustRead(t, args[1]))
+		}
+		return nil, nil
+	}
+
+	revoked, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
+	require.NoError(t, err)
+
+	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked)
+	require.Len(t, rec.calls, 2, "keychain probe plus exactly one revocation")
+	require.Equal(t, "remove-trusted-cert", rec.calls[1][0])
+	require.Equal(t, canonicalPEM(t, certPEM), stagedPEM,
+		"revocation must target the certificate recovered from the keychain")
+	for _, call := range rec.calls {
+		require.NotEqual(t, "delete-certificate", call[0],
+			"revocation-only uninstall never deletes keychain entries")
+	}
 }
 
 // TestUninstallTrustAt_AnchorMissingCertAbsentIsNoOp proves idempotency is
@@ -401,175 +340,92 @@ func TestUninstallTrustAt_AnchorMissingCertAbsentIsNoOp(t *testing.T) {
 	require.Equal(t, "find-certificate", rec.calls[0][0], "no revocation without a located certificate")
 }
 
-// TestUninstallTrustAt_StateHashSelectsCorrectGeneration pins the P1 fix:
-// regeneration leaves older, still-trusted Postern CAs in the login
-// keychain, all sharing the common name. With the anchor PEM lost, uninstall
-// must pick the generation recorded in the state file by exact SHA-256, not
-// whichever common-name match the keychain returns first.
-func TestUninstallTrustAt_StateHashSelectsCorrectGeneration(t *testing.T) {
+// TestUninstallTrustAt_RetryIsIdempotent pins the single-operation contract:
+// running uninstall twice yields identical successful outcomes. On the retry
+// the certificate still shows up in the keychain (the entry is intentionally
+// left in place) but its trust settings are already gone, which
+// remove-trusted-cert reports as errSecItemNotFound — classified as
+// satisfied, not fatal. There is no second phase to strand, so the retry
+// cannot wedge.
+func TestUninstallTrustAt_RetryIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	stalePEM := darwinFixtureCA(t) // earlier generation, still trusted
-	certPEM := darwinFixtureCA(t)  // installed generation: distinct key + serial
+	certPEM := darwinFixtureCA(t)
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	hash := pemSHA256Hex(t, certPEM)
 
-	seedRec := &securityRecorder{}
-	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(anchor), "simulate the lost anchor PEM")
-
-	rec := &securityRecorder{}
-	var revokedPemContent []byte
-	rec.handle = func(args []string) ([]byte, error) {
-		switch args[0] {
-		case "find-certificate":
-			blob := append(append([]byte{}, stalePEM...), certPEM...)
-			return blob, nil // find-certificate -a output: every generation
-		case "remove-trusted-cert":
-			revokedPemContent, _ = os.ReadFile(args[1])
-			return nil, nil
+	first := &securityRecorder{}
+	first.handle = func(args []string) ([]byte, error) {
+		if args[0] == "find-certificate" {
+			return certPEM, nil
 		}
 		return nil, nil
 	}
-
-	revoked, err := darwinTrust{run: rec.run}.uninstall(anchor)
+	revoked, err := darwinTrust{run: first.run}.uninstall(anchor)
 	require.NoError(t, err)
+	require.Equal(t, []string{hash}, revoked)
 
-	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked,
-		"exactly the installed generation must be revoked")
-	require.Len(t, rec.calls, 3)
-	require.Equal(t,
-		[]string{"find-certificate", "-a", "-c", caCommonName, "-p", keychain},
-		rec.calls[0])
-	block, _ := pem.Decode(certPEM)
-	require.NotNil(t, block)
-	require.Equal(t, string(pem.EncodeToMemory(block)), string(revokedPemContent),
-		"revocation must target the state-hash match, not the stale generation")
-	require.Equal(t,
-		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
-		rec.calls[2])
-	require.NotContains(t, rec.calls[2], pemSHA256Hex(t, stalePEM),
-		"the stale generation's hash must never be deleted via name-only recovery")
+	second := &securityRecorder{}
+	second.handle = func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			return certPEM, nil // keychain entry intentionally survives
+		case "remove-trusted-cert":
+			return nil, trustSettingsAbsentErrFor(t, args)
+		}
+		return nil, nil
+	}
+	revoked, err = darwinTrust{run: second.run}.uninstall(anchor)
+	require.NoError(t, err, "retry must succeed: absent trust settings are the goal state")
+	require.Equal(t, []string{hash}, revoked, "the certificate still counts as satisfied")
+
+	for _, rec := range []*securityRecorder{first, second} {
+		for _, call := range rec.calls {
+			require.NotEqual(t, "delete-certificate", call[0],
+				"no residual trust intent may involve keychain deletion")
+		}
+	}
 }
 
-// TestUninstallTrustAt_NoStateRevokesAllMatches covers resolution path 3:
-// with neither anchor nor state file, uninstall fails wide — revoking every
-// common-name match — and reports each revoked hash.
-func TestUninstallTrustAt_NoStateRevokesAllMatches(t *testing.T) {
+// TestUninstallTrustAt_RevocationFailureAbortsAndReportsCompletedSoFar pins
+// the error contract: a genuine remove-trusted-cert failure (not an
+// absence diagnostic) aborts the remaining work, surfaces security's stderr,
+// and still reports every hash revoked before the failure.
+func TestUninstallTrustAt_RevocationFailureAbortsAndReportsCompletedSoFar(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	pemA := darwinFixtureCA(t)
 	pemB := darwinFixtureCA(t)
 
 	rec := &securityRecorder{}
-	removePemAt := map[string]int{}  // canonical staged PEM -> call index
-	deleteHashAt := map[string]int{} // deleted SHA-256 -> call index
 	rec.handle = func(args []string) ([]byte, error) {
-		idx := len(rec.calls) - 1 // run records before dispatching to handle
 		switch args[0] {
 		case "find-certificate":
 			return append(append([]byte{}, pemA...), pemB...), nil
 		case "remove-trusted-cert":
 			content, _ := os.ReadFile(args[1])
-			if block, _ := pem.Decode(content); block != nil {
-				removePemAt[string(pem.EncodeToMemory(block))] = idx
+			if canonicalPEM(t, content) == canonicalPEM(t, pemB) {
+				cmd := exec.Command("/bin/sh", "-c", "exit 51")
+				runErr := cmd.Run()
+				return nil, securityCmdError(args, runErr, "SecTrustSettingsRemoveTrusted failed\n")
 			}
-		case "delete-certificate":
-			require.Equal(t, "-Z", args[1], "keychain deletion selects by SHA-256")
-			deleteHashAt[args[2]] = idx
 		}
 		return nil, nil
 	}
 
 	revoked, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{pemSHA256Hex(t, pemA), pemSHA256Hex(t, pemB)}, revoked,
-		"every common-name match must be reported as revoked")
-
-	// Pair commands per certificate rather than comparing global order:
-	// the keychain's enumeration order across the two matches must not
-	// matter, but each certificate still gets exactly one
-	// remove-trusted-cert (from its staged temp PEM) before exactly one
-	// keychain deletion of its own hash.
-	require.Len(t, rec.calls, 5, "probe plus revoke+delete per matched certificate")
-	canonical := func(certPEM []byte) string {
-		block, _ := pem.Decode(certPEM)
-		require.NotNil(t, block)
-		return string(pem.EncodeToMemory(block))
-	}
-	for _, certPEM := range [][]byte{pemA, pemB} {
-		hash := pemSHA256Hex(t, certPEM)
-		rmIdx, ok := removePemAt[canonical(certPEM)]
-		require.True(t, ok, "no remove-trusted-cert for %s", hash)
-		delIdx, ok := deleteHashAt[hash]
-		require.True(t, ok, "no delete-certificate for %s", hash)
-		require.Less(t, rmIdx, delIdx,
-			"trust settings must be revoked before that certificate's keychain deletion")
-	}
-}
-
-// notFoundSecurityErr builds the error shape of a security(1) invocation
-// whose Security-framework call reported errSecItemNotFound: the tool's
-// cssmPerror diagnostic in stderr, wrapped exactly the way production
-// wraps failed invocations.
-func notFoundSecurityErr(args []string, fn string) error {
-	return securityCmdError(args, fmt.Errorf("exit status 1"),
-		fn+": The specified item could not be found in the keychain.")
-}
-
-// TestUninstallTrustAt_MissingTrustSettingsStillDeletes pins the retry
-// story for partial revocation: if remove-trusted-cert succeeds but
-// delete-certificate fails, the next uninstall repeats remove-trusted-cert
-// for a certificate whose settings are already gone. That absence is
-// non-fatal — the keychain deletion is still attempted and the hash still
-// reported — while any other remove-trusted-cert failure stays fatal.
-func TestUninstallTrustAt_MissingTrustSettingsStillDeletes(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	certPEM := darwinFixtureCA(t)
-	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
-
-	rec := &securityRecorder{handle: func(args []string) ([]byte, error) {
-		switch args[0] {
-		case "find-certificate":
-			return certPEM, nil
-		case "remove-trusted-cert":
-			// Retry after a previous run's remove succeeded and its
-			// delete failed: no user-domain trust settings remain.
-			return nil, notFoundSecurityErr(args, "SecTrustSettingsRemoveTrustSettings")
-		}
-		return nil, nil
-	}}
-
-	revoked, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
-	require.NoError(t, err)
-	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked,
-		"the certificate counts as revoked once its keychain entry is deleted")
-	require.Len(t, rec.calls, 3)
-	require.Equal(t,
-		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
-		rec.calls[2])
-
-	// A remove-trusted-cert failure that is NOT plain absence must stay
-	// fatal: fail wide rather than silently deleting a still-trusted cert.
-	fatal := &securityRecorder{handle: func(args []string) ([]byte, error) {
-		switch args[0] {
-		case "find-certificate":
-			return certPEM, nil
-		case "remove-trusted-cert":
-			return nil, securityCmdError(args, fmt.Errorf("exit status 1"),
-				"SecTrustSettingsRemoveTrustSettings: UNIX[Operation not permitted]")
-		}
-		return nil, nil
-	}}
-	_, err = darwinTrust{run: fatal.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "revoke trust settings")
+	require.Contains(t, err.Error(), "SecTrustSettingsRemoveTrusted failed",
+		"security's stderr must be surfaced to the caller")
+	require.Equal(t, []string{pemSHA256Hex(t, pemA)}, revoked,
+		"hashes revoked before the failure must be reported")
 }
 
 // TestUninstallTrustAt_KeychainProbeFailureSurfacesError ensures a real
-// security(1) failure during recovery is never mistaken for "nothing to do".
+// security(1) failure during enumeration is never mistaken for "nothing to
+// do": the probe runs before any mutation, so the abort leaves the host
+// exactly as it was.
 func TestUninstallTrustAt_KeychainProbeFailureSurfacesError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -583,29 +439,61 @@ func TestUninstallTrustAt_KeychainProbeFailureSurfacesError(t *testing.T) {
 	require.Len(t, rec.calls, 1, "no revocation attempt after a failed probe")
 }
 
-func TestInstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
+// TestUninstallTrustAt_ProbeFailureLeavesAnchorIntact pins the abort
+// contract for a present anchor: a failing keychain probe aborts before any
+// mutation, so the persisted anchor survives for a later retry.
+func TestUninstallTrustAt_ProbeFailureLeavesAnchorIntact(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// The keychain probe succeeds; only the registration fails.
-	rec := &securityRecorder{handle: func(args []string) ([]byte, error) {
-		if args[0] != "add-trusted-cert" {
-			return nil, nil
-		}
-		cmd := exec.Command("/bin/sh", "-c", "exit 44")
-		runErr := cmd.Run()
-		return nil, securityCmdError(args, runErr, "SecTrustSettingsAddTrusted failed\n")
-	}}
 	certPEM := darwinFixtureCA(t)
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
 
-	_, err := darwinTrust{run: rec.run}.install(filepath.Join(home, ".postern", "trust", "ca.pem"), certPEM)
+	seedRec := &securityRecorder{}
+	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
+	require.NoError(t, err)
+	rec := failingRunner(51, "SecKeychainSearchCopyNext failed\n")
+
+	_, err = darwinTrust{run: rec.run}.uninstall(anchor)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), securityBin)
-	require.Contains(t, err.Error(), "add-trusted-cert")
-	require.Contains(t, err.Error(), "exit status 44")
-	require.Contains(t, err.Error(), "SecTrustSettingsAddTrusted failed",
-		"security's stderr must be surfaced to the caller")
+	_, statErr := os.Stat(anchor)
+	require.NoError(t, statErr, "a failed uninstall must not consume the anchor")
 }
 
+// TestUninstallTrustAt_RemoveReportsAbsentCountsAsSatisfied pins the
+// classification seam: a remove-trusted-cert that reports no trust settings
+// for the certificate (a retry, or an entry installed by another tool) is
+// the state revocation aims for and must not fail the uninstall.
+func TestUninstallTrustAt_RemoveReportsAbsentCountsAsSatisfied(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	certPEM := darwinFixtureCA(t)
+	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+
+	seedRec := &securityRecorder{}
+	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
+	require.NoError(t, err)
+	rec := &securityRecorder{}
+	rec.handle = func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			return nil, securityNotFoundErr(t, args)
+		case "remove-trusted-cert":
+			return nil, trustSettingsAbsentErrFor(t, args)
+		}
+		return nil, nil
+	}
+
+	revoked, err := darwinTrust{run: rec.run}.uninstall(anchor)
+	require.NoError(t, err, "absent trust settings are the goal state, not a failure")
+	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked)
+
+	_, statErr := os.Stat(anchor)
+	require.True(t, os.IsNotExist(statErr), "a satisfied uninstall still removes the anchor")
+}
+
+// TestUninstallTrustAt_SecurityFailureWrapsStderr ensures a genuine
+// revocation failure (not an absence diagnostic) is wrapped with the command
+// line and security's stderr.
 func TestUninstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -615,7 +503,14 @@ func TestUninstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
 	seedRec := &securityRecorder{}
 	_, err := darwinTrust{run: seedRec.run}.install(anchor, certPEM)
 	require.NoError(t, err)
-	rec := failingRunner(51, "SecTrustSettingsRemoveTrusted failed\n")
+	rec := &securityRecorder{handle: func(args []string) ([]byte, error) {
+		if args[0] != "remove-trusted-cert" {
+			return nil, securityNotFoundErr(t, args)
+		}
+		cmd := exec.Command("/bin/sh", "-c", "exit 51")
+		runErr := cmd.Run()
+		return nil, securityCmdError(args, runErr, "SecTrustSettingsRemoveTrusted failed\n")
+	}}
 
 	_, err = darwinTrust{run: rec.run}.uninstall(anchor)
 	require.Error(t, err)
@@ -643,4 +538,11 @@ func TestSecurityCmdError_Format(t *testing.T) {
 	require.Equal(t,
 		fmt.Sprintf("%s remove-trusted-cert /x/ca.pem: exit status 1: boom", securityBin),
 		err.Error())
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return data
 }
