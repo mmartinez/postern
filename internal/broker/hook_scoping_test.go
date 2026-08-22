@@ -86,6 +86,7 @@ func TestHook_PathsScope(t *testing.T) {
 		{"deeper path under prefix injects", []string{"/v1/messages"}, http.MethodPost, "/v1/messages/count_tokens", true},
 		{"other path under host fails closed", []string{"/v1/messages"}, http.MethodPost, "/v1/models", false},
 		{"path sharing the prefix string still matches", []string{"/v1/messages"}, http.MethodPost, "/v1/messages-beta", true},
+		{"percent-encoded path does not match its decoded twin", []string{"/v1/messages"}, http.MethodPost, "/v1/mess%61ges", false},
 		{"root path fails closed", []string{"/v1/messages"}, http.MethodGet, "/", false},
 	}
 	for _, tc := range cases {
