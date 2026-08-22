@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/mmartinez/postern/compare/v0.7.2...v0.8.0) (2026-08-22)
+
+
+### Features
+
+* **ca:** macOS trust-store install via security ([#80](https://github.com/mmartinez/postern/issues/80)) ([9ecf48c](https://github.com/mmartinez/postern/commit/9ecf48c04671f2599d942ecbf0eaec0d74b986a8))
+* **release:** darwin targets built natively on macos runners ([#85](https://github.com/mmartinez/postern/issues/85)) ([4e54fa4](https://github.com/mmartinez/postern/commit/4e54fa46e63c7a78f6bfc24d713e9afef7a387e4))
+* **test:** add black-box e2e suite ([#82](https://github.com/mmartinez/postern/issues/82)) ([88e007a](https://github.com/mmartinez/postern/commit/88e007a77d44d0eaf7a663c1d0232c8ca7565c71))
+
+
+### Bug Fixes
+
+* **ca:** unify trust-anchor contract and harden macOS revocation ([#86](https://github.com/mmartinez/postern/issues/86)) ([7c66ce2](https://github.com/mmartinez/postern/commit/7c66ce279244da1ff1f22dcf5196f36bcf3e07ae))
+
 ## [0.7.2](https://github.com/mmartinez/postern/compare/v0.7.1...v0.7.2) (2026-08-21)
 
 
