@@ -509,6 +509,65 @@ func TestUninstallTrustAt_NoStateRevokesAllMatches(t *testing.T) {
 	}
 }
 
+// notFoundSecurityErr builds the error shape of a security(1) invocation
+// whose Security-framework call reported errSecItemNotFound: the tool's
+// cssmPerror diagnostic in stderr, wrapped exactly the way production
+// wraps failed invocations.
+func notFoundSecurityErr(args []string, fn string) error {
+	return securityCmdError(args, fmt.Errorf("exit status 1"),
+		fn+": The specified item could not be found in the keychain.")
+}
+
+// TestUninstallTrustAt_MissingTrustSettingsStillDeletes pins the retry
+// story for partial revocation: if remove-trusted-cert succeeds but
+// delete-certificate fails, the next uninstall repeats remove-trusted-cert
+// for a certificate whose settings are already gone. That absence is
+// non-fatal — the keychain deletion is still attempted and the hash still
+// reported — while any other remove-trusted-cert failure stays fatal.
+func TestUninstallTrustAt_MissingTrustSettingsStillDeletes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	certPEM := darwinFixtureCA(t)
+	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+
+	rec := &securityRecorder{handle: func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			return certPEM, nil
+		case "remove-trusted-cert":
+			// Retry after a previous run's remove succeeded and its
+			// delete failed: no user-domain trust settings remain.
+			return nil, notFoundSecurityErr(args, "SecTrustSettingsRemoveTrustSettings")
+		}
+		return nil, nil
+	}}
+
+	revoked, err := darwinTrust{run: rec.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
+	require.NoError(t, err)
+	require.Equal(t, []string{pemSHA256Hex(t, certPEM)}, revoked,
+		"the certificate counts as revoked once its keychain entry is deleted")
+	require.Len(t, rec.calls, 3)
+	require.Equal(t,
+		[]string{"delete-certificate", "-Z", pemSHA256Hex(t, certPEM), keychain},
+		rec.calls[2])
+
+	// A remove-trusted-cert failure that is NOT plain absence must stay
+	// fatal: fail wide rather than silently deleting a still-trusted cert.
+	fatal := &securityRecorder{handle: func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "find-certificate":
+			return certPEM, nil
+		case "remove-trusted-cert":
+			return nil, securityCmdError(args, fmt.Errorf("exit status 1"),
+				"SecTrustSettingsRemoveTrustSettings: UNIX[Operation not permitted]")
+		}
+		return nil, nil
+	}}
+	_, err = darwinTrust{run: fatal.run}.uninstall(filepath.Join(home, ".postern", "trust", "ca.pem"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "revoke trust settings")
+}
+
 // TestUninstallTrustAt_KeychainProbeFailureSurfacesError ensures a real
 // security(1) failure during recovery is never mistaken for "nothing to do".
 func TestUninstallTrustAt_KeychainProbeFailureSurfacesError(t *testing.T) {

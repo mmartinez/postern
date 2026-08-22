@@ -54,6 +54,21 @@ func securityCmdError(args []string, err error, stderr string) error {
 		securityBin, strings.Join(args, " "), err, strings.TrimSpace(stderr))
 }
 
+// trustSettingsAbsentErr reports whether a failed remove-trusted-cert
+// invocation means only that the certificate holds no trust settings in
+// the target domain rather than a genuine tooling failure. The
+// trusted_cert_remove tool collapses every SecTrustSettingsRemoveTrustSettings
+// OSStatus into exit status 1 (its own return value is unconditionally 1 on
+// error), so absence is identified by the framework's cssmPerror diagnostic
+// in the captured stderr: TrustSettings::deleteTrustSettings throws
+// errSecItemNotFound when the certificate has no entry in the domain's
+// trust dictionary.
+func trustSettingsAbsentErr(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "SecTrustSettingsRemoveTrustSettings") &&
+		strings.Contains(msg, "could not be found")
+}
+
 // loginKeychain returns the user's login keychain. The per-user trust domain
 // needs no sudo; add-trusted-cert stores the certificate there and records a
 // user-domain (non-admin) trust setting for it.
@@ -208,7 +223,10 @@ func restoreTrustFiles(snap trustFilesSnapshot, anchorPath string) error {
 // revoked. Both security calls are mandatory per certificate: skipping the
 // keychain deletion would leave a "successful" uninstall with the CA still
 // resolvable in the keychain, and skipping remove-trusted-cert would leave
-// it explicitly trusted.
+// it explicitly trusted. A remove-trusted-cert that reports no trust
+// settings for the certificate (a partial-revocation retry, or an entry
+// installed by another tool) does not fail the uninstall: the certificate
+// still counts as revoked once its keychain entry is deleted.
 //
 // Revocation must not depend on the anchor file, and the common name is not
 // an identity: every generation of the CA shares it, and regeneration can
@@ -237,7 +255,7 @@ func (b darwinTrust) uninstall(location string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := b.run("remove-trusted-cert", anchorPath); err != nil {
+		if _, err := b.run("remove-trusted-cert", anchorPath); err != nil && !trustSettingsAbsentErr(err) {
 			return nil, fmt.Errorf("revoke trust settings: %w", err)
 		}
 		if _, err := b.run("delete-certificate", "-Z", hash, keychain); err != nil {
@@ -322,7 +340,7 @@ func (b darwinTrust) revokeRecoveredCert(certPEM []byte) (string, error) {
 		return "", err
 	}
 	defer os.Remove(tmp)
-	if _, err := b.run("remove-trusted-cert", tmp); err != nil {
+	if _, err := b.run("remove-trusted-cert", tmp); err != nil && !trustSettingsAbsentErr(err) {
 		return "", fmt.Errorf("revoke trust settings: %w", err)
 	}
 	if _, err := b.run("delete-certificate", "-Z", hash, keychain); err != nil {
