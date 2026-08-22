@@ -1,3 +1,9 @@
+//go:build linux
+
+// The ca install/uninstall flows shell out to the OS trust store via
+// internal/ca. On macOS that means the real security(1) binary (no stub seam
+// across packages), so these tests stay linux-only; see
+// internal/ca/trust_darwin_test.go for darwin trust-store coverage.
 package cli_test
 
 import (

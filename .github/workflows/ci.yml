@@ -90,6 +90,14 @@ jobs:
       # though no Bitwarden tests run in the default suite.
       - run: go build -tags bitwarden ./...
       - run: go vet -tags bitwarden ./...
+      # Cross-compile gate for non-linux targets: CI runners are ubuntu-only,
+      # so darwin-only files (internal/ca/trust_darwin.go et al) would never
+      # be compiled by the steps above. CGO_ENABLED=0 keeps this a pure
+      # typecheck; full cgo-on-SDK darwin builds are exercised by the release
+      # pipeline's macos runner (landing in a sibling PR).
+      - run: |
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./...
 
   test:
     name: test
@@ -106,6 +114,25 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+  # Native macOS unit run: catches darwin-only failures (internal/ca trust
+  # store) that the ubuntu cross-compile gate cannot see. The cgo-dependent
+  # keyring e2e stays linux-gated (token-keyring-e2e); those tests sit behind
+  # a build tag and self-skip here.
+  test-macos:
+    name: test (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # No -race: fsnotify's kqueue backend (v1.10.1, latest) has an
+      # upstream data race between channel close in its reader goroutine and
+      # senders, which -race flags on darwin only. The linux test job keeps
+      # -race coverage.
+      - run: go test ./...
 
   vuln:
     name: vuln
@@ -280,12 +307,80 @@ jobs:
           # --skip=sign: PRs have no OIDC token / cosign; the image still builds
           # so the verify step below runs. Signing is exercised by release.yml.
           args: release --snapshot --clean --skip=sign
-      - name: assert release artifacts (2 archives, checksums, 2 SBOMs)
+      - name: assert release artifacts match the goreleaser matrix exactly
         run: |
           set -euo pipefail
-          ls -la dist/*.tar.gz dist/checksums.txt dist/*.sbom.spdx.json
-          test "$(ls dist/*.tar.gz | wc -l)" -eq 2
-          test "$(ls dist/*.sbom.spdx.json | wc -l)" -eq 2
+          cfg=.goreleaser.yaml
+          test -f dist/checksums.txt
+          ls -l dist
+
+          # Expected archive set derived from the goreleaser config
+          # (name_template x goos/goarch matrix), so adding targets there
+          # (e.g. darwin) updates this assertion with no edit.
+          #
+          # Single-host runs emit only their own GOOS: every builds[] entry
+          # carries a host-GOOS skip template
+          # (`{{ eq/ne .Runtime.Goos ... }}`, see .goreleaser.yaml), so an
+          # ubuntu run emits just the linux archives and a macos run just
+          # the darwin ones. Filter the matrix to the running host GOOS to
+          # mirror that. This job runs per-GOOS on a runner matrix unchanged
+          # if it ever splits that way.
+          host_goos=$(go env GOOS)
+          ext=$(grep -m1 'formats:' "$cfg" | sed -E 's/.*\[(.*)\].*/\1/')
+          tmpl=$(awk '/^    name_template:/{sub(/^    name_template: */,"");gsub(/"/,"");print;exit}' "$cfg")
+          # sort -u: each builds[] entry repeats the goos/goarch lists, and
+          # all archives share one name_template, so the archive set is the
+          # deduped (os, arch) cross product, not the per-build concatenation.
+          matrix() {
+            awk -v k="$1" '$0 ~ "^    " k ":" {on=1;next} on && /^      - /{sub(/^      - */,"");print;next} on{on=0}' "$cfg" | sort -u
+          }
+          archives=()
+          for goos in $(matrix goos); do
+            [ "$goos" = "$host_goos" ] || continue
+            for goarch in $(matrix goarch); do
+              pat=$tmpl
+              pat=${pat//'{{ .Version }}'/*}
+              pat=${pat//'{{ .Os }}'/$goos}
+              pat=${pat//'{{ .Arch }}'/$goarch}
+              archives+=("${pat}.${ext}")
+            done
+          done
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "no expected archives for host GOOS $host_goos; check matrix/skip templates" >&2
+            exit 1
+          fi
+
+          # nullglob + array counting: an unmatched glob yields zero entries
+          # instead of aborting under set -e before our own error message.
+          shopt -s nullglob
+          for pat in "${archives[@]}"; do
+            matches=(dist/$pat)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "expected exactly one artifact matching $pat, found ${#matches[@]}" >&2
+              exit 1
+            fi
+          done
+          all=(dist/*.${ext})
+          if [ "${#all[@]}" -ne "${#archives[@]}" ]; then
+            echo "unexpected extra archives: found ${#all[@]}, expected ${#archives[@]}" >&2
+            exit 1
+          fi
+
+          # One SBOM per archive: goreleaser renders documents as
+          # {{ .ArtifactName }}.sbom.spdx.json, i.e. the full archive
+          # filename plus the .sbom.spdx.json suffix.
+          for pat in "${archives[@]}"; do
+            sboms=(dist/$pat.sbom.spdx.json)
+            if [ "${#sboms[@]}" -ne 1 ]; then
+              echo "expected exactly one SBOM matching $pat.sbom.spdx.json, found ${#sboms[@]}" >&2
+              exit 1
+            fi
+          done
+          all_sboms=(dist/*.sbom.spdx.json)
+          if [ "${#all_sboms[@]}" -ne "${#archives[@]}" ]; then
+            echo "unexpected extra SBOMs: found ${#all_sboms[@]}, expected ${#archives[@]}" >&2
+            exit 1
+          fi
       - name: verify release image (uid 65532, entrypoint, no baked token)
         run: |
           amd64="$(docker images --filter=reference='ghcr.io/mmartinez/postern:*-amd64' --format '{{.Repository}}:{{.Tag}}' | head -1)"

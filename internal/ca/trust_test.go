@@ -1,3 +1,10 @@
+//go:build linux
+
+// These tests encode the Linux trust-anchor contract (location is a
+// directory holding postern.crt). On macOS the location is the anchor PEM
+// file itself, and the external test package cannot stub runSecurity, so
+// they would fail or invoke the real security(1) binary. Darwin behavior is
+// covered by trust_darwin_test.go.
 package ca_test
 
 import (

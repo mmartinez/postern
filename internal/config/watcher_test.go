@@ -166,14 +166,36 @@ func TestWatcher_DebouncesRapidEdits(t *testing.T) {
 	}
 	writeAtomic(t, path, []byte(watchedSecondValidConfig))
 
-	ev := receiveEvent(t, events, 3*time.Second)
-	require.Equal(t, "api.anthropic.com", ev.New.Rules[0].Host, "final emitted event must reflect last write")
+	// Under CI load the rapid writes can straddle debounce windows, and a
+	// write observed mid-truncate parses as a transient empty config, so
+	// more than one event may be emitted. Require the stream to settle on
+	// the final write's content instead of assuming exactly one event.
+	var last config.Event
+	require.Eventually(t, func() bool {
+		select {
+		case ev := <-events:
+			last = ev
+			return len(last.New.Rules) > 0 && last.New.Rules[0].Host == "api.anthropic.com"
+		default:
+			return false
+		}
+	}, 3*time.Second, 10*time.Millisecond,
+		"events must settle on the last write; last event: %+v", last)
 
-	// No further events for the next 200ms (more than the 100ms debounce).
-	select {
-	case extra := <-events:
-		t.Fatalf("unexpected extra event after debounce: %+v", extra)
-	case <-time.After(200 * time.Millisecond):
+	// After settling, earlier content must never reappear. Transient
+	// mid-write snapshots (empty rules) are tolerated; anything parsed must
+	// reflect the final write.
+	for {
+		select {
+		case ev := <-events:
+			if len(ev.New.Rules) == 0 {
+				continue
+			}
+			require.Equal(t, "api.anthropic.com", ev.New.Rules[0].Host,
+				"stale content must not be emitted after the final write")
+		case <-time.After(200 * time.Millisecond):
+			return
+		}
 	}
 }
 

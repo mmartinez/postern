@@ -34,6 +34,11 @@ var (
 
 // writeScript drops an executable POSIX shell script into a temp dir and
 // returns its path, standing in for the bws binary under test.
+//
+// Tests that exec the script MUST NOT call t.Parallel: a fork in a
+// concurrently running test can transiently inherit this script's
+// write fd (fork happens before the writer's close), and the exec then
+// fails with ETXTBSY ("text file busy"). See golang/go#22220.
 func writeScript(t *testing.T, body string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "bws")
@@ -58,8 +63,6 @@ func TestFakeRunner_ReturnsCannedOutput(t *testing.T) {
 }
 
 func TestExecRunner_CapturesStdoutOnSuccess(t *testing.T) {
-	t.Parallel()
-
 	r := &execRunner{bwsPath: writeScript(t, `echo hello`)}
 	out, err := r.run(context.Background(), nil, nil)
 	require.NoError(t, err)
@@ -67,8 +70,6 @@ func TestExecRunner_CapturesStdoutOnSuccess(t *testing.T) {
 }
 
 func TestExecRunner_MapsNonZeroExitToError(t *testing.T) {
-	t.Parallel()
-
 	r := &execRunner{bwsPath: writeScript(t, `exit 3`)}
 	out, err := r.run(context.Background(), nil, nil)
 	require.Error(t, err)
@@ -76,8 +77,6 @@ func TestExecRunner_MapsNonZeroExitToError(t *testing.T) {
 }
 
 func TestExecRunner_ForwardsArgsAndEnv(t *testing.T) {
-	t.Parallel()
-
 	// The script echoes its first arg and a sentinel env var so the test can
 	// assert both crossed the exec boundary intact.
 	r := &execRunner{bwsPath: writeScript(t, `echo "$1 $POSTERN_TEST_VAR"`)}

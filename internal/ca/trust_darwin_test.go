@@ -83,6 +83,11 @@ func TestUninstallTrustAt_RevokesTrustAndDeletesKeychainCert(t *testing.T) {
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
 	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 
+	// Stub before install: the real security(1) would fail on CI (no login
+	// keychain). A first recorder covers setup; a fresh one captures only
+	// the uninstall invocations asserted below.
+	stubSecurity(t)
+
 	_, err := InstallTrustAt(anchor, certPEM)
 	require.NoError(t, err)
 	calls := stubSecurity(t)
@@ -140,6 +145,10 @@ func TestUninstallTrustAt_SecurityFailureWrapsStderr(t *testing.T) {
 	t.Setenv("HOME", home)
 	certPEM := darwinFixtureCA(t)
 	anchor := filepath.Join(home, ".postern", "trust", "ca.pem")
+
+	// Stub before install: the real security(1) would fail on CI (no login
+	// keychain); the recorder no-op is swapped for the failing stub below.
+	stubSecurity(t)
 
 	_, err := InstallTrustAt(anchor, certPEM)
 	require.NoError(t, err)
