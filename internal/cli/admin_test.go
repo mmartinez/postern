@@ -239,11 +239,9 @@ func TestHealthzWireResponse_NeverContainsCredentialMaterial(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rt.Run(ctx) }()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for rt.AdminAddr() == "" && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	require.NotEmpty(t, rt.AdminAddr(), "admin listener must come up")
+	require.Eventually(t, func() bool { return rt.AdminAddr() != "" },
+		2*time.Second, 5*time.Millisecond,
+		"admin listener must come up")
 
 	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + rt.AdminAddr() + "/healthz") //nolint:noctx // bounded timeout; loopback test URL
 	require.NoError(t, err)
