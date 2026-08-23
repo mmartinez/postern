@@ -20,7 +20,7 @@ import (
 
 // constantResolver answers every reference with a store-fixed value,
 // standing in for one named credstore's resolver (e.g. the personal vs team
-// 1Password account). The value doubles as proof of WHICH store served a
+// account of one vendor). The value doubles as proof of WHICH store served a
 // request.
 type constantResolver struct {
 	value string

@@ -323,7 +323,7 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 // buildCredStoreResolvers walks the multi-credstore config and constructs
 // one broker.Resolver per credstore, keyed by the credstore NAME (not its
 // provider's URI scheme), so two credstores of one vendor — e.g. a
-// personal and a team 1Password account — can coexist; refs pick their
+// personal and a team account at one vendor — can coexist; refs pick their
 // store via the `<scheme>+<name>://` qualifier grammar (see
 // credstore.ParseQualifiedRef) and unqualified refs route only when
 // exactly one configured credstore resolves their scheme. Each credstore's

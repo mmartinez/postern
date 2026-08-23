@@ -91,7 +91,7 @@ type Config struct {
 // (op://...), which routes only when exactly one configured credstore
 // resolves that scheme and is a line-numbered validation error otherwise.
 // Two same-vendor credstores with distinct names (e.g. a personal and a
-// team 1Password account) therefore coexist; duplicate names remain a
+// team account at one vendor) therefore coexist; duplicate names remain a
 // validation error, and Name is surfaced in logs and `rules list`.
 type CredStore struct {
 	Name     string `yaml:"name"`
