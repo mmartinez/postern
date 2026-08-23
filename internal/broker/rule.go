@@ -39,6 +39,19 @@ type Rule struct {
 	// an agent presents on a declared surface selects (and is replaced by) the
 	// route's secret. See SelectRoute and InjectRoute.
 	Routes []Route
+
+	// Paths scopes injection to request URL paths: each entry is a prefix
+	// matched via strings.HasPrefix against the request path, and injection
+	// happens only when at least one entry matches. A request outside every
+	// declared prefix fails closed before the resolver is called. Empty
+	// means the rule brokers every path on the host.
+	Paths []string
+
+	// Methods scopes injection to HTTP methods, compared case-insensitively
+	// against the declared entries. A request whose method matches no entry
+	// fails closed before the resolver is called. Empty means the rule
+	// brokers every method.
+	Methods []string
 }
 
 // Route is one entry of a placeholder-routing rule: presenting Token selects

@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"strings"
+	"slices"
 	"sync"
 	"syscall"
 
@@ -102,6 +102,8 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 				PreUpstreamHandler: bundle.hook,
 				ShouldIntercept:    bundle.shouldIntercept,
 				BlockNonBrokered:   bundle.blockNonBrokered,
+				AdminListen:        bundle.adminListen,
+				HealthStatus:       bundle.healthStatus(),
 			})
 			if err != nil {
 				return fmt.Errorf("init runtime: %w", err)
@@ -131,7 +133,7 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 					reloadWG.Add(1)
 					go func() {
 						defer reloadWG.Done()
-						broker.RunReloader(ctx, bundle.engine, events, logger, bundle.baseline)
+						broker.RunReloader(ctx, bundle.engine, events, logger, bundle.baseline, bundle.version)
 					}()
 					defer func() {
 						_ = watcher.Close()
@@ -150,6 +152,7 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 	cmd.Flags().StringVar(&logFormat, "log-format", "text", "Log format: text|json")
 	cmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level: quiet|info|debug")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable ANSI colour (NO_COLOR env also honored)")
+	cmd.AddCommand(newHealthcheckCmd())
 	return cmd
 }
 
@@ -174,6 +177,18 @@ type brokerBundle struct {
 	// blockNonBrokered mirrors on_no_match: block — reject non-brokered
 	// CONNECTs instead of tunneling them.
 	blockNonBrokered bool
+
+	// adminListen carries proxy.admin_listen for the runtime's second
+	// listener; empty starts no admin server.
+	adminListen string
+
+	// health is the /healthz status source (boot + refreshed credstore
+	// validation outcomes); version is the ruleset version counter handed to
+	// RunReloader so hot reloads bump what /healthz reports. Both exist even
+	// in passthrough mode: brokerless deployments must still report
+	// degraded rather than look dead to orchestrators.
+	health  *HealthTracker
+	version *broker.VersionCounter
 }
 
 // resolveListenAddr applies the listen-address precedence for `postern
@@ -222,11 +237,19 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		// Even in passthrough mode the config's listen address must reach the
 		// caller so the server binds the configured port (cfg is nil only when
 		// no config file was found, in which case listen stays empty).
-		listen := ""
+		listen, adminListen := "", ""
 		if cfg != nil {
 			listen = cfg.Proxy.Listen
+			adminListen = cfg.Proxy.AdminListen
 		}
-		return brokerBundle{listen: listen}, nil
+		return brokerBundle{
+			listen:      listen,
+			adminListen: adminListen,
+			// Brokerless is degraded by definition: no ruleset loaded and no
+			// credential validated. /healthz must say so instead of letting
+			// orchestrators read passthrough as healthy.
+			health: NewHealthTracker(false, nil),
+		}, nil
 	}
 
 	rules, err := broker.FromConfigRules(cfg.Rules)
@@ -235,17 +258,25 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 	}
 	engine := broker.NewEngine(rules)
 
-	resolvers, err := buildCredStoreResolvers(ctx, reg, cfg.CredStores, store, logger)
+	version := broker.NewVersionCounter()
+	health := NewHealthTracker(true, version.Load)
+
+	resolvers, err := buildCredStoreResolvers(ctx, reg, cfg.CredStores, store, logger, health)
 	if err != nil {
 		return brokerBundle{}, err
 	}
-	// Fail closed at boot if any rule's secret_ref scheme has no configured
-	// resolver. Without this the mismatch would only surface as a 502 on the
-	// first request that matches the rule — in production, at request time.
-	if err := assertRulesRoutable(rules, resolvers); err != nil {
+	// schemeOwners maps each secret-ref scheme to the credstore names that
+	// resolve it; unqualified refs route only when that list has one entry.
+	schemeOwners := buildSchemeOwners(reg, cfg.CredStores)
+	// Fail closed at boot if any rule's secret_ref cannot be routed: either
+	// its scheme has no credstore, it names a credstore that is not
+	// configured, or an unqualified ref is ambiguous between same-scheme
+	// credstores. Without this the mismatch would only surface as a 502 on
+	// the first request that matches the rule — in production, at request time.
+	if err := assertRulesRoutable(rules, resolvers, schemeOwners); err != nil {
 		return brokerBundle{}, err
 	}
-	router, err := credstore.NewSchemeRouter(resolvers)
+	router, err := credstore.NewNameRouter(resolvers, schemeOwners)
 	if err != nil {
 		return brokerBundle{}, fmt.Errorf("init credstore router: %w", err)
 	}
@@ -283,32 +314,39 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		// startup. A hot-reload edit does not take effect until restart — the
 		// reloader's baseline comparison warns when on_no_match changes.
 		blockNonBrokered: cfg.Proxy.OnNoMatch == config.OnNoMatchBlock,
+		adminListen:      cfg.Proxy.AdminListen,
+		health:           health,
+		version:          version,
 	}, nil
 }
 
 // buildCredStoreResolvers walks the multi-credstore config and constructs
-// one broker.Resolver per credstore, keyed by the provider's URI scheme.
-// Each credstore's token is resolved through the standard token chain; the
-// provider is selected by Name from the process-wide credstore registry.
-// An empty Provider field signals a synthesized legacy default credstore;
-// the function looks up the sole registered provider in that case so the
-// existing single-credstore config files keep working unchanged.
+// one broker.Resolver per credstore, keyed by the credstore NAME (not its
+// provider's URI scheme), so two credstores of one vendor — e.g. a
+// personal and a team account at one vendor — can coexist; refs pick their
+// store via the `<scheme>+<name>://` qualifier grammar (see
+// credstore.ParseQualifiedRef) and unqualified refs route only when
+// exactly one configured credstore resolves their scheme. Each credstore's
+// token is resolved through the standard token chain; the provider is
+// selected by Provider from the process-wide credstore registry. An empty
+// Provider field signals a synthesized legacy default credstore; the
+// function looks up the canonical legacy provider in that case so the
+// existing single-credstore config files keep working unchanged, with the
+// synthesized entry participating under its "default" name.
 //
-// Returns an error when two credstores would claim the same scheme (the
-// multi-credstores-per-provider routing flag is not yet implemented) or
-// when an unknown provider is referenced.
-func buildCredStoreResolvers(ctx context.Context, reg *credstore.Registry, stores []config.CredStore, store token.Store, logger *slog.Logger) (map[string]broker.Resolver, error) {
+// health receives the /healthz status source: every successfully built
+// credstore records its boot validation outcome and installs an async
+// revalidation probe (see HealthTracker). nil skips the tracking, which
+// keeps the function usable from tests that don't care about health.
+// Returns an error when an unknown provider is referenced or a token
+// cannot be resolved.
+func buildCredStoreResolvers(ctx context.Context, reg *credstore.Registry, stores []config.CredStore, store token.Store, logger *slog.Logger, health *HealthTracker) (map[string]broker.Resolver, error) {
 	resolvers := make(map[string]broker.Resolver, len(stores))
-	schemeOwner := make(map[string]string, len(stores))
 	for i := range stores {
 		cs := &stores[i]
 		provider, err := pickProvider(reg, *cs)
 		if err != nil {
 			return nil, err
-		}
-		scheme := provider.Scheme()
-		if other, dup := schemeOwner[scheme]; dup {
-			return nil, fmt.Errorf("credstores %q and %q both resolve to scheme %q (multiple credstores per provider not yet supported)", other, cs.Name, scheme)
 		}
 
 		tok, src, err := token.Resolve(ctx, cs.Token, store)
@@ -321,14 +359,39 @@ func buildCredStoreResolvers(ctx context.Context, reg *credstore.Registry, store
 			slog.String("source", src),
 		)
 
-		resolver, err := buildOneResolver(ctx, provider, cs, tok, store)
+		resolver, probe, err := buildOneResolver(ctx, provider, cs, tok, store)
 		if err != nil {
 			return nil, err
 		}
-		resolvers[scheme] = resolver
-		schemeOwner[scheme] = cs.Name
+		if health != nil {
+			health.RecordBootValidation(cs.Name)
+			health.RegisterProbe(cs.Name, probe)
+		}
+		resolvers[cs.Name] = resolver
 	}
 	return resolvers, nil
+}
+
+// buildSchemeOwners maps each secret-ref URI scheme to the sorted names of
+// the configured credstores whose provider resolves it. It is the ambiguity
+// picture for unqualified refs: exactly one owner routes, more than one is
+// ambiguous, none is unroutable. It mirrors buildCredStoreResolvers'
+// pickProvider logic so boot guards, `config validate` facts, and
+// `rules list` all see the same scheme → names mapping. Entries with an
+// unknown provider are skipped (the same condition is reported separately).
+func buildSchemeOwners(reg *credstore.Registry, stores []config.CredStore) map[string][]string {
+	owners := make(map[string][]string, len(stores))
+	for i := range stores {
+		p, err := pickProvider(reg, stores[i])
+		if err != nil {
+			continue
+		}
+		owners[p.Scheme()] = append(owners[p.Scheme()], stores[i].Name)
+	}
+	for scheme := range owners {
+		slices.Sort(owners[scheme])
+	}
+	return owners
 }
 
 // buildOneResolver runs the boot-time credential ping and constructs the
@@ -336,38 +399,50 @@ func buildCredStoreResolvers(ctx context.Context, reg *credstore.Registry, store
 // semantics) so a bad credential surfaces here rather than as a 502 on the first
 // brokered request.
 //
+// The returned probe re-runs the exact validation call boot made (capturing
+// provider, token, and settings in its closure) so the /healthz status
+// source can asynchronously revalidate the credential later — e.g. after a
+// service-account token is revoked or expires mid-flight. Providers may
+// rate-limit, which is why the probe runs off the request path.
+//
 // A credstore that declares a refresh_token block needs a second secret, so its
 // provider must implement credstore.SecondarySecretProvider: the refresh token
 // is resolved through the same chain as the primary token and passed alongside
 // it. A provider that does not implement the interface rejects the block at boot.
-func buildOneResolver(ctx context.Context, provider credstore.Provider, cs *config.CredStore, primary string, store token.Store) (broker.Resolver, error) {
+func buildOneResolver(ctx context.Context, provider credstore.Provider, cs *config.CredStore, primary string, store token.Store) (broker.Resolver, func(context.Context) error, error) {
 	if cs.RefreshToken.IsZero() {
 		if err := provider.Validate(ctx, primary, cs.Settings); err != nil {
-			return nil, fmt.Errorf("credstore %q: validate %s: %w", cs.Name, provider.Name(), err)
+			return nil, nil, fmt.Errorf("credstore %q: validate %s: %w", cs.Name, provider.Name(), err)
 		}
 		resolver, err := provider.NewResolver(ctx, primary, cs.Settings)
 		if err != nil {
-			return nil, fmt.Errorf("credstore %q: init resolver: %w", cs.Name, err)
+			return nil, nil, fmt.Errorf("credstore %q: init resolver: %w", cs.Name, err)
 		}
-		return resolver, nil
+		probe := func(ctx context.Context) error {
+			return provider.Validate(ctx, primary, cs.Settings)
+		}
+		return resolver, probe, nil
 	}
 
 	sp, ok := provider.(credstore.SecondarySecretProvider)
 	if !ok {
-		return nil, fmt.Errorf("credstore %q: provider %q does not accept a refresh_token block", cs.Name, provider.Name())
+		return nil, nil, fmt.Errorf("credstore %q: provider %q does not accept a refresh_token block", cs.Name, provider.Name())
 	}
 	secondary, _, err := token.Resolve(ctx, cs.RefreshToken, store)
 	if err != nil {
-		return nil, fmt.Errorf("credstore %q: resolve refresh token: %w", cs.Name, err)
+		return nil, nil, fmt.Errorf("credstore %q: resolve refresh token: %w", cs.Name, err)
 	}
 	if err := sp.ValidateWithSecondary(ctx, primary, secondary, cs.Settings); err != nil {
-		return nil, fmt.Errorf("credstore %q: validate %s: %w", cs.Name, provider.Name(), err)
+		return nil, nil, fmt.Errorf("credstore %q: validate %s: %w", cs.Name, provider.Name(), err)
 	}
 	resolver, err := sp.NewResolverWithSecondary(ctx, primary, secondary, cs.Settings)
 	if err != nil {
-		return nil, fmt.Errorf("credstore %q: init resolver: %w", cs.Name, err)
+		return nil, nil, fmt.Errorf("credstore %q: init resolver: %w", cs.Name, err)
 	}
-	return resolver, nil
+	probe := func(ctx context.Context) error {
+		return sp.ValidateWithSecondary(ctx, primary, secondary, cs.Settings)
+	}
+	return resolver, probe, nil
 }
 
 // pickProvider resolves a config.CredStore to its credstore.Provider.
@@ -391,12 +466,19 @@ func pickProvider(reg *credstore.Registry, cs config.CredStore) (credstore.Provi
 	return p, nil
 }
 
-// assertRulesRoutable fails closed at boot if any rule's secret_ref scheme
-// has no resolver in resolvers (keyed by scheme). Malformed refs are left to
-// the schema validator; this guard is specifically the scheme-without-a-
-// credstore case, which the per-scheme router would otherwise only reject at
-// the first matching request.
-func assertRulesRoutable(rules []broker.Rule, resolvers map[string]broker.Resolver) error {
+// assertRulesRoutable fails closed at boot if any rule's secret_ref cannot
+// be routed against the name-keyed resolver table (resolvers, keyed by
+// credstore name) plus its scheme → names index (schemeOwners):
+//
+//   - a scheme no configured credstore resolves,
+//   - a qualified ref naming a credstore that is not configured, and
+//   - an unqualified ref whose scheme more than one credstore resolves
+//     (ambiguous — the ref must carry a `+name` qualifier).
+//
+// Malformed refs are left to the schema validator; this guard is
+// specifically the routing-level cases the router would otherwise only
+// reject at the first matching request.
+func assertRulesRoutable(rules []broker.Rule, resolvers map[string]broker.Resolver, schemeOwners map[string][]string) error {
 	for i := range rules {
 		r := &rules[i]
 		// A placeholder-routing rule has an empty rule-level SecretRef and one
@@ -411,12 +493,25 @@ func assertRulesRoutable(rules []broker.Rule, resolvers map[string]broker.Resolv
 			refs = append(refs, o.ConsumerKeyRef, o.ConsumerSecretRef, o.TokenRef, o.TokenSecretRef)
 		}
 		for _, ref := range refs {
-			scheme, _, ok := strings.Cut(ref, "://")
-			if !ok || scheme == "" {
+			scheme, name, ok := credstore.ParseQualifiedRef(ref)
+			if !ok {
 				continue
 			}
-			if _, ok := resolvers[scheme]; !ok {
+			if name != "" {
+				if _, known := resolvers[name]; !known {
+					return fmt.Errorf("rule %q references credstore %q which is not configured", r.Host, name)
+				}
+				continue
+			}
+			switch owners := schemeOwners[scheme]; len(owners) {
+			case 0:
 				return fmt.Errorf("rule %q references secret_ref scheme %q but no credstore resolves it", r.Host, scheme)
+			case 1:
+			default:
+				return fmt.Errorf(
+					"rule %q uses unqualified secret_ref scheme %q but credstores %q and %q both resolve it; qualify the reference as <scheme>+<name>:// (e.g., %s+%s://)",
+					r.Host, scheme, owners[0], owners[1], scheme, owners[0],
+				)
 			}
 		}
 	}
@@ -425,11 +520,13 @@ func assertRulesRoutable(rules []broker.Rule, resolvers map[string]broker.Resolv
 
 // newProviderFacts builds the config.ProviderFactsFunc that derives the
 // registry-aware validation facts for a parsed config against reg: the
-// provider names the binary has registered, and the secret-ref schemes the
-// config's credstores resolve to. It mirrors the runtime wiring (pickProvider)
-// so `postern config validate` flags the same unknown-provider and
-// unroutable-scheme conditions the server would otherwise only hit at boot or
-// first request.
+// provider names the binary has registered, and the credstore routing
+// picture — scheme → configured store names, store name → provider scheme,
+// plus the shared qualified-ref parser. It mirrors the runtime wiring
+// (pickProvider, buildSchemeOwners) so `postern config validate` flags the
+// same unknown-provider, unroutable-scheme, unknown-credstore, scheme-
+// mismatch, and ambiguity conditions the server would otherwise only hit at
+// boot or first request.
 func newProviderFacts(reg *credstore.Registry) config.ProviderFactsFunc {
 	return func(cfg *config.Config) config.ProviderFacts {
 		known := make(map[string]bool)
@@ -447,6 +544,9 @@ func newProviderFacts(reg *credstore.Registry) config.ProviderFactsFunc {
 		return config.ProviderFacts{
 			KnownProviders:    known,
 			ConfiguredSchemes: schemes,
+			SchemeNames:       buildSchemeOwners(reg, cfg.CredStores),
+			ClassifyRef:       credstore.ParseQualifiedRef,
+			StoreSchemes:      buildStoreSchemes(reg, cfg.CredStores),
 			ValidateSettings: func(name string, settings map[string]string) error {
 				// An unknown provider is reported via KnownProviders; we
 				// can't validate its settings, so skip rather than panic.
@@ -460,19 +560,36 @@ func newProviderFacts(reg *credstore.Registry) config.ProviderFactsFunc {
 	}
 }
 
+// buildStoreSchemes maps each configured credstore name to its provider's
+// secret-ref URI scheme. It backs the validator's check that a qualified
+// ref's scheme matches the named store's provider (op+bw-store://... where
+// bw-store resolves "bw" can never route). Entries with an unknown provider
+// are skipped; the condition is reported separately.
+func buildStoreSchemes(reg *credstore.Registry, stores []config.CredStore) map[string]string {
+	out := make(map[string]string, len(stores))
+	for i := range stores {
+		if p, err := pickProvider(reg, stores[i]); err == nil {
+			out[stores[i].Name] = p.Scheme()
+		}
+	}
+	return out
+}
+
 // newShouldCacheRef builds the broker cache's per-reference cacheability
 // predicate against reg. It routes a secret reference to its owning provider
-// and defers to that provider's ShouldCache, so each vendor keeps ownership of
-// its own non-cacheable-ref rule (e.g. the op scheme's OTP refs). An
-// unroutable reference is treated as non-cacheable: it cannot resolve anyway,
-// and caching a miss would be pointless.
+// (parsing off any `<scheme>+<name>` qualifier) and defers to that
+// provider's ShouldCache with the STRIPPED plain reference, so each vendor
+// keeps ownership of its own non-cacheable-ref rule (e.g. the op scheme's
+// OTP refs) and only ever sees vendor-shaped refs. An unroutable reference
+// is treated as non-cacheable: it cannot resolve anyway, and caching a miss
+// would be pointless.
 func newShouldCacheRef(reg *credstore.Registry) func(secretRef string) bool {
 	return func(secretRef string) bool {
 		p, ok := reg.ForSecretRef(secretRef)
 		if !ok {
 			return false
 		}
-		return p.ShouldCache(secretRef)
+		return p.ShouldCache(credstore.StripQualifier(secretRef))
 	}
 }
 

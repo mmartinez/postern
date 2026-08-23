@@ -35,17 +35,22 @@ type Resolver interface {
 //     forwards the request unmodified, while block returns a synthesized 502
 //     so non-matching egress is denied — the allowlist-only containment an
 //     operator opts into with proxy.on_no_match: block.
-//  2. Refuse to broker over an insecure transport: a matched request whose
+//  2. Enforce the rule's declared scoping: a rule declaring paths and/or
+//     methods brokers only requests inside every declared knob (any-of
+//     prefixes on the escaped wire path, any-of methods). A matched request
+//     outside the scope fails closed before the resolver is called; a rule
+//     declaring neither knob is unrestricted and skips this stage entirely.
+//  3. Refuse to broker over an insecure transport: a matched request whose
 //     scheme is not https (i.e. plain http forwarded through the proxy, not
 //     MITM-terminated TLS) fails closed before any resolve, so a credential
 //     is never injected onto a cleartext hop.
-//  3. Resolve the matched rule's secret reference. The vaultID is always
+//  4. Resolve the matched rule's secret reference. The vaultID is always
 //     empty today; future multi-vault routing will populate it.
-//  4. For a rule that rewrites the request body, buffer the body up to
+//  5. For a rule that rewrites the request body, buffer the body up to
 //     maxBodyBytes (per-rule override wins) before resolving — an oversized
 //     body returns 413 and the resolver is never called, so a flood of large
 //     bodies cannot hammer the credential vendor.
-//  5. Inject the resolved credential per the rule's InjectSpec.
+//  6. Inject the resolved credential per the rule's InjectSpec.
 //
 // On any resolve or inject error the hook returns a synthesized 502 — fail
 // closed: the proxy must never let an unauthenticated request out to the
@@ -70,6 +75,23 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 				return failClosed(req)
 			}
 			return nil
+		}
+
+		// Rule scoping guard. A rule may declare paths/methods restrictions;
+		// a matched request outside them is refused exactly like any other
+		// fail-closed stage — before the resolver runs, before the transport
+		// guard runs, before anything about the credential pipeline starts.
+		// The uniform 502 keeps the refusal indistinguishable from every
+		// other broker denial so the client learns nothing about which knob
+		// rejected it (see failClosedBody).
+		if !rule.scopeAllows(req) {
+			logger.Warn("broker blocked by rule scoping",
+				slog.String("host", host),
+				slog.String("rule", rule.Host),
+				slog.String("path", req.URL.Path),
+				slog.String("method", req.Method),
+			)
+			return failClosed(req)
 		}
 
 		// Transport-confidentiality guard. A matched rule means we are about

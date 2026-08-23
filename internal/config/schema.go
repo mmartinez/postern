@@ -85,15 +85,14 @@ type Config struct {
 // credstore provider compiled into the binary. Token controls how postern
 // obtains the service-account token for this credstore at boot.
 //
-// Name is currently only a display and uniqueness handle (surfaced in logs;
-// duplicate names are a validation error). It does NOT yet disambiguate
-// routing: the broker routes a rule to a credstore solely by the rule's
-// secret_ref URI scheme, so scheme is the sole routing key and two credstores
-// resolving to the same scheme are rejected at boot. Supporting two accounts
-// of the same vendor (e.g. two op credstores) is a future change that would
-// make routing key on Name and extend the secret_ref grammar to name its
-// credstore; Name is kept in the schema now so that change need not break the
-// config grammar.
+// Name is the routing key: a rule references a store explicitly with the
+// credstore-qualified secret-ref grammar `<scheme>+<name>://` (e.g.
+// op+team://Vault/Item/field), or implicitly with a plain ref
+// (op://...), which routes only when exactly one configured credstore
+// resolves that scheme and is a line-numbered validation error otherwise.
+// Two same-vendor credstores with distinct names (e.g. a personal and a
+// team account at one vendor) therefore coexist; duplicate names remain a
+// validation error, and Name is surfaced in logs and `rules list`.
 type CredStore struct {
 	Name     string `yaml:"name"`
 	Provider string `yaml:"provider"`
@@ -168,6 +167,13 @@ type Proxy struct {
 	// DefaultMaxBodyBytes. A body larger than the cap is rejected with 413.
 	// Bound at startup; a hot-reload edit warns and does not take effect.
 	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
+
+	// AdminListen optionally starts a second, loopback-only HTTP listener
+	// exposing machine-readable health state (GET /healthz) for container
+	// orchestrators. Empty (the default) starts no admin listener and leaves
+	// behavior identical. The validator rejects any non-loopback address
+	// with a line-numbered error before the server starts.
+	AdminListen string `yaml:"admin_listen,omitempty"`
 }
 
 // Default cache settings applied when the corresponding key is absent. The
@@ -275,6 +281,20 @@ type Rule struct {
 	// with inject.type=placeholder. Lets several agents share one host rule,
 	// each presenting its own token.
 	Routes []Route `yaml:"routes,omitempty"`
+
+	// Paths scopes injection to request URL paths: each entry is a prefix
+	// the request's escaped path must match (strings.HasPrefix) for the
+	// credential to be attached. Every entry must start with "/". A matched
+	// request whose path matches no declared prefix fails closed before the
+	// resolver is called. Empty means the rule brokers every path on the
+	// host (the historical behavior).
+	Paths []string `yaml:"paths,omitempty"`
+
+	// Methods scopes injection to HTTP methods. Comparison is
+	// case-insensitive; convention is uppercase RFC 9110 tokens ("POST").
+	// A matched request whose method is not listed fails closed before the
+	// resolver is called. Empty means the rule brokers every method.
+	Methods []string `yaml:"methods,omitempty"`
 }
 
 // Route is one entry of a placeholder-routing rule. Token is the placeholder an

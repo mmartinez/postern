@@ -193,13 +193,17 @@ func TestResolveListenAddr(t *testing.T) {
 func TestAssertRulesRoutable(t *testing.T) {
 	t.Parallel()
 
-	resolvers := map[string]broker.Resolver{"op": nil}
+	resolvers := map[string]broker.Resolver{"default": nil}
+	owners := map[string][]string{"op": {"default"}}
+	route := func(rules []broker.Rule) error {
+		return assertRulesRoutable(rules, resolvers, owners)
+	}
 
-	if err := assertRulesRoutable([]broker.Rule{{Host: "api.example.com", SecretRef: "op://V/I/f"}}, resolvers); err != nil {
+	if err := route([]broker.Rule{{Host: "api.example.com", SecretRef: "op://V/I/f"}}); err != nil {
 		t.Fatalf("routable rule: unexpected error %v", err)
 	}
 
-	err := assertRulesRoutable([]broker.Rule{{Host: "api.example.com", SecretRef: "bw://C/I/f"}}, resolvers)
+	err := route([]broker.Rule{{Host: "api.example.com", SecretRef: "bw://C/I/f"}})
 	if err == nil {
 		t.Fatalf("unroutable scheme: want error, got nil (would surface as a 502 at first request)")
 	}
@@ -214,14 +218,14 @@ func TestAssertRulesRoutable(t *testing.T) {
 		{Name: "max", Token: "tgMax", SecretRef: "op://V/max"},
 		{Name: "john", Token: "tgJohn", SecretRef: "bw://C/john"},
 	}}}
-	if err := assertRulesRoutable(unroutableRoutes, resolvers); err == nil {
+	if err := route(unroutableRoutes); err == nil {
 		t.Fatalf("routes rule with unroutable route scheme: want error, got nil")
 	}
 
 	routableRoutes := []broker.Rule{{Host: "api.telegram.org", Routes: []broker.Route{
 		{Name: "max", Token: "tgMax", SecretRef: "op://V/max"},
 	}}}
-	if err := assertRulesRoutable(routableRoutes, resolvers); err != nil {
+	if err := route(routableRoutes); err != nil {
 		t.Fatalf("routes rule with routable scheme: unexpected error %v", err)
 	}
 
@@ -237,7 +241,7 @@ func TestAssertRulesRoutable(t *testing.T) {
 			TokenSecretRef:    "bw://V/ts", // unroutable: no bw resolver
 		},
 	}}}
-	if err := assertRulesRoutable(unroutableOAuth1, resolvers); err == nil {
+	if err := route(unroutableOAuth1); err == nil {
 		t.Fatalf("oauth1 rule with unroutable ref scheme: want error, got nil")
 	}
 
@@ -250,7 +254,7 @@ func TestAssertRulesRoutable(t *testing.T) {
 			TokenSecretRef:    "op://V/ts",
 		},
 	}}}
-	if err := assertRulesRoutable(routableOAuth1, resolvers); err != nil {
+	if err := route(routableOAuth1); err != nil {
 		t.Fatalf("oauth1 rule with routable ref schemes: unexpected error %v", err)
 	}
 }

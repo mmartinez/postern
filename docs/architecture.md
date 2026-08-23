@@ -56,17 +56,22 @@ agent                     postern (127.0.0.1:1701)                 upstream
    trailing dot is stripped from the wire host and from the rule pattern
    alike, exactly once, so a dotted FQDN decides identically to its bare
    form; a malformed multi-dot authority matches nothing and falls through
-   to the configured `passthrough`/`block` policy. A host that matches no
-   rule is tunneled at `CONNECT` without decryption (the default
-   `passthrough` behavior); `block` rejects the `CONNECT` instead.
+   to the configured `passthrough`/`block` policy. A rule may further scope
+   itself with `paths` / `methods`: a matched request outside that scope
+   fails closed exactly like any other broker refusal (the same generic
+   `502`, resolver never called), revealing no stage information. A host
+   that matches no rule is tunneled at `CONNECT` without decryption (the
+   default `passthrough` behavior); `block` rejects the `CONNECT` instead.
 
-3. **Resolve.** The matched rule's `secret_ref` (e.g. `op://Vault/Item/field`)
-   is handed to the credstore provider registered for that URI scheme. Resolved
-   values are cached with a TTL; entries are keyed by secret reference, never
-   evicted, and survive hot reloads — the cache footprint is bounded by the set
-   of references seen over the process lifetime. One-time-password references
-   bypass the cache. Failed resolutions are retried after a backoff window and
-   are never served as values.
+3. **Resolve.** The matched rule's `secret_ref` is dispatched by its URI
+   scheme — plus its optional `<scheme>+<name>://` qualifier when several
+   credstores of one vendor are configured — to the provider registered for
+   that scheme. Resolved values are cached with a TTL; entries are keyed by
+   secret reference, never evicted, and survive hot reloads — the cache
+   footprint is bounded by the set of references seen over the process
+   lifetime. One-time-password references bypass the cache. Failed
+   resolutions are retried after a backoff window and are never served as
+   values.
 
 4. **Inject.** The resolved credential is rendered through the rule's template
    (`Bearer {{ CREDENTIAL }}`) and either set as a named header or substituted
@@ -108,14 +113,14 @@ any other private key.
 |---|---|
 | `internal/proxy` | goproxy front end: CONNECT handling, MITM, panic recovery, response streaming. |
 | `internal/ca` | Local CA generation, per-host leaf minting, and system trust-store install. |
-| `internal/broker` | Host matching (`Engine`), credential injection (`Inject`), and the proxy hook that wires match → resolve → inject. |
-| `internal/credstore` | Provider registry keyed by URI scheme, the `SchemeRouter` that dispatches a `secret_ref` to the right provider, and the shared background-refreshing resolver cache (`cache.go`) every provider reuses. |
+| `internal/broker` | Host matching (`Engine`), per-rule request scoping (`paths`/`methods`), credential injection (`Inject`), and the proxy hook that wires match → scope → resolve → inject. |
+| `internal/credstore` | Provider registry keyed by URI scheme, the name-keyed `NameRouter` that dispatches a `secret_ref` (scheme plus optional `<scheme>+<name>://` qualifier) to one configured credstore instance, and the shared background-refreshing resolver cache (`cache.go`) every provider reuses. |
 | `internal/credstore/onepassword` | Provider for 1Password Service Accounts (`op://`), backed by the 1Password Go SDK. Registered by default. |
 | `internal/credstore/bitwarden` | Provider for Bitwarden Secrets Manager (`bw://`), shelling out to the `bws` CLI. Registered by default. |
 | `internal/credstore/oauth2` | Provider that mints short-lived bearer tokens (`oauth2://`) via `golang.org/x/oauth2` (client-credentials / refresh-token grants). Registered by default. |
 | `internal/config` | YAML schema, strict-mode loader, line-numbered validator, and the fsnotify-backed hot-reload watcher with a 5s stat-poll fallback that survives silent watch death (watcher errors are logged at Warn). |
 | `internal/token` | Service-account token resolution chain (file → env → keychain) and the OS-keychain-backed store. |
-| `internal/runtime` | Assembles the proxy listener, wires the broker hook, and owns graceful shutdown, connection tracking, and tunnel reaping. |
+| `internal/runtime` | Assembles the proxy listener plus the optional loopback-only admin listener (`GET /healthz`), wires the broker hook, and owns graceful shutdown, connection tracking, and tunnel reaping. |
 | `internal/cli` | Cobra commands: `config`, `token`, `ca`, `server`, `rules`, `bootstrap`. |
 | `internal/logging` | slog factory (text/JSON, level, color) and the per-request summary handler. |
 
@@ -125,17 +130,24 @@ A started server with zero rules runs brokerless and does not watch the
 config file: adding the first rule requires a restart. Otherwise `postern
 server` watches the config file. On save it re-parses and re-validates;
 a clean parse atomically swaps the broker's ruleset so in-flight requests are
-unaffected. A config with a fatal lint is rejected and the previous ruleset
-keeps serving — the proxy never drops to an empty ruleset on a typo. Listener,
-cache, and token settings are bound at startup; changing them requires a
-restart, and postern logs a warning when a reload diverges on one of them
-(changes to a credstore's `refresh_token` block are not currently detected).
+unaffected. Each applied swap increments the ruleset version by exactly one;
+the admin health endpoint (`GET /healthz` on `proxy.admin_listen`) surfaces
+that version so orchestrators can observe that a config change landed. A
+config with a fatal lint is rejected and the previous ruleset keeps serving,
+so the proxy never drops to an empty ruleset on a typo. Listener, cache,
+admin-listener, and token settings are bound at startup; changing them
+requires a restart, and postern logs a warning when a reload diverges on one
+of them (changes to a credstore's `refresh_token` block are not currently
+detected).
 
 ## Pluggable credential vendors
 
 The broker depends only on a one-method `Resolver` interface, so it has no
 compile-time coupling to any vendor SDK. A credstore provider claims a URI
-scheme, validates its token at boot, and constructs a resolver. Adding a vendor
+scheme, validates its token at boot, and constructs a resolver. One provider
+(one claimed scheme) can back several configured credstore instances, selected
+by the `<scheme>+<name>://` ref qualifier or resolved from an unambiguous
+unqualified ref. Adding a vendor
 is a single new sub-package plus one blank side-effect import in
 `internal/cli/server.go` (the anchor block where all three shipped providers are
 registered, so the `server` command's registry is populated); the broker and

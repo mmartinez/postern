@@ -23,6 +23,10 @@ agent cannot use postern's errors to probe internal network topology.
 This is an enforced invariant, not a convention: integration tests assert that
 on a resolver error the upstream-side request counter stays at zero.
 
+Config ambiguity fails closed too: an unqualified secret reference whose
+scheme two credstores could serve is rejected at `postern config validate`
+rather than resolved from an arbitrary store.
+
 ## Credential caching and revocation window
 
 Resolved credentials are cached in memory and refreshed in the background so the
@@ -71,7 +75,10 @@ When a token must be referenced in human-facing output, it is masked to a
   upstream that **reflects** the injected credential back in its response
   (responses are forwarded unmodified), and anything covered by the caveats
   below. This still requires **correctly-scoped rules** and a **process/uid
-  boundary** between the agent and postern.
+  boundary** between the agent and postern. Rule-level `paths` / `methods`
+  scoping makes that first caveat enforceable instead of aspirational: a rule
+  can shrink its own blast radius from the whole host to exactly the endpoints
+  it exists for, with everything else refused before the resolver runs.
 - *Accidental credential logging.* Redaction and the no-secret-in-logs rule
   reduce the chance a credential lands in a log aggregator.
 - *Silent auth bypass.* Fail-closed means a broker failure cannot degrade into
@@ -149,9 +156,25 @@ local-dev quick start — prefer `source: file`, and run postern as a separate
 principal from the agent when you can.
 
 **Validation at boot.** Each configured credstore validates its token with a
-cheap read-only ping before the proxy binds its listener. A bad token fails the
+cheap read-only ping before the proxy binds its listeners. A bad token fails the
 process at startup rather than surfacing as a `502` on the first brokered
-request.
+request. Boot proves validity once; when `proxy.admin_listen` is configured,
+the `/healthz` endpoint re-exposes the last-known validation result (and
+refreshes it asynchronously on scrape) so drift after boot is observable
+without log scraping.
+
+### Admin health endpoint
+
+The optional `proxy.admin_listen` starts a second, loopback-only listener
+serving `GET /healthz`. Loopback-only is enforced twice over: config
+validation rejects any non-loopback address (hostnames included) with a
+line-numbered error before the server can start.
+
+The endpoint reports service posture only: overall status (`ok`/`degraded`,
+rendered as `200`/`503` so probes fail closed), the ruleset version, and each
+credstore's name with its last validation result. It never returns credential
+values, tokens, secret references, or raw provider errors; nothing about a
+request or its credentials is logged on this path either.
 
 ## Egress containment with `on_no_match`
 

@@ -69,13 +69,16 @@ credstores:
 
 | Field | Meaning |
 |---|---|
-| `name` | Local handle for this credstore. Must be unique. |
+| `name` | Routing key for this credstore. Must be unique; rules reach a store by name through the secret-ref grammar below. |
 | `provider` | The registered **Name** of a provider compiled into the binary (e.g. `1password`). Not the URI scheme. |
 | `token` | A `token` block (same fields as above) for this credstore. |
 
-A rule routes to a credstore by the URI scheme of its `secret_ref`. See
-[providers.md](providers.md) for the provider contract and the Name-vs-scheme
-distinction.
+A rule routes to a credstore through its `secret_ref`. The qualified grammar
+`<scheme>+<name>://<rest>` (e.g. `op+team://Vault/Item/field`) names its
+credstore directly; an unqualified ref (`op://Vault/Item/field`) routes to the
+sole credstore resolving that scheme and is a validation error naming the
+candidates when two or more do. See [providers.md](providers.md) for the
+provider contract and the Name-vs-scheme distinction.
 
 ## `proxy`
 
@@ -97,6 +100,7 @@ proxy:
 | `cache_ttl` | yes* | **Legacy alias for `cache.ttl`.** Go duration (`5m`, `30s`). Required unless a `cache:` block supplies `ttl`; omitting both fails validation. Setting both to different values is a config error. |
 | `on_no_match` | no | What to do with a `CONNECT` to a host that matches no rule. `passthrough` (default) tunnels the connection untouched — postern does **not** terminate TLS, so the agent reaches the real upstream with the real certificate and only needs to trust the postern CA for brokered hosts. `block` rejects the `CONNECT` with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). Only meaningful when at least one rule exists: a config with zero rules starts brokerless, which intercepts every host and applies neither policy. See [security.md](security.md#egress-containment-with-on_no_match). |
 | `max_body_bytes` | no | Cap (in bytes) on how much of a request body postern buffers when a rule rewrites the body (`inject.in` includes `body`). Default 1 MiB when unset or `0`. A larger body is rejected with `413 Request Entity Too Large` and never reaches the upstream. Bound at startup; a hot-reload edit warns and does not take effect (a per-rule `inject.max_body_bytes` override does hot-reload). |
+| `admin_listen` | no | Optional second listener exposing `GET /healthz` for container orchestrators and monitoring; see [`proxy.admin_listen`](#proxyadmin_listen). Loopback-only: validation rejects any non-loopback address. Unset (the default) starts no listener and leaves behavior identical. |
 
 The timeout budget around the proxy itself is fixed constants, not YAML options: outbound dial 10s, TCP keep-alive 30s, upstream TLS handshake 10s, response-header wait 30s, and idle pooled upstream connections reaped after 90s; on the inbound side, idle keep-alive connections are closed after 2m and request headers must arrive within 30s.
 
@@ -137,6 +141,37 @@ exponential backoff after a failure so a struggling vault is not re-hammered.
 > `proxy.listen` is used, otherwise the built-in default. Set `proxy.listen` and
 > the two stay aligned automatically.
 
+### `proxy.admin_listen`
+
+An optional second HTTP listener exposing machine-readable health state for
+container orchestrators and monitoring:
+
+```yaml
+proxy:
+  listen: 127.0.0.1:1701
+  admin_listen: 127.0.0.1:1702
+```
+
+`GET /healthz` is the only route it serves. It returns `200` with a JSON body
+reporting `status` (`ok` or `degraded`), `ruleset_version` (`1` at boot,
+incremented once per applied hot reload), and `credstores`, listing each
+configured store's `name`, `ok`, and `stale` flags with a short `detail`. Any
+non-`ok` status renders as `503` so probes fail closed; a brokerless
+passthrough deployment reports `degraded` with version `0`.
+
+The address must be an explicit loopback IP (`127.0.0.0/8` or `::1`);
+validation rejects hostnames (including `localhost`) and non-loopback
+addresses with a line-numbered error before the server starts. The listener is
+bound at startup; a hot-reload edit warns and does not take effect. The
+endpoint carries credstore names and status flags only, never tokens, secret
+refs, or resolved credential values.
+
+`postern server healthcheck --addr 127.0.0.1:1702` probes the endpoint and
+exits 0 only on a `200`; it exists because the distroless container image
+ships no shell or curl. The [docker-compose.yml](../docker-compose.yml)
+example wires it in as the service `healthcheck`. A probe must run inside the
+container's network namespace, so the admin port is never published.
+
 ## `rules`
 
 An ordered list of host-broker entries. The first rule whose host matches an
@@ -155,7 +190,9 @@ rules:
 | Field | Required | Meaning |
 |---|---|---|
 | `host` | yes* | A literal hostname (`api.example.com`) or a single-`*` glob (`*.example.com`, matching exactly one label). A trailing-dot literal (`api.example.com.`) is accepted; matching strips exactly one trailing dot from both the wire host and the rule pattern, so it decides identically to its bare form. A malformed multi-dot host on the wire matches no rule and falls through to `on_no_match`. **Do not use a wildcard on a multi-tenant or shared-suffix domain** (e.g. `*.s3.amazonaws.com`, `*.blob.core.windows.net`): any host an attacker can register under that suffix would also match the rule and receive the injected credential. Reserve wildcards for single-tenant domains you control. |
-| `secret_ref` | yes | A `<scheme>://<rest>` URI the matching provider resolves (e.g. `op://VAULT/ITEM/FIELD`). Omit when using `routes` (each route carries its own). |
+| `secret_ref` | yes | A `<scheme>://<rest>` URI the matching provider resolves (e.g. `op://VAULT/ITEM/FIELD`), optionally credstore-qualified as `<scheme>+<name>://<rest>` (see [`credstores`](#credstores)). Omit when using `routes` (each route carries its own). |
+| `paths` | no | URL-path prefixes restricting injection to matching requests; see [Request scoping](#request-scoping-paths--methods). |
+| `methods` | no | HTTP methods restricting injection; see [Request scoping](#request-scoping-paths--methods). |
 | `inject` | yes* | How to attach the resolved credential — see below. |
 | `injects` | no | Several header injections fed by the rule's one `secret_ref`, for a host that authenticates the same credential through two different headers. Mutually exclusive with `inject`, `routes`, and `template`; see below. |
 | `routes` | no | Placeholder-routing entries: per-token secret selection for a shared host. Mutually exclusive with `secret_ref`/`inject.name`; see below. |
@@ -293,9 +330,11 @@ Notes:
 
 - **No `secret_ref`, `name`, or `template`.** An `oauth1` rule supplies its
   credentials through the four `*_ref` fields; setting the rule-level
-  `secret_ref` or the header/template fields is a config error. The four refs use
-  any registered scheme (`op://`, `bw://`, …) and are resolved through the normal
-  credstore path, so they are cached like any other static secret.
+  `secret_ref` or the header/template fields is a config error. The four refs
+  use any registered scheme (`op://`, `bw://`, …), optionally credstore-qualified
+  as `<scheme>+<name>://` (see [`credstores`](#credstores)), and are resolved
+  through the normal credstore path, so they are cached like any other static
+  secret.
 - **What is signed.** The HTTP method, the normalized request URL, the query
   parameters, and — only for an `application/x-www-form-urlencoded` body — the
   form parameters. A JSON or multipart body is forwarded unchanged and not folded
@@ -361,6 +400,50 @@ rules:
   forwarded there too. This only ever places the agent's _own_ secret in its
   _own_ request to the already-authorized upstream — never another agent's.
 
+### Request scoping (`paths` / `methods`)
+
+By default a rule brokers every request to its host. `paths` and `methods`
+narrow that to the requests the rule exists for: a request is brokered only
+when at least one declared path prefix matches and its method appears in the
+declared method list. Both fields are optional; omitting one leaves that
+dimension unrestricted, which is the historical behavior.
+
+```yaml
+rules:
+  - host: api.anthropic.com
+    secret_ref: op://Agents/Anthropic/api_key
+    paths: ["/v1/messages"]
+    methods: [POST]
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+```
+
+- **Prefix match on the wire path.** Every `paths` entry is a prefix compared
+  against the request's escaped path (the exact bytes forwarded upstream), from
+  the root: `/v1` also matches `/v1/messages` and anything else under it.
+  Matching the raw form is deliberate: a percent-encoded path such as
+  `/v1/mess%61ges` does **not** match `/v1/messages`, so what matched is always
+  byte-identical to what the upstream receives. Entries must start with `/`.
+  A prefix matches across segment boundaries (`/v1/messages` also covers
+  `/v1/messages-beta`); declare the trailing slash explicitly
+  (`/v1/messages/`) when you want the boundary.
+- **Methods compare case-insensitively.** Declare uppercase RFC 9110 tokens
+  (`POST`, `PATCH`); a lowercase YAML entry still matches the wire method.
+- **Fail closed outside the scope.** A matched request outside the declared
+  scope returns the same uniform `502` as any other broker failure, and the
+  credential resolver is never called. The response is deliberately
+  indistinguishable from a resolver error: it reveals nothing about which
+  stage refused the request.
+- **Composes with the rest of the rule.** Scoping is evaluated after the host
+  match and before route selection and injection, so it applies equally to
+  `secret_ref` rules, `injects`, `routes`, and `oauth1` rules.
+- **Validation.** An explicitly empty `paths` or `methods` list is an error
+  (an omitted key means unrestricted; an empty list would silently mean the
+  opposite), as is a `paths` entry not starting with `/` or a `methods` entry
+  that is not a non-empty alphabetic token.
+
 ### Built-in templates
 
 Naming a `template` lets a rule skip restating the host pattern, header name,
@@ -382,6 +465,10 @@ Errors block startup. Common errors:
 
 - `host is required` / a host that is neither a literal nor a single-`*` glob.
 - `secret_ref` missing or not of the form `<scheme>://<rest>`.
+- An unqualified `secret_ref` whose scheme more than one credstore resolves
+  (the error names both stores and suggests the `<scheme>+<name>://` form); a
+  qualified ref naming a credstore that is not configured; a qualified ref
+  whose scheme differs from the named store's provider scheme.
 - `inject.type` missing or not `header`/`placeholder`/`oauth1`; `name` missing
   for a header injection; `template` missing or carrying no `{{ CREDENTIAL }}`
   placeholder.
@@ -399,6 +486,8 @@ Errors block startup. Common errors:
 - `injects` combined with `inject`, `routes`, or `template`; an empty `injects`
   list; an entry that is not `type: header`, is missing `name` or `template`, or
   carries `in`/`max_body_bytes`; duplicate header names within one rule.
+- An explicitly empty `paths` or `methods` list; a `paths` entry not starting
+  with `/`; a `methods` entry that is not a non-empty alphabetic token.
 
 Errors (each blocks startup):
 
@@ -411,6 +500,8 @@ Errors (each blocks startup):
 - A rule present but no credstore configured (set `token:` or `credstores:`).
 - Duplicate rule hosts or duplicate credstore names (compared on the exact YAML
   string; case or trailing-dot variants are not caught here).
+- `admin_listen` set to an address that is not `host:port`, has a non-numeric
+  or out-of-range port, or does not bind a loopback IP (`127.0.0.0/8` or `::1`).
 
 Warnings (reported, non-fatal): a route `token` whose estimated entropy is
 below ~64 bits (short or low-diversity, e.g. `tgMax`) — a guessability hint,

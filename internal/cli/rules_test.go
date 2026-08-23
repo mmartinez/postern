@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mmartinez/postern/internal/credstore"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mmartinez/postern/internal/cli"
@@ -45,7 +46,7 @@ rules:
 
 func runRulesList(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	cmd := cli.NewRulesCmd()
+	cmd := cli.NewRulesCmd(credstore.NewRegistry())
 	var out, errb bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errb)
@@ -173,7 +174,7 @@ func TestRulesList_NeverEmitsResolvedCredentialField(t *testing.T) {
 	require.NoError(t, err)
 	// Pin the table header: any new column would change this line.
 	header := strings.SplitN(tableOut, "\n", 2)[0]
-	require.Equal(t, "HOST               SECRET REF                     INJECT  NAME           TEMPLATE", header)
+	require.Equal(t, "HOST               SECRET REF                     CREDSTORE  INJECT  NAME           TEMPLATE", header)
 
 	jsonOut, _, err := runRulesList(t, "list", "--config", path, "--format", "json")
 	require.NoError(t, err)

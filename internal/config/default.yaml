@@ -34,6 +34,12 @@ proxy:
   # What to do when no rule matches an outbound request.
   # passthrough = forward unchanged. block = refuse with 502.
   on_no_match: passthrough
+  # Optional second listener exposing GET /healthz for container
+  # orchestrators and monitoring. Loopback-only by design (validation rejects
+  # any non-127.0.0.0/8 or non-::1 address): the endpoint reports ruleset
+  # version and credstore health, never credential material. Delete this line
+  # to run without an admin listener.
+  admin_listen: 127.0.0.1:1702
 
 rules:
   - host: api.anthropic.com
@@ -43,6 +49,13 @@ rules:
       name: x-api-key
       template: "{{ CREDENTIAL }}"
 
+  # Optional request scoping: inject only for matching path prefixes and
+  # methods. Anything else fails closed with a generic 502 before the vault
+  # is touched. Omit either key to leave that dimension unrestricted.
+  # paths:
+  #   - /v1/messages
+  # methods:
+  #   - POST
   - host: api.openai.com
     secret_ref: op://Agents/OpenAI/api_key
     inject:

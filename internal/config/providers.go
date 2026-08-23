@@ -20,6 +20,25 @@ type ProviderFacts struct {
 	// credstores resolve to. A rule whose secret_ref scheme is outside this
 	// set can never be brokered. A nil map disables the check.
 	ConfiguredSchemes map[string]bool
+	// SchemeNames maps each secret-ref scheme to the names of the
+	// configured credstores resolving it. An unqualified ref whose scheme
+	// lists more than one name is ambiguous (the ref must carry a
+	// `<scheme>+<name>` qualifier); a scheme with no entry is unroutable.
+	// Together with ClassifyRef it drives the credstore-qualified-ref checks
+	// (see validator_credstore.go). A nil map disables those checks.
+	SchemeNames map[string][]string
+	// StoreSchemes maps each configured credstore name to its provider's
+	// secret-ref URI scheme, backing the check that a qualified ref's
+	// scheme matches the named store's provider. A nil map disables that
+	// check.
+	StoreSchemes map[string]string
+	// ClassifyRef parses a secret reference into its scheme and optional
+	// credstore-name qualifier per the `<scheme>+<name>://` grammar. The CLI
+	// wires it to credstore.ParseQualifiedRef so the config package stays
+	// decoupled from the credstore registry (which imports this package).
+	// A nil func makes every reference be treated as unqualified by the
+	// scheme checks.
+	ClassifyRef func(secretRef string) (scheme, name string, ok bool)
 	// ValidateSettings checks a credstore's provider-interpreted settings
 	// map offline (no token, no network), returning an error for an unknown
 	// key or malformed value. ValidateProviders calls it per credstore whose
@@ -97,16 +116,51 @@ func ValidateProviders(cfg *Config, root *yaml.Node, facts ProviderFacts) []Lint
 		}
 	}
 
+	// Credstore-qualified-ref routing checks (ambiguity, unknown store,
+	// scheme mismatch). They need the registry-derived routing picture, so
+	// they live on this facts-driven stage rather than schema validation;
+	// see validator_credstore.go. Route refs are checked here too — the
+	// schema-only pass never sees their scheme.
+	if facts.SchemeNames != nil && facts.ClassifyRef != nil {
+		for i := range cfg.Rules {
+			r := cfg.Rules[i]
+			base := fmt.Sprintf("rules[%d]", i)
+			v.checkQualifiedRef(base+".secret_ref", r.SecretRef, facts)
+			for j, rt := range r.Routes {
+				v.checkQualifiedRef(fmt.Sprintf("%s.routes[%d].secret_ref", base, j), rt.SecretRef, facts)
+			}
+			if r.Inject.Type == InjectTypeOAuth1 {
+				v.checkQualifiedRef(base+".inject.consumer_key_ref", r.Inject.ConsumerKeyRef, facts)
+				v.checkQualifiedRef(base+".inject.consumer_secret_ref", r.Inject.ConsumerSecretRef, facts)
+				v.checkQualifiedRef(base+".inject.token_ref", r.Inject.TokenRef, facts)
+				v.checkQualifiedRef(base+".inject.token_secret_ref", r.Inject.TokenSecretRef, facts)
+			}
+		}
+	}
+
 	return v.out
 }
 
 // checkRefScheme flags a secret_ref at path whose scheme has no configured
 // credstore. An empty or malformed ref is skipped: the schema validator already
-// covers those, and a second lint on the same line is noise.
+// covers those, and a second lint on the same line is noise. When the facts
+// carry the shared qualified-ref parser, a `<scheme>+<name>://` qualifier is
+// stripped first so the scheme compared against ConfiguredSchemes is the
+// provider's plain scheme.
 func (v *validator) checkRefScheme(path, ref string, facts ProviderFacts) {
-	scheme, _, ok := strings.Cut(ref, "://")
-	if !ok || scheme == "" {
-		return
+	var scheme string
+	if facts.ClassifyRef != nil {
+		var ok bool
+		scheme, _, ok = facts.ClassifyRef(ref)
+		if !ok {
+			return
+		}
+	} else {
+		var ok bool
+		scheme, _, ok = strings.Cut(ref, "://")
+		if !ok || scheme == "" {
+			return
+		}
 	}
 	if !facts.ConfiguredSchemes[scheme] {
 		v.add(path, fmt.Sprintf("no credstore configured for secret_ref scheme %q", scheme), SeverityError)

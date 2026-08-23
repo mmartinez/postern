@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"sync/atomic"
 
 	"github.com/mmartinez/postern/internal/config"
 )
@@ -21,6 +22,43 @@ type Baseline struct {
 	CredStores []config.CredStore
 }
 
+// VersionCounter is the ruleset version source for the admin health
+// endpoint (GET /healthz): construction of a ruleset counts as version 1,
+// and every applied hot reload bumps the counter. It lives beside the
+// reloader because the reloader is the sole writer — swaps happen only on
+// its goroutine — while the admin handler reads it concurrently, which is
+// why every access goes through the atomic.
+type VersionCounter struct {
+	v atomic.Uint64
+}
+
+// NewVersionCounter returns a counter seeded at 1: the engine was
+// constructed with its boot ruleset, so a freshly started server already
+// has a loaded ruleset to report.
+func NewVersionCounter() *VersionCounter {
+	c := &VersionCounter{}
+	c.v.Store(1)
+	return c
+}
+
+// Bump records one applied swap. Safe to call concurrently with Load; the
+// reloader calls it from its own goroutine after engine.Swap succeeds.
+func (c *VersionCounter) Bump() {
+	if c == nil {
+		return
+	}
+	c.v.Add(1)
+}
+
+// Load returns the current ruleset version. A nil counter reports 0,
+// which callers surface as "no ruleset loaded" (brokerless passthrough).
+func (c *VersionCounter) Load() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.v.Load()
+}
+
 // RunReloader consumes Watcher events and atomically swaps engine's
 // ruleset whenever a valid reload arrives. Events carrying any
 // SeverityError lint are logged and dropped: the engine continues
@@ -32,12 +70,21 @@ type Baseline struct {
 // differ from the baseline values, the reloader emits a Warn so the
 // operator knows those edits won't take effect without a restart.
 //
+// version optionally receives a Bump on every applied swap so the caller
+// can expose a monotonically increasing ruleset version (the admin health
+// endpoint's ruleset_version); passing no counter keeps the historical
+// behavior unchanged, so existing callers compile and behave identically.
+//
 // RunReloader returns when ctx is cancelled or when events closes.
 // Construct it in a dedicated goroutine after wiring the watcher; the
 // CLI server command owns that orchestration.
-func RunReloader(ctx context.Context, engine *Engine, events <-chan config.Event, logger *slog.Logger, baseline *Baseline) {
+func RunReloader(ctx context.Context, engine *Engine, events <-chan config.Event, logger *slog.Logger, baseline *Baseline, version ...*VersionCounter) {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	var vc *VersionCounter
+	if len(version) > 0 {
+		vc = version[0]
 	}
 	for {
 		select {
@@ -47,14 +94,15 @@ func RunReloader(ctx context.Context, engine *Engine, events <-chan config.Event
 			if !ok {
 				return
 			}
-			applyReload(engine, ev, logger, baseline)
+			applyReload(engine, ev, logger, baseline, vc)
 		}
 	}
 }
 
 // applyReload is the per-event decision: swap on clean reload, log + skip
-// on fatal lint, and surface warnings without blocking the swap.
-func applyReload(engine *Engine, ev config.Event, logger *slog.Logger, baseline *Baseline) {
+// on fatal lint, and surface warnings without blocking the swap. A nil
+// version simply skips the bump.
+func applyReload(engine *Engine, ev config.Event, logger *slog.Logger, baseline *Baseline, version *VersionCounter) {
 	fatal := countFatal(ev.Lints)
 	if fatal > 0 {
 		logger.Warn("config reload rejected",
@@ -76,6 +124,7 @@ func applyReload(engine *Engine, ev config.Event, logger *slog.Logger, baseline 
 		return
 	}
 	engine.Swap(newRules)
+	version.Bump()
 	logger.Info("config reload applied", slog.Int("rules", len(newRules)))
 
 	if warn := len(ev.Lints); warn > 0 {
@@ -97,7 +146,6 @@ func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.
 		logger.Warn("config edit ignored",
 			slog.String("field", "proxy.cache_ttl"),
 			slog.String("reason", "cache_ttl is bound at startup; restart postern to apply"),
-			slog.Duration("running", baseline.Proxy.CacheTTL),
 			slog.Duration("on_disk", reloaded.Proxy.CacheTTL),
 		)
 	}

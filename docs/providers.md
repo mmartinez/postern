@@ -71,7 +71,11 @@ type Resolver interface {
 
 `vaultID` is reserved for future multi-vault routing and must currently be
 the empty string. Implementations should reject a non-empty `vaultID` with a
-clear error so a misconfigured caller fails closed.
+clear error so a misconfigured caller fails closed. Credstore selection does
+not travel through this parameter: it rides in the secret reference itself as
+the `<scheme>+<name>://` qualifier, which the router strips before your
+resolver sees the ref (see "Config" below), so resolvers always receive the
+plain `<scheme>://<rest>` form and the empty `vaultID`.
 
 A provider that needs a second secret alongside the service-account token
 (the OAuth2 `refresh_token` grant is the motivating case) additionally
@@ -102,6 +106,11 @@ The registry panics on duplicate Name or Scheme — registration is a
 static, boot-time invariant, and silently overriding a previously
 registered provider would be a footgun. Pick a scheme that does not
 clash with an existing provider in the tree.
+
+Two credstores of the same vendor do not conflict with this invariant:
+duplicate Name or Scheme is a registry-level check on Provider instances,
+while multiple credstores pointing at one provider are config-level instances
+of that single registered Provider.
 
 To activate the provider, add a blank side-effect import of your provider
 package to the anchor block in `internal/cli/server.go` — that is where the
@@ -165,12 +174,13 @@ credstores:
 > registry (via the registry facts the CLI supplies) and fails with a
 > line-numbered error for an unknown name.
 
-Per-rule routing is inferred from the `secret_ref` scheme. When the
-config has exactly one credstore for a given provider, rules don't need
-to name their credstore explicitly; when two credstores share a
-provider, the rule must pin `credstore: <name>` (this routing override
-is forthcoming; the current build rejects multi-credstores-per-provider
-at boot).
+Per-rule routing rides on the `secret_ref`. The qualified grammar
+`<scheme>+<name>://<rest>` (e.g. `op+team://Vault/Item/field`) routes to the
+credstore named after the `+`; an unqualified ref (`op://...`) routes to the
+sole credstore resolving that scheme. When two credstores share a scheme, an
+unqualified ref for that scheme is a line-numbered validation error naming
+the candidates, so ambiguity fails at `postern config validate`, not at the
+first request.
 
 The legacy single-credstore form — a top-level `token:` block and no
 `credstores:` list — is normalized into a synthesized `"default"`
@@ -197,9 +207,11 @@ pointed at by `settings.bws_path`).
 
 - **Name:** `bitwarden` · **Scheme:** `bw`
 - **`secret_ref` grammar:** `bw://<secret-uuid>` — the UUID of a Secrets
-  Manager secret. There is no field selector: the secret's *value* is the
-  credential. A non-UUID id, or a non-empty reserved vault segment, fails
-  closed before any subprocess is spawned.
+  Manager secret. With two Bitwarden credstores configured, qualify the ref as
+  `bw+<name>://<secret-uuid>` (e.g. `bw+prod://7f9c2b3a-...`). There is no
+  field selector: the secret's *value* is the credential. A non-UUID id, or a
+  non-empty reserved vault segment, fails closed before any subprocess is
+  spawned.
 - **Token:** a Bitwarden machine access token supplied through the standard
   `token:` block. At resolve time it is passed to `bws` via the
   `BWS_ACCESS_TOKEN` environment variable in a minimal, non-inherited
@@ -272,7 +284,11 @@ automatic refresh on expiry are handled by `golang.org/x/oauth2`.
 - **Name:** `oauth2` · **Scheme:** `oauth2`
 - **`secret_ref` grammar:** `oauth2://<credstore-name>`. The authority is a
   reserved label (it does not select a field); one `oauth2` credstore maps to one
-  client. A non-`oauth2://` ref fails closed.
+  client. A non-`oauth2://` ref fails closed. This authority form is
+  oauth2-specific and predates the general `<scheme>+<name>://` qualifier; the
+  qualifier works here too (`oauth2+corp://` routes to the `corp` store), but
+  the plain authority form stays the canonical spelling, and with a single
+  oauth2 credstore both forms route identically.
 - **Caching:** oauth2 refs **bypass** the broker's global credential cache
   (`ShouldCache` is always false). The access token's lifetime is governed by the
   token endpoint's `expires_in`, honored inside the resolver — caching it under a
@@ -394,6 +410,9 @@ import to the default binary (the bitwarden provider followed this path).
 ## Testing checklist
 
 - Unit-test `Name()` and `Scheme()` return the documented constants.
+- Unit-test that a credstore-qualified ref (`<scheme>+<name>://`) reaches your
+  resolver stripped to the plain `<scheme>://` form; you never parse the
+  qualifier yourself (the router does).
 - Unit-test `NewResolver` against a stub of the vendor's API (use the
   interface-in-the-consumer pattern; don't mock the SDK type
   directly).
