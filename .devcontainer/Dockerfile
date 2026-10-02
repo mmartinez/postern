@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
-# Postern devcontainer — debian:bookworm-slim + mise.
+# Postern devcontainer — debian:trixie-slim + mise.
 # All Go/lint/test tooling is installed by mise from .mise.toml inside the
 # image (or at postCreateCommand time), so the host needs only Docker + git +
 # the devcontainer CLI.
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # UID/GID provided by devcontainer.json updateRemoteUserUID; defaults match
 # typical Linux dev hosts. Pinning them keeps file ownership on bind mounts
@@ -44,7 +44,7 @@ RUN groupadd --gid "${USER_GID}" "${USERNAME}" \
 
 # Install mise globally (system-wide binary, per-user activation).
 # Pinned via the official install script + checksum.
-ENV MISE_VERSION=v2025.1.0
+ENV MISE_VERSION=v2026.9.18
 RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh \
     && mise --version
 

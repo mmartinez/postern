@@ -23,15 +23,15 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.26.6"
-  GOLANGCI_VERSION: "v2.12.2"
-  GITLEAKS_VERSION: "8.21.4"
-  GOFUMPT_VERSION: "v0.7.0"
-  # Release tooling. goreleaser is pinned exactly (lockstep with .mise.toml's
-  # "2.4") because the config uses the 2.4-era `archives.format` field, which
-  # newer goreleaser rejects in favor of `formats`. zig is the cross C compiler
-  # for the CGO matrix (see .goreleaser.yaml); pinned with a checksum.
-  GORELEASER_VERSION: "v2.16.0"
+  GO_VERSION: "1.26.8"
+  GOLANGCI_VERSION: "v2.14.0"
+  GITLEAKS_VERSION: "8.30.1"
+  GOFUMPT_VERSION: "v0.12.0"
+  # Release tooling. goreleaser is pinned exactly (lockstep with .mise.toml)
+  # so a local `make snapshot` and the split release build produce the same
+  # archives. zig is the cross C compiler for the CGO matrix (see
+  # .goreleaser.yaml); pinned with a checksum.
+  GORELEASER_VERSION: "v2.18.2"
   ZIG_VERSION: "0.14.0"
   ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
 
@@ -49,7 +49,7 @@ jobs:
         run: go install mvdan.cc/gofumpt@${{ env.GOFUMPT_VERSION }}
       - name: gofumpt check
         run: |
-          out=$(gofumpt -l .)
+          out=$(gofumpt -extra -l .)
           if [ -n "$out" ]; then
             echo "gofumpt would reformat:"
             echo "$out"
@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.26.6"]
+        go: ["1.26.8"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

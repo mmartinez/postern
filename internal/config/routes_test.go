@@ -153,7 +153,8 @@ func TestValidateRoutes(t *testing.T) {
 					"      type: placeholder\n",
 					"      type: placeholder\n      in: [body]\n",
 					1),
-				"tg_max_8Kq2Lp9wZ", "tg/max/reserved", 1),
+				"tg_max_8Kq2Lp9wZ", "tg/max/reserved", 1,
+			),
 			wantLints: func(t *testing.T, lints []config.LintError) {
 				requireLintContains(t, lints, "unreserved")
 			},

@@ -118,7 +118,8 @@ func installConnectionErrHandler(gp *goproxy.ProxyHttpServer, logger *slog.Logge
 			// with the constant body.
 			frame := fmt.Sprintf(
 				"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-				len(badGatewayBody), badGatewayBody)
+				len(badGatewayBody), badGatewayBody,
+			)
 			_, _ = io.WriteString(w, frame)
 		}
 	}
