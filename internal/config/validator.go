@@ -87,6 +87,19 @@ func validateSkipping(cfg *Config, root *yaml.Node, skipRule map[int]struct{}) [
 	if len(cfg.Rules) > 0 && len(cfg.CredStores) == 0 {
 		v.add("credstores", "at least one credstore is required when rules are non-empty (set top-level `token:` or `credstores:`)", SeverityError)
 	}
+	// The inverse is a warning, not an error: starting with no rules is the
+	// documented brokerless mode and stays valid, but it is not the policy an
+	// operator may expect — with no rules the proxy intercepts every CONNECT
+	// and on_no_match is not applied at all, not even `block`. Hot-reloading a
+	// working ruleset down to zero rules is the other half, and the reloader
+	// refuses that unless the server started with on_no_match: block.
+	if len(cfg.Rules) == 0 && len(cfg.CredStores) > 0 {
+		v.add("rules", "no rules with a credential source configured: postern starts brokerless and "+
+			"applies neither on_no_match policy, so every CONNECT is intercepted and forwarded; hot "+
+			"reload refuses an empty ruleset unless the server started with on_no_match: block "+
+			"(drop the top-level `token:` and `credstores:` blocks if that is intended)",
+			SeverityWarning)
+	}
 	return v.out
 }
 

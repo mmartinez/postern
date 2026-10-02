@@ -39,3 +39,9 @@ func (e *Engine) Swap(rules []Rule) {
 	cp := append([]Rule(nil), rules...)
 	e.rules.Store(&cp)
 }
+
+// Len reports how many rules the active ruleset holds. The reloader reads it
+// to refuse a swap that would empty a working ruleset.
+func (e *Engine) Len() int {
+	return len(*e.rules.Load())
+}

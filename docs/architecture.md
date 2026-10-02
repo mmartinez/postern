@@ -134,7 +134,14 @@ unaffected. Each applied swap increments the ruleset version by exactly one;
 the admin health endpoint (`GET /healthz` on `proxy.admin_listen`) surfaces
 that version so orchestrators can observe that a config change landed. A
 config with a fatal lint is rejected and the previous ruleset keeps serving,
-so the proxy never drops to an empty ruleset on a typo. Listener, cache,
+so the proxy never drops to an empty ruleset on a typo. A clean config with
+no rules is refused for the same reason while the policy in force is
+`on_no_match: passthrough` (the default): with no rules every request
+matches nothing and would be tunneled untouched, silently stopping
+injection. Under `on_no_match: block` that config is the deny-all policy and
+applies normally. `on_no_match` is bound at startup, so the decision always
+follows the running policy, never the edit — and at boot with zero rules
+neither policy applies at all (see `security.md`). Listener, cache,
 admin-listener, and token settings are bound at startup; changing them
 requires a restart, and postern logs a warning when a reload diverges on one
 of them (changes to a credstore's `refresh_token` block are not currently

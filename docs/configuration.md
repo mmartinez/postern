@@ -505,4 +505,10 @@ Errors (each blocks startup):
 
 Warnings (reported, non-fatal): a route `token` whose estimated entropy is
 below ~64 bits (short or low-diversity, e.g. `tgMax`) — a guessability hint,
-not a hard failure.
+not a hard failure; and no `rules` at all while a credential source is
+configured. Starting that way is the brokerless mode and stays valid, but at
+boot postern applies neither `on_no_match` policy — it intercepts every
+`CONNECT` and forwards it — so a setting that looks protective is not engaged
+until a rule exists. Hot reload separately refuses to drop a working ruleset
+to zero, unless the server started with `on_no_match: block` (see
+[architecture.md](architecture.md#hot-reload)).

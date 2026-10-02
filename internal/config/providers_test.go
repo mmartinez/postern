@@ -110,7 +110,10 @@ credstores:
       env_var: OP_SERVICE_ACCOUNT_TOKEN
     settings:
       bad_key: nope
-rules: []
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject: {type: header, name: x-api-key, template: "{{ CREDENTIAL }}"}
 `
 	facts := func(*config.Config) config.ProviderFacts {
 		return config.ProviderFacts{
@@ -155,7 +158,10 @@ credstores:
       env_var: OP_SERVICE_ACCOUNT_TOKEN
     settings:
       server_url: https://vault.example.com
-rules: []
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject: {type: header, name: x-api-key, template: "{{ CREDENTIAL }}"}
 `
 	facts := func(*config.Config) config.ProviderFacts {
 		return config.ProviderFacts{
