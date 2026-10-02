@@ -12,6 +12,7 @@ The host needs only Docker, git, and the devcontainer CLI. **No Go toolchain on 
 - Drop into a shell: `make shell`
 - Anything Go-related goes through `make <target>`. From the host these wrap `devcontainer exec`; inside the container they are direct invocations. The Makefile auto-detects which side it's on.
 - Bump tool versions in `.mise.toml`; the devcontainer reads these pins. CI pins Go/lint/goreleaser/zig separately in each workflow's env — bump both sides when a tool changes.
+- After bumping the Go pin, re-run `bash .devcontainer/post-create.sh` inside the container (`make shell`, then the script). `govulncheck` and `go-licenses` are `go install`ed into the active Go's `GOBIN`, and their mise shims keep pointing at the previous toolchain until they are reinstalled — otherwise `make ci` stops at the vuln step with `mise ERROR No version is set for shim: govulncheck`.
 
 If a command fails on the host with "command not found", the fix is to run it via `make` (or inside `make shell`), not to install the tool globally.
 
