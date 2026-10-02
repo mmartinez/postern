@@ -9,14 +9,22 @@ import (
 	"github.com/mmartinez/postern/internal/config"
 )
 
-// oauth2ProxyTail is the proxy + empty rules block appended to the oauth2
+// oauth2ProxyTail is the proxy + a single rule appended to the oauth2
 // credstore fixtures below so each test body declares only the credstore.
+// Every fixture declares exactly one credstore, so an unqualified oauth2
+// ref routes to it without ambiguity.
 const oauth2ProxyTail = `
 proxy:
   listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
-rules: []
+rules:
+  - host: api.example.com
+    secret_ref: oauth2://token
+    inject:
+      type: header
+      name: authorization
+      template: "Bearer {{ CREDENTIAL }}"
 `
 
 func TestOAuth2_RefreshGrantRequiresRefreshTokenBlock(t *testing.T) {

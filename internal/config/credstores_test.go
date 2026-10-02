@@ -192,7 +192,10 @@ proxy:
   listen: 127.0.0.1:1701
   cache_ttl: 5m
   on_no_match: passthrough
-rules: []
+rules:
+  - host: api.example.com
+    secret_ref: bw://item-id/field
+    inject: {type: header, name: authorization, template: "Bearer {{ CREDENTIAL }}"}
 `))
 	require.NoError(t, err)
 	require.Empty(t, lints, "settings block should parse cleanly; got %v", lints)

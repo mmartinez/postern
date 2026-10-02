@@ -153,6 +153,104 @@ func TestRunReloader_KeepsRulesOnInvalidEvent(t *testing.T) {
 	require.Equal(t, "WARN", lastLine["level"])
 }
 
+// A lint-free config that drops every rule must not downgrade a working
+// ruleset: with no rules every request matches nothing, and the default
+// on_no_match: passthrough tunnels it untouched — the proxy would keep
+// answering while silently injecting nothing.
+func TestRunReloader_KeepsRulesOnEmptyRulesetEvent(t *testing.T) {
+	t.Parallel()
+
+	initial := []broker.Rule{{
+		Host:      "api.first.test",
+		SecretRef: "op://Vault/Item/field",
+		Injection: broker.InjectSpec{
+			Type:     broker.InjectHeader,
+			Name:     "x-api-key",
+			Template: "{{ CREDENTIAL }}",
+		},
+	}}
+	engine := broker.NewEngine(initial)
+
+	logBuf := &syncBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	events, stop := runReloaderUnderTest(t, engine, logger)
+	t.Cleanup(stop)
+
+	events <- config.Event{New: &config.Config{Proxy: config.Proxy{Listen: "127.0.0.1:1701"}}}
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(logBuf.String(), "ruleset keeps serving")
+	}, 2*time.Second, 10*time.Millisecond, "reloader must log the rejection")
+
+	if _, ok := engine.Match("api.first.test"); !ok {
+		t.Error("original rule must still match after a rule-less reload")
+	}
+	if got := engine.Len(); got != 1 {
+		t.Errorf("engine.Len() = %d, want 1", got)
+	}
+}
+
+// The guard covers the transition only: an engine that is already empty is
+// the documented brokerless mode and stays brokerless.
+func TestRunReloader_EmptyRulesetStaysEmptyWhenAlreadyEmpty(t *testing.T) {
+	t.Parallel()
+
+	engine := broker.NewEngine(nil)
+
+	logBuf := &syncBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	events, stop := runReloaderUnderTest(t, engine, logger)
+	t.Cleanup(stop)
+
+	events <- config.Event{New: &config.Config{Proxy: config.Proxy{Listen: "127.0.0.1:1701"}}}
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(logBuf.String(), "config reload applied")
+	}, 2*time.Second, 10*time.Millisecond, "an empty-to-empty reload must still apply")
+	require.NotContains(t, logBuf.String(), "config reload rejected")
+}
+
+// Under on_no_match: block an empty ruleset is the deny-all policy, not an
+// accident: every unmatched request is refused, so the swap must apply.
+// on_no_match is bound at startup, hence the baseline rather than the edit.
+func TestRunReloader_EmptyRulesetAppliesWhenDenyAllAtBoot(t *testing.T) {
+	t.Parallel()
+
+	engine := broker.NewEngine([]broker.Rule{{
+		Host:      "api.first.test",
+		SecretRef: "op://Vault/Item/field",
+		Injection: broker.InjectSpec{
+			Type:     broker.InjectHeader,
+			Name:     "x-api-key",
+			Template: "{{ CREDENTIAL }}",
+		},
+	}})
+	baseline := &broker.Baseline{
+		Proxy: config.Proxy{Listen: "127.0.0.1:1701", OnNoMatch: config.OnNoMatchBlock},
+	}
+
+	events, counter, stop := runReloaderWired(t, engine, baseline, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(stop)
+
+	events <- config.Event{
+		New: &config.Config{
+			Proxy: config.Proxy{Listen: "127.0.0.1:1701", OnNoMatch: config.OnNoMatchBlock},
+		},
+	}
+
+	require.Eventually(t, func() bool {
+		return counter.Load() == 2
+	}, 2*time.Second, 10*time.Millisecond, "a deny-all deployment must be able to empty its ruleset")
+	if _, ok := engine.Match("api.first.test"); ok {
+		t.Error("the deny-all swap must empty the ruleset")
+	}
+	if got := engine.Len(); got != 0 {
+		t.Errorf("engine.Len() = %d, want 0", got)
+	}
+}
+
 // syncBuffer is a goroutine-safe bytes.Buffer used by tests that read log
 // output from the main goroutine while the reloader goroutine writes to it.
 type syncBuffer struct {

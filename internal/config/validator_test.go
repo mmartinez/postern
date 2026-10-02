@@ -283,6 +283,98 @@ rules:
 			},
 		},
 		{
+			name: "rules empty with a credential source warns",
+			yaml: `
+token:
+  source: auto
+  env_var: OP_SERVICE_ACCOUNT_TOKEN
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: passthrough
+`,
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				// Non-fatal: starting with zero rules is the brokerless mode and
+				// stays valid. The hot-reload downgrade is what must not happen,
+				// and the reloader guards that directly.
+				requireLintSeverity(t, lints, "no rules", config.SeverityWarning)
+			},
+		},
+		{
+			name: "rules empty with a credstore warns",
+			yaml: `
+credstores:
+  - name: corp
+    provider: oauth2
+    token:
+      source: env
+      env_var: CORP_SECRET
+    settings:
+      token_url: https://idp.example.com/oauth2/token
+      client_id: postern
+      grant_type: client_credentials
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: passthrough
+`,
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintSeverity(t, lints, "no rules", config.SeverityWarning)
+			},
+		},
+		{
+			name: "rules empty under on_no_match block states the boot reality",
+			yaml: `
+token:
+  source: auto
+  env_var: OP_SERVICE_ACCOUNT_TOKEN
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: block
+`,
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				// Zero rules means brokerless at boot, where on_no_match is not
+				// applied at all — not even block. Saying otherwise would send
+				// an operator looking for a deny-all that never engages.
+				requireLintContains(t, lints, "no rules with a credential source configured")
+				requireLintContains(t, lints, "applies neither on_no_match policy")
+				requireLintContains(t, lints, "unless the server started with on_no_match: block")
+				requireLintSeverity(t, lints, "no rules", config.SeverityWarning)
+			},
+		},
+		{
+			name: "brokerless without a credential source is valid",
+			yaml: `
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: passthrough
+`,
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				require.Empty(t, lints, "no credential source and no rules is the brokerless mode")
+			},
+		},
+		{
+			name: "rules without a credential source is fatal",
+			yaml: `
+proxy:
+  listen: 127.0.0.1:1701
+  cache_ttl: 5m
+  on_no_match: passthrough
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject: {type: header, name: a, template: "{{ CREDENTIAL }}"}
+`,
+			wantLints: func(t *testing.T, lints []config.LintError) {
+				requireLintContains(t, lints, "credstore")
+				if !anyOfSeverity(lints, config.SeverityError) {
+					t.Errorf("expected severity=error; got %v", lints)
+				}
+			},
+		},
+		{
 			name: "default config is valid",
 			yaml: string(config.DefaultYAML()),
 			wantLints: func(t *testing.T, lints []config.LintError) {
@@ -366,4 +458,16 @@ func requireLintContains(t *testing.T, lints []config.LintError, substr string) 
 	if !anyLint(lints, substr) {
 		t.Fatalf("expected a lint mentioning %q; got %v", substr, lints)
 	}
+}
+
+// requireLintSeverity asserts that a lint mentioning substr carries sev.
+func requireLintSeverity(t *testing.T, lints []config.LintError, substr string, sev config.Severity) {
+	t.Helper()
+	for _, l := range lints {
+		if strings.Contains(l.Message, substr) {
+			require.Equal(t, sev, l.Severity, "lint %q severity", l.Message)
+			return
+		}
+	}
+	t.Fatalf("expected a %q lint of severity %v; got %v", substr, sev, lints)
 }

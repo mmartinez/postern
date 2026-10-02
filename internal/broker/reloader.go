@@ -123,6 +123,19 @@ func applyReload(engine *Engine, ev config.Event, logger *slog.Logger, baseline 
 		)
 		return
 	}
+	// Refuse to downgrade a working ruleset to nothing while the running
+	// policy would fail open: with no rules every request matches nothing and
+	// on_no_match: passthrough tunnels it untouched, so the proxy would keep
+	// answering while silently injecting nothing. Under on_no_match: block the
+	// same config is the opposite — zero rules is how a deny-all deployment
+	// refuses everything — so that swap is allowed. on_no_match is bound at
+	// startup, so the decision follows the policy in force, not the edit.
+	if len(newRules) == 0 && engine.Len() > 0 && !denyAllAtBoot(baseline) {
+		logger.Warn("config reload rejected",
+			slog.String("reason", "new config has no rules and on_no_match is not block; the previous ruleset keeps serving"),
+		)
+		return
+	}
 	engine.Swap(newRules)
 	version.Bump()
 	logger.Info("config reload applied", slog.Int("rules", len(newRules)))
@@ -136,6 +149,15 @@ func applyReload(engine *Engine, ev config.Event, logger *slog.Logger, baseline 
 	if baseline != nil {
 		warnDriftedFields(ev.New, *baseline, logger)
 	}
+}
+
+// denyAllAtBoot reports whether the policy in force refuses every unmatched
+// request. Only the reloader needs it: an empty ruleset is a deny-all policy
+// under on_no_match: block and a silent open relay under passthrough, so the
+// empty-ruleset guard has to know which one the server started with. A nil
+// baseline means nothing is known, which is treated as fail-open.
+func denyAllAtBoot(baseline *Baseline) bool {
+	return baseline != nil && baseline.Proxy.OnNoMatch == config.OnNoMatchBlock
 }
 
 // warnDriftedFields surfaces edits to proxy/token fields that the engine
