@@ -44,7 +44,7 @@ RUN groupadd --gid "${USER_GID}" "${USERNAME}" \
 
 # Install mise globally (system-wide binary, per-user activation).
 # Pinned via the official install script + checksum.
-ENV MISE_VERSION=v2025.1.0
+ENV MISE_VERSION=v2026.9.18
 RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh \
     && mise --version
 

@@ -12,7 +12,10 @@ goreleaser     = "2.18"
 # the C cross-compiler for the CGO build matrix — the credential SDK
 # (internal/credstore/onepassword) forces CGO_ENABLED=1, so a stock gcc cannot
 # target the non-host arch. See .goreleaser.yaml.
-syft           = "1.54"
+#
+# syft is pinned exactly: the aqua-backed plugin resolves a bare "1.54" to the
+# release tag "1.54", which upstream never publishes.
+syft           = "1.54.0"
 # Exact pin: upstream renamed the release tarballs in 0.14.1
 # (zig-linux-x86_64-<v> -> zig-x86_64-linux-<v>) and mise's core plugin still
 # builds the pre-rename URL, so 0.14.1 and every later release (0.15.x included)
