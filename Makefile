@@ -50,7 +50,7 @@ endif
 
 .PHONY: fmt
 fmt: ## Format Go code with gofumpt.
-	$(RUN) gofumpt -w .
+	$(RUN) gofumpt -extra -w .
 
 .PHONY: lint
 lint: ## Run golangci-lint.

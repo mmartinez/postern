@@ -8,7 +8,7 @@ pre-commit:
     format:
       glob: "*.go"
       run: |
-        out=$(gofumpt -l -d {staged_files})
+        out=$(gofumpt -extra -l -d {staged_files})
         if [ -n "$out" ]; then
           echo "gofumpt would reformat these files:"
           echo "$out"

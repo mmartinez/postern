@@ -134,7 +134,8 @@ func (b darwinTrust) install(location string, certPEM []byte) (string, error) {
 		if rErr := restorePriorAnchor(resolveAnchorPath(location), prior); rErr != nil {
 			return path, errors.Join(
 				fmt.Errorf("register trust anchor: %w", err),
-				rErr)
+				rErr,
+			)
 		}
 		return path, fmt.Errorf("register trust anchor: %w", err)
 	}

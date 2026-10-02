@@ -10,7 +10,7 @@ useDefault = true
 # be reviewed and justified).
 #
 # NOTE: this is the singular [allowlist] table, not the plural [[allowlists]].
-# With [extend].useDefault the pinned gitleaks (8.21.4, matched by CI) silently
+# With [extend].useDefault the pinned gitleaks (8.30.1, matched by CI) silently
 # ignores the plural form, so the entries below must live under [allowlist] to
 # take effect. Within the block, a finding is exempt if it matches any path OR
 # any regex.
@@ -42,4 +42,10 @@ regexes = [
     '''LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE''',
     '''kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg''',
     '''370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb''',
+    # Published OAuth 1.0a reference signature, the expected output of that
+    # same known-answer vector. gitleaks 8.30 percent-decodes before matching,
+    # so the rule sees the decoded form; both spellings are pinned so the entry
+    # holds for either matcher.
+    '''Ls93hJiZbQ3akF3HF3x1Bz8/zU4=''',
+    '''Ls93hJiZbQ3akF3HF3x1Bz8%2FzU4%3D''',
 ]

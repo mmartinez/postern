@@ -62,7 +62,12 @@ formatters:
     - gofumpt
   settings:
     gofumpt:
-      extra-rules: true
+      # `extra-rules: true` is deprecated in golangci-lint v2.14; the explicit
+      # list below is what it enabled (all three gofumpt extras).
+      extra:
+        group-params: true
+        clothe-returns: true
+        balance-calls: true
   exclusions:
     generated: lax
     paths:
