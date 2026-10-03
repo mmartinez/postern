@@ -121,6 +121,7 @@ release-please + goreleaser, driven by Conventional Commits:
 - Pushing `feat`/`fix` commits to `main` keeps a release-please "Release PR" open (version bump + `CHANGELOG.md`).
 - Merging that PR publishes the GitHub release and tag; the same workflow run then builds the CGO matrix and uploads the binaries, checksums, SBOMs, and the keyless cosign bundle, and pushes the signed multi-arch ghcr image (`release.mode: keep-existing`).
 - `feat` bumps the minor, `fix` the patch (pre-1.0). Repository release immutability is **off** — it rejected the asset-upload step; cosign signatures cover artifact integrity.
+- A release whose assets failed to publish is repaired with `gh workflow run release.yml -f tag=<tag>` — never by re-running the failed run, which release-please reports as `release_created=false` and the build jobs skip. The dispatch skips release-please, so it can never mint the next version.
 
 ## Working with secrets
 
