@@ -7,20 +7,41 @@
 
 > **Your AI agents call authenticated APIs without ever holding the credentials.**
 
-Postern is a credential-brokering HTTPS proxy. Agents send requests with no API
-keys (or with harmless placeholders); postern matches the destination host
-against your rules, fetches the real secret from your **1Password or Bitwarden**
-vault at request time, and injects it on the way out. The agent only ever sees
-placeholders.
+Postern is a credential-brokering HTTPS proxy. **One proxy, two credential
+sources: your vault, or your IdP.** Pick per upstream.
 
-**Works with [1Password](https://1password.com/) (Service Accounts) and
-[Bitwarden](https://bitwarden.com/products/secrets-manager/) Secrets Manager** —
-credential providers are [pluggable](docs/providers.md).
+**From a vault — for anything.** The agent sends a request with no API key (or
+with a harmless placeholder). Postern matches the destination host against your
+rules, fetches the real secret from your **1Password or Bitwarden** vault, and
+injects it on the way out. No cooperation required from the target, so this
+works against literally any HTTPS API — it is the onboarding path, and your
+first brokered call is five minutes away.
+
+**From an identity provider — where the target mints its own credentials.**
+Rather than hold a long-lived key, postern exchanges a long-lived client
+credential for a short-lived access token and injects that instead, so the
+credential postern brokers for that upstream expires on its own instead of
+living until someone rotates it.
+
+Both run in the same config at the same time; the `secret_ref` scheme decides
+which one a rule uses. Credential providers are [pluggable](docs/providers.md).
 
 **Why it matters:** an agent that can read a credential is a credential an
 attacker can exfiltrate through prompt injection or a compromised dependency.
 Brokering moves the secret out of the agent's reach entirely — the blast radius
 of a compromised agent no longer includes your API keys.
+
+**What postern does not do.** It does not protect a compromised postern, and it
+does not protect a host an attacker already has a shell on. Run postern as a
+separate trust principal from the agent and from your vault tokens — see
+[docs/security.md](docs/security.md).
+
+Postern's architecture lines up with the *expired* CB4A Internet-Draft
+(`draft-hartman-credential-broker-4-agents-00`, expired 2026-09-30, no
+successor revision). It is useful vocabulary, not a standard, and postern makes
+no conformance claim to it;
+[docs/cb4a.md](docs/cb4a.md) records exactly where postern matches it and where
+it does not, deviations included.
 
 ## See it
 
@@ -50,10 +71,11 @@ resolves the matched rule's secret reference from a credential provider, injects
 the credential, and forwards the request. The full request lifecycle and trust
 boundary are in [docs/architecture.md](docs/architecture.md).
 
-The matched rule's secret reference (`op://…`, `bw://…`, optionally
-credstore-qualified as `op+name://…` when several accounts of one vendor are
-configured) resolves from the configured provider; adding a new provider is a
-single package plus one import. See [docs/providers.md](docs/providers.md).
+The matched rule's secret reference (`op://…` or `bw://…` for a vault,
+`oauth2://…` for a minted token, optionally credstore-qualified as
+`op+name://…` when several accounts of one vendor are configured) resolves from
+the configured provider; adding a new provider is a single package plus one
+import. See [docs/providers.md](docs/providers.md).
 
 > **Status:** early development. The proxy works end-to-end, and the release
 > pipeline (checksum-verified binaries, SBOMs, and a signed multi-arch container
@@ -226,7 +248,8 @@ the process.
 - [Architecture](docs/architecture.md) — request lifecycle, trust boundary, components.
 - [Security model](docs/security.md) — fail-closed semantics, logging, threat model, key handling.
 - [Configuration](docs/configuration.md) — the full YAML reference.
-- [Providers](docs/providers.md) — the credential-vendor plugin contract (1Password, Bitwarden).
+- [Providers](docs/providers.md) — the credential-vendor plugin contract (1Password, Bitwarden) and the OAuth2 short-lived-token provider.
+- [CB4A alignment](docs/cb4a.md) — how postern relates to the CB4A Internet-Draft, deviations included.
 
 ## Developing postern
 
