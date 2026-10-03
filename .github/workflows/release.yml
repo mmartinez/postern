@@ -220,7 +220,11 @@ jobs:
           # --skip=docker on a repair of a superseded release: goreleaser would
           # otherwise push that older build as ghcr.io/.../latest and walk
           # consumers backwards. Resolved in the resolve step above.
-          args: release --clean ${{ needs.release-please.outputs.skip_docker && '--skip=docker' || '' }}
+          #
+          # The `== 'true'` is load-bearing: a job output is a string, and every
+          # non-empty string is truthy in an Actions expression, so testing the
+          # output directly made "false" select --skip=docker.
+          args: release --clean ${{ needs.release-please.outputs.skip_docker == 'true' && '--skip=docker' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: download darwin artifacts
