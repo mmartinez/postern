@@ -110,6 +110,17 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 			return failClosed(req)
 		}
 
+		// Compression negotiation is dropped for brokered requests. The
+		// response scrubber matches the credential as bytes, and a gzipped
+		// body hides those bytes inside a deflate stream — so an upstream
+		// that compressed a reflected credential would slip straight past it
+		// and the agent would recover it on decompression. Deleting the
+		// header does not turn compression off: net/http's Transport adds
+		// its own Accept-Encoding: gzip when absent and transparently
+		// decompresses the reply, so upstream still gets a compressed
+		// response and the scrubber still sees plaintext.
+		req.Header.Del("Accept-Encoding")
+
 		// Body buffering happens before resolve so an oversized body is
 		// rejected (413) without spending a credential fetch. Only rules that
 		// rewrite the body buffer it; everything else streams untouched. A body

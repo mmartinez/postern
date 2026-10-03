@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/mmartinez/postern/internal/broker"
@@ -24,6 +25,46 @@ const scrubChunkSize = 32 << 10
 // scrubEnabled reports the effective response-scrub setting: on unless the
 // operator explicitly pointed it at false.
 func scrubEnabled(cfg *bool) bool { return cfg == nil || *cfg }
+
+// staleBodyMetadata lists the response headers that describe the body as it
+// arrived upstream. Once redaction has rewritten that body they all describe
+// something the agent will never receive.
+var staleBodyMetadata = []string{
+	"Content-Length",
+	"Content-Range",
+	"ETag",
+	"Digest",
+	"Content-MD5",
+}
+
+// credentialNeedles builds the byte patterns that must never reach the agent.
+//
+// Injection does not always put the credential on the wire verbatim: a path or
+// query substitution percent-escapes it, so an upstream that echoes the
+// request reflects the ESCAPED form. Matching only the raw value would leave
+// that copy in the response. The escaped forms are what
+// broker's substitutePath and substituteQuery can emit, so they are the forms
+// worth carrying.
+func credentialNeedles(creds []string) [][]byte {
+	needles := make([][]byte, 0, len(creds)*3)
+	seen := make(map[string]struct{}, len(creds)*3)
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		if _, dup := seen[s]; dup {
+			return
+		}
+		seen[s] = struct{}{}
+		needles = append(needles, []byte(s))
+	}
+	for _, c := range creds {
+		add(c)
+		add(url.QueryEscape(c))
+		add(url.PathEscape(c))
+	}
+	return needles
+}
 
 // scrubResponse strips the credential the broker injected on this request out
 // of the upstream response, so an upstream that reflects the credential back —
@@ -46,20 +87,38 @@ func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 		return resp
 	}
 
-	scrubHeaderValues(resp.Header, creds)
-	scrubHeaderValues(resp.Trailer, creds)
+	// One needle set for headers and body: a credential echoed in a header is
+	// as exposed as one echoed in the body, and it arrives in the same escaped
+	// forms.
+	needles := credentialNeedles(creds)
+	scrubHeaderValues(resp.Header, needles)
+	scrubHeaderValues(resp.Trailer, needles)
 
 	if bodyIsScrubbable(resp) {
-		needles := make([][]byte, 0, len(creds))
-		for _, c := range creds {
-			needles = append(needles, []byte(c))
-		}
 		resp.Body = newScrubber(resp.Body, needles)
-		// The scrubbed body is a different length than the one upstream
-		// framed, so the length has to be dropped and recomputed by the
-		// chunked writer.
+		// Redaction changes the body's length and content, so every piece of
+		// metadata describing the pre-redaction body is now a lie: the agent
+		// would be told the delivered body is a length it is not, or verify a
+		// digest over bytes it did not receive. Drop them all rather than let
+		// a client assemble ranges or check integrity against a body that no
+		// longer exists.
 		resp.ContentLength = -1
-		resp.Header.Del("Content-Length")
+		for _, h := range staleBodyMetadata {
+			resp.Header.Del(h)
+		}
+	}
+
+	// The broker hook drops Accept-Encoding on brokered requests so this
+	// transport negotiates (and transparently decodes) compression itself,
+	// leaving the scrubber plaintext. An upstream that ignored that and
+	// encoded anyway has put the credential inside a deflate stream no byte
+	// matcher can reach; say so loudly rather than let the scrubber look
+	// like it did its job.
+	if ce := resp.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
+		logger.Warn("upstream response is encoded; the credential scrubber cannot inspect it",
+			slog.String("host", hostOf(resp.Request)),
+			slog.String("content_encoding", ce),
+		)
 	}
 
 	logger.Debug("proxy scrubbed upstream response",
@@ -100,10 +159,10 @@ func bodyIsScrubbable(resp *http.Response) bool {
 // place) keeps a reflected credential from surviving in any encoding of its
 // neighbours, and a header that carried the credential is not trustworthy
 // anyway.
-func scrubHeaderValues(h http.Header, creds []string) {
+func scrubHeaderValues(h http.Header, needles [][]byte) {
 	for name, values := range h {
 		for _, v := range values {
-			if containsAny(v, creds) {
+			if containsAnyNeedle(v, needles) {
 				h.Del(name)
 				break
 			}
@@ -111,10 +170,12 @@ func scrubHeaderValues(h http.Header, creds []string) {
 	}
 }
 
-// containsAny reports whether v holds any credential as a substring.
-func containsAny(v string, creds []string) bool {
-	for _, c := range creds {
-		if strings.Contains(v, c) {
+// containsAnyNeedle reports whether v holds any needle as a substring. It
+// matches the escaped forms as well as the raw credential, because a header
+// echoing a percent-encoded path or query carries the escaped form.
+func containsAnyNeedle(v string, needles [][]byte) bool {
+	for _, n := range needles {
+		if bytes.Contains([]byte(v), n) {
 			return true
 		}
 	}
@@ -188,19 +249,22 @@ func (s *scrubber) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// fillOnce performs one upstream read and scrubs what it can, retaining only
-// the trailing bytes that could still start an occurrence.
 func (s *scrubber) fillOnce() {
 	n, err := s.src.Read(s.buf)
 	if n > 0 {
 		s.fill = append(s.fill, s.buf[:n]...)
-		s.scrubFill(false)
 	}
 	if err != nil {
 		// The stream is over: the retained tail can no longer grow into an
-		// occurrence, so it is decided now rather than dropped.
+		// occurrence, so it is decided now rather than dropped. Decided once,
+		// on one pass — a second pass would reset the ready buffer and discard
+		// whatever the data-bearing read already moved into it.
 		s.scrubFill(true)
 		s.err = err
+		return
+	}
+	if n > 0 {
+		s.scrubFill(false)
 	}
 }
 
@@ -217,6 +281,9 @@ func (s *scrubber) scrubFill(final bool) {
 	hold := 0
 	if !final {
 		hold = partialSuffixLen(s.fill, s.needles)
+		if hold > 0 {
+			hold = s.holdBackSplit(hold)
+		}
 	}
 	// Read only calls fillOnce when ready is drained, so it is always empty
 	// here and the scrubbed bytes land in its existing capacity.
@@ -224,6 +291,45 @@ func (s *scrubber) scrubFill(final bool) {
 	// Move the retained bytes to the front so the buffer does not grow without
 	// bound over a long-lived stream.
 	s.fill = append(s.fill[:0], s.fill[len(s.fill)-hold:]...)
+}
+
+// holdBackSplit widens the withhold so that no occurrence straddles the
+// emitted/retained boundary.
+//
+// partialSuffixLen answers "can the tail still become an occurrence?", which is
+// necessary but not sufficient. With a self-overlapping needle the retained
+// tail can be the second half of an occurrence whose first half was already
+// emitted: needle "abab" over body "abab" withholds "ab", emits "ab" (no match
+// is visible yet), and then emits the retained "ab" at EOF. The agent
+// reassembles the credential from two halves that each looked innocent.
+//
+// So walk the boundary backwards while the bytes immediately before it are
+// themselves the start of a partial occurrence. When hold is zero there is no
+// pending prefix and none of this can apply, so the common case costs nothing.
+func (s *scrubber) holdBackSplit(hold int) int {
+	boundary := len(s.fill) - hold
+	for boundary > 0 && endsWithNeedlePrefix(s.fill[:boundary], s.needles) {
+		boundary--
+	}
+	return len(s.fill) - boundary
+}
+
+// endsWithNeedlePrefix reports whether some suffix of prefix is a proper
+// prefix of some needle — that is, whether an occurrence could start before
+// the end of prefix and continue past it.
+func endsWithNeedlePrefix(prefix []byte, needles [][]byte) bool {
+	for _, n := range needles {
+		limit := len(n) - 1
+		if limit > len(prefix) {
+			limit = len(prefix)
+		}
+		for k := limit; k > 0; k-- {
+			if bytes.Equal(prefix[len(prefix)-k:], n[:k]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // replaceAll appends src to dst with every occurrence of a needle replaced by
