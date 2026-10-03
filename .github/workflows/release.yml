@@ -77,23 +77,23 @@ jobs:
           tag="$RELEASE_TAG"
           if [ -n "$DISPATCH_TAG" ]; then
             tag="$DISPATCH_TAG"
-          elif [ "$RELEASE_CREATED" != "true" ]; then
-            tag=""
-          fi
-          # Dispatch only: a typo'd tag would otherwise fail at the publish
-          # step, after both runners have burned minutes on the build matrix.
-          # The release path trusts release-please and is left unvalidated —
-          # ls-remote against a tag it just created is a needless flake risk.
-          if [ -n "$DISPATCH_TAG" ]; then
+            # A typo'd tag would otherwise fail at the publish step, after both
+            # runners have burned minutes on the build matrix. Only the dispatch
+            # path is validated: the release path trusts release-please, and
+            # ls-remote against a tag it just created is a needless flake risk.
             if ! git ls-remote --exit-code --tags \
               "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag" >/dev/null; then
               echo "::error::tag $tag does not exist"
               exit 1
             fi
-            if ! gh release view "$tag" >/dev/null 2>&1; then
+            # --repo: this job checks nothing out, so gh has no git remote to
+            # infer the repository from.
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               echo "::error::no GitHub release for $tag; assets have nowhere to land"
               exit 1
             fi
+          elif [ "$RELEASE_CREATED" != "true" ]; then
+            tag=""
           fi
           echo "publish=$([ -n "$tag" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
