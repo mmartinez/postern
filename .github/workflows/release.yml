@@ -140,6 +140,15 @@ jobs:
           # Build the exact tagged commit, not the branch head.
           ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
+      - name: take the release config from main
+        # Build inputs come from the tag; the release config does not. A repair
+        # exists to apply tooling fixes made after the tag — run with the tag's
+        # own .goreleaser.yaml, a fix to the release config silently does not
+        # apply. On a normal release main and the tag are the same commit, so
+        # this restores the identical file.
+        run: |
+          git fetch --no-tags origin main
+          git checkout FETCH_HEAD -- .goreleaser.yaml
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -185,6 +194,12 @@ jobs:
           # Build the exact tagged commit, not the branch head.
           ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
+      - name: take the release config from main
+        # See the note in the darwin job: the tag supplies the build inputs,
+        # main supplies the tooling that publishes them.
+        run: |
+          git fetch --no-tags origin main
+          git checkout FETCH_HEAD -- .goreleaser.yaml
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
