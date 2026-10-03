@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/mmartinez/postern/compare/v0.9.0...v0.9.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **broker:** refuse a hot reload that empties the ruleset ([#98](https://github.com/mmartinez/postern/issues/98)) ([9eeb6fe](https://github.com/mmartinez/postern/commit/9eeb6fe4c87ca5517a134d64c4385add0403db8c))
+
 ## [0.9.0](https://github.com/mmartinez/postern/compare/v0.8.0...v0.9.0) (2026-08-23)
 
 
