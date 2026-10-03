@@ -20,10 +20,22 @@ name: release
 #
 # release-please owns the release body (CHANGELOG)
 # (release.mode: keep-existing in .goreleaser.yaml).
+#
+# workflow_dispatch re-runs the build jobs against a tag that already has a
+# release, to repair a release whose assets never landed. Re-running the failed
+# run is not a repair: release-please reports release_created=false for a tag
+# that already exists, so both build jobs skip. A dispatch skips release-please
+# outright, so repairing one release can never mint the next version.
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to rebuild assets for, e.g. v0.9.1"
+        required: true
+        type: string
 
 permissions:
   contents: write # release-please: open/update the Release PR and create the release/tag; goreleaser: upload assets
@@ -43,25 +55,58 @@ jobs:
     name: release-please
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.rp.outputs.release_created }}
-      tag_name: ${{ steps.rp.outputs.tag_name }}
+      publish: ${{ steps.resolve.outputs.publish == 'true' }}
+      tag_name: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: rp
+        # config-file and manifest-file default to release-please-config.json
+        # and .release-please-manifest.json at the repo root.
+        if: ${{ inputs.tag == '' }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # config-file and manifest-file default to release-please-config.json
-          # and .release-please-manifest.json at the repo root.
+      - name: resolve tag to build
+        id: resolve
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          RELEASE_CREATED: ${{ steps.rp.outputs.release_created }}
+          RELEASE_TAG: ${{ steps.rp.outputs.tag_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          if [ -n "$DISPATCH_TAG" ]; then
+            tag="$DISPATCH_TAG"
+          elif [ "$RELEASE_CREATED" != "true" ]; then
+            tag=""
+          fi
+          # Dispatch only: a typo'd tag would otherwise fail at the publish
+          # step, after both runners have burned minutes on the build matrix.
+          # The release path trusts release-please and is left unvalidated —
+          # ls-remote against a tag it just created is a needless flake risk.
+          if [ -n "$DISPATCH_TAG" ]; then
+            if ! git ls-remote --exit-code --tags \
+              "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag" >/dev/null; then
+              echo "::error::tag $tag does not exist"
+              exit 1
+            fi
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              echo "::error::no GitHub release for $tag; assets have nowhere to land"
+              exit 1
+            fi
+          fi
+          echo "publish=$([ -n "$tag" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   goreleaser-darwin:
     name: goreleaser (darwin)
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ needs.release-please.outputs.publish == 'true' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          # Build the exact commit release-please tagged, not the branch head.
+          # Build the exact tagged commit, not the branch head.
           ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
       - uses: actions/setup-go@v7
@@ -96,12 +141,12 @@ jobs:
   goreleaser:
     name: goreleaser (linux + publish)
     needs: [release-please, goreleaser-darwin]
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ needs.release-please.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          # Build the exact commit release-please tagged, not the branch head.
+          # Build the exact tagged commit, not the branch head.
           ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
       - uses: actions/setup-go@v7
@@ -119,8 +164,11 @@ jobs:
           echo "/opt/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: install syft (SBOM generation)
         uses: anchore/sbom-action/download-syft@v0
+      # Exact pin: upstream ships v4.x.y tags but no floating `v4` major tag, so
+      # `@v4` fails to resolve and takes the publish job down before goreleaser
+      # ever runs. Dependabot bumps this.
       - name: install cosign (keyless signing)
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.2
       - name: log in to ghcr.io
         uses: docker/login-action@v4
         with:
