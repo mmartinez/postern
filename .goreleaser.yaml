@@ -123,6 +123,12 @@ checksum:
 # release rejects asset uploads with HTTP 422. See .github/workflows/release.yml.
 release:
   mode: keep-existing
+  # Defaults to false, and a 422 on an existing asset name is then fatal
+  # (internal/client/github.go), so a repair dispatched onto a release that
+  # already holds some assets — a half-finished run, or a second dispatch —
+  # would die before it finished. Delete-and-retry only happens on that
+  # collision, so a clean release is unaffected.
+  replace_existing_artifacts: true
 
 snapshot:
   # `-` not `+`: this version becomes a docker image tag, and tags reject `+`.

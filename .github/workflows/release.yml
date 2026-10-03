@@ -37,11 +37,15 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write # release-please: open/update the Release PR and create the release/tag; goreleaser: upload assets
-  pull-requests: write # release-please: manage the Release PR
-  packages: write # goreleaser: push the image to ghcr.io
-  id-token: write # goreleaser: keyless cosign signing via GitHub OIDC
+permissions: {} # every job below declares the scopes it actually uses
+
+concurrency:
+  # One repair at a time per tag: two dispatches racing on the same release
+  # interleave their asset uploads. A push to main gets its own group, so a
+  # repair never blocks the next release (nor the reverse). Queued, never
+  # cancelled — cancelling a repair mid-push is the failure this exists to fix.
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   GO_VERSION: "1.27.1"
@@ -54,8 +58,13 @@ jobs:
   release-please:
     name: release-please
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release + tag
+      pull-requests: write # manage the Release PR
     outputs:
       publish: ${{ steps.resolve.outputs.publish == 'true' }}
+      skip_docker: ${{ steps.resolve.outputs.skip_docker == 'true' }}
       tag_name: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: googleapis/release-please-action@v5
@@ -74,28 +83,46 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          skip_docker=false
           tag="$RELEASE_TAG"
           if [ -n "$DISPATCH_TAG" ]; then
+            # Shape-check before anything else: the tag is written verbatim to
+            # $GITHUB_OUTPUT and handed to checkout as a ref, so a value with a
+            # newline in it could inject a second output line.
+            if ! printf '%s' "$DISPATCH_TAG" \
+              | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+              echo "::error::'$DISPATCH_TAG' is not a vMAJOR.MINOR.PATCH tag"
+              exit 1
+            fi
             tag="$DISPATCH_TAG"
             # A typo'd tag would otherwise fail at the publish step, after both
             # runners have burned minutes on the build matrix. Only the dispatch
-            # path is validated: the release path trusts release-please, and
-            # ls-remote against a tag it just created is a needless flake risk.
-            if ! git ls-remote --exit-code --tags \
-              "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag" >/dev/null; then
+            # path is validated: the release path trusts release-please, and a
+            # check against a tag it just created is a needless flake risk.
+            if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
               echo "::error::tag $tag does not exist"
               exit 1
             fi
-            # --repo: this job checks nothing out, so gh has no git remote to
-            # infer the repository from.
-            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if ! gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >/dev/null 2>&1; then
               echo "::error::no GitHub release for $tag; assets have nowhere to land"
               exit 1
+            fi
+            # docker_manifests has no `skip` key (goreleaser v2.18), so the only
+            # lever on `latest` is dropping the docker pipe for this run. Only a
+            # superseded tag needs it: repairing the newest release must publish
+            # its image, and the release path stays exempt so a hand-made newer
+            # tag cannot silently suppress the image on a normal release.
+            newest=$(gh api --paginate "repos/$GITHUB_REPOSITORY/tags" --jq '.[].name' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            if [ "$tag" != "$newest" ]; then
+              skip_docker=true
+              echo "::warning::$tag is superseded by $newest; skipping the docker pipe so :latest does not regress"
             fi
           elif [ "$RELEASE_CREATED" != "true" ]; then
             tag=""
           fi
           echo "publish=$([ -n "$tag" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "skip_docker=$skip_docker" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   goreleaser-darwin:
@@ -103,6 +130,10 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.publish == 'true' }}
     runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read # checkout only; --skip=publish,docker, and the archives
+      # travel to the publish job as a run artifact (runtime token, not GITHUB_TOKEN)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -143,6 +174,11 @@ jobs:
     needs: [release-please, goreleaser-darwin]
     if: ${{ needs.release-please.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # upload release assets, and sign+upload the merged checksums
+      packages: write # push the image to ghcr.io
+      id-token: write # keyless cosign signing via GitHub OIDC
     steps:
       - uses: actions/checkout@v7
         with:
@@ -181,7 +217,10 @@ jobs:
         with:
           distribution: goreleaser
           version: ${{ env.GORELEASER_VERSION }}
-          args: release --clean
+          # --skip=docker on a repair of a superseded release: goreleaser would
+          # otherwise push that older build as ghcr.io/.../latest and walk
+          # consumers backwards. Resolved in the resolve step above.
+          args: release --clean ${{ needs.release-please.outputs.skip_docker && '--skip=docker' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: download darwin artifacts
