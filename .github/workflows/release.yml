@@ -165,7 +165,11 @@ jobs:
           # darwin targets only. No publish/docker here: this job produces the
           # darwin archives, SBOMs and checksum slice for the ubuntu job to
           # merge into the release.
-          args: release --clean --skip=publish,docker
+          # --skip=validate: the step above overlays main's .goreleaser.yaml onto
+          # the tagged tree, and goreleaser's validate pipe refuses to run on a
+          # dirty tree. On a normal release the overlay is a no-op and the tree
+          # is clean, so nothing is skipped that was not already skipped.
+          args: release --clean --skip=publish,docker --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: upload darwin artifacts
@@ -239,7 +243,9 @@ jobs:
           # The `== 'true'` is load-bearing: a job output is a string, and every
           # non-empty string is truthy in an Actions expression, so testing the
           # output directly made "false" select --skip=docker.
-          args: release --clean ${{ needs.release-please.outputs.skip_docker == 'true' && '--skip=docker' || '' }}
+          # --skip=validate: see the darwin job — the release config is overlaid
+          # from main, which the validate pipe refuses to run against.
+          args: release --clean ${{ needs.release-please.outputs.skip_docker == 'true' && '--skip=docker' || '' }} --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: download darwin artifacts
