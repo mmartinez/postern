@@ -14,8 +14,10 @@ sources: your vault, or your IdP.** Pick per upstream.
 with a harmless placeholder). Postern matches the destination host against your
 rules, fetches the real secret from your **1Password or Bitwarden** vault, and
 injects it on the way out. No cooperation required from the target, so this
-works against literally any HTTPS API — it is the onboarding path, and your
-first brokered call is five minutes away.
+works against any HTTPS API that speaks HTTP/1.1 — it is the onboarding path,
+and your first brokered call is five minutes away. (Brokered connections
+negotiate HTTP/1.1, so an HTTP/2-only client — gRPC among them — cannot use a
+brokered host.)
 
 **From an identity provider — where the target mints its own credentials.**
 Rather than hold a long-lived key, postern exchanges a long-lived client

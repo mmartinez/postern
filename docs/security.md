@@ -163,12 +163,11 @@ draft asks for, and both are already conceded here:
   broker bypass to be prevented at the network layer; postern's `block` policy
   only governs traffic that reaches the proxy.
 
-Three further gaps the draft names are not mitigated at all: postern uses no
-DPoP sender-constrained tokens on the IdP path, it has no anomaly detection or
-behavioral baseline, and it does not filter upstream responses — the last being
-the reason an upstream that reflects the injected credential can hand it to the
-agent. [cb4a.md](cb4a.md) carries the full statement-by-statement and
-threat-by-threat comparison with source pointers.
+Two further gaps the draft names are not mitigated at all: postern uses no DPoP
+sender-constrained tokens on the IdP path, and it has no anomaly detection or
+behavioral baseline. Response filtering, by contrast, is implemented — see
+[Fail-closed](#fail-closed). [cb4a.md](cb4a.md) carries the full
+statement-by-statement and threat-by-threat comparison with source pointers.
 
 ## Key and token handling
 

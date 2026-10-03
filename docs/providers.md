@@ -298,10 +298,12 @@ are handled by `golang.org/x/oauth2`.
 
 ### What it actually buys, and what it does not
 
-- **The injected credential expires on the IdP's schedule.** It is minted per
-  resolution and dies at the IdP's `expires_in`, so a value lifted from a
-  running proxy has minutes of useful life rather than years. That is a real
-  reduction in how long a leaked credential is worth anything.
+- **The injected credential expires on the IdP's schedule.** It is minted on
+  demand and refreshed as it nears expiry — not once per resolution; a valid
+  token is reused rather than re-exchanged — and dies at the IdP's
+  `expires_in`. So a value lifted from a running proxy has minutes of useful
+  life rather than years. That is a real reduction in how long a leaked
+  credential is worth anything.
 - **Revocation is the IdP's job, not a cache TTL.** Withdraw the grant at the
   IdP and the next mint fails, and the request fails closed.
 - **It reaches every mintable upstream, not just the ones with a vault

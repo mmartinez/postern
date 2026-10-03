@@ -108,10 +108,12 @@ by the IETF … no formal standing in the IETF standards process".** It is
 vocabulary, not a standard, and postern claims nothing against it.
 
 Postern is **Model A (Proxy Gateway)** — *"the agent never receives, sees, or
-holds the real credential"* — with two named gaps against that model's own
-description: it does not authenticate the agent, and it does not filter
-*responses* (backlog #33), which is the third of Model A's stated strengths
-(*"inspect, log, and filter every request **and response** in real time"*).
+holds the real credential"* — with one named gap against that model's own
+description: it does not authenticate the agent. It now also filters
+*responses*, the third of Model A's stated strengths (*"inspect, log, and
+filter every request **and response** in real time"*): the credential injected
+on a request is stripped back out of the reply before the agent sees it
+(`proxy.scrub_responses`, on by default; backlog #33, shipped).
 Postern's weaknesses on this axis are Model A's weaknesses: two network hops,
 single point of failure, throughput — none of which it can currently observe,
 because it emits no latency or throughput numbers at all (backlog #1).
@@ -123,7 +125,7 @@ because it emits no latency or throughput numbers at all (backlog #1).
 > agent** for a **direct** call to the target. Postern's `oauth2` provider mints
 > a token and then **injects it into a request travelling through postern** like
 > any other credential — every consumer of `broker.Resolver` is inside the MITM
-> hook (`internal/broker/hook.go:161`, `:224`) and the only agent-facing surface
+> hook (`internal/broker/hook.go:161`, `:228`) and the only agent-facing surface
 > is `GET /healthz` (`internal/runtime/admin.go:75-77`). It is Model A's
 > delivery with a shorter-lived credential, not Model B. It is also not
 > generic: `grant_type` accepts only `client_credentials` and `refresh_token`
@@ -221,7 +223,13 @@ When a placeholder rule declares `body` as its only surface and the request
 carries a `Content-Encoding` other than `identity` (or a `multipart/*`
 content type), postern resolves the real credential from the vault, injects
 it nowhere, and forwards the request to the brokered upstream **unauthenticated**
-— with the placeholder token still in the body. No 502, no log at `info`.
+— with the placeholder token still in the body. No 502 is returned, and the
+request is logged at `info` as **`broker injected`**
+(`internal/broker/hook.go:270`), because the hook reaches that line whenever
+`Inject` returns nil. That log line is a false audit record: an operator
+reading the trail sees a successful injection for a call that carried no
+credential at all. It is the worst part of this failure, because it removes the
+one signal an operator would otherwise have to notice it.
 
 This is not an edge case the agent stumbles into. The agent chooses its own
 request headers, and the threat model is precisely a prompt-injected or
@@ -288,7 +296,7 @@ Two limits, so this proposal is not over-read:
   log line is absent on this path and present on a successful injection.
 - [ ] A request whose rule matched but whose declared surfaces are all
   ineligible (body-only rule + compressed/multipart body) returns the uniform
-  fail-closed `502` (`failClosedBody`, internal/broker/hook.go:268), and the
+  fail-closed `502` (`failClosedBody`, internal/broker/hook.go:284), and the
   resolver is provably never called — the check happens **before** resolve,
   matching the existing scope (hook.go:87) and https-only (hook.go:108) stages,
   which both fail closed without touching the vault.
