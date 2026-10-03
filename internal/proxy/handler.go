@@ -209,6 +209,22 @@ func installHandlers(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 	})
 }
 
+// installResponseScrubber wires the response-path credential filter onto gp.
+// It runs before the logging handler so the log line describes the response
+// the agent actually receives.
+//
+// When the scrub is disabled, nothing is installed at all, so the opt-out
+// costs the response path no work at all rather than running a filter that
+// then declines to filter.
+func installResponseScrubber(gp *goproxy.ProxyHttpServer, logger *slog.Logger, enabled bool) {
+	if !enabled || logger == nil {
+		return
+	}
+	gp.OnResponse().DoFunc(func(resp *http.Response, _ *goproxy.ProxyCtx) *http.Response {
+		return scrubResponse(resp, logger)
+	})
+}
+
 // redactHeaders returns a header map suitable for logging: sensitive entries
 // are replaced with redactionValue and a list of non-sensitive headers is
 // preserved verbatim. The original headers are never mutated.

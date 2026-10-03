@@ -174,6 +174,26 @@ type Proxy struct {
 	// behavior identical. The validator rejects any non-loopback address
 	// with a line-numbered error before the server starts.
 	AdminListen string `yaml:"admin_listen,omitempty"`
+
+	// ScrubResponses controls whether postern removes the credential it
+	// injected from the upstream response before that response reaches the
+	// agent. It defaults to enabled: an upstream that reflects the credential
+	// back would otherwise hand it straight to the agent, which is the one
+	// path left around the broker. Set it to false only for an upstream whose
+	// response provably cannot carry the credential.
+	//
+	// The scrub is streaming, so this does not cost SSE or chunked responses
+	// their incremental delivery. Bound at startup; a hot-reload edit warns
+	// and does not take effect.
+	ScrubResponses *bool `yaml:"scrub_responses,omitempty"`
+}
+
+// ScrubResponsesEnabled reports whether the response-path credential scrub is
+// in force, defaulting to true when the operator did not state one. Consumers
+// call this rather than dereferencing the pointer, so the default lives in
+// exactly one place.
+func (p Proxy) ScrubResponsesEnabled() bool {
+	return p.ScrubResponses == nil || *p.ScrubResponses
 }
 
 // Default cache settings applied when the corresponding key is absent. The

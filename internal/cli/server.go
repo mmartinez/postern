@@ -104,6 +104,7 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 				BlockNonBrokered:   bundle.blockNonBrokered,
 				AdminListen:        bundle.adminListen,
 				HealthStatus:       bundle.healthStatus(),
+				ScrubResponses:     bundle.scrubResponses,
 			})
 			if err != nil {
 				return fmt.Errorf("init runtime: %w", err)
@@ -163,11 +164,12 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 // captures proxy + token at boot so the reloader can warn when an edit
 // touches a field that needs a restart.
 type brokerBundle struct {
-	hook     func(*http.Request) *http.Response
-	engine   *broker.Engine
-	cfgPath  string
-	listen   string
-	baseline *broker.Baseline
+	hook           func(*http.Request) *http.Response
+	engine         *broker.Engine
+	scrubResponses *bool
+	cfgPath        string
+	listen         string
+	baseline       *broker.Baseline
 
 	// shouldIntercept reports whether a host is brokered, so the proxy MITMs
 	// only those and tunnels the rest. nil (the no-broker bundle) leaves the
@@ -242,14 +244,20 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 			listen = cfg.Proxy.Listen
 			adminListen = cfg.Proxy.AdminListen
 		}
-		return brokerBundle{
+		b := brokerBundle{
 			listen:      listen,
 			adminListen: adminListen,
 			// Brokerless is degraded by definition: no ruleset loaded and no
 			// credential validated. /healthz must say so instead of letting
 			// orchestrators read passthrough as healthy.
 			health: NewHealthTracker(false, nil),
-		}, nil
+		}
+		// cfg is nil when no config file was found at all, so the knob is only
+		// read when there is a config to read it from; nil means scrubbing on.
+		if cfg != nil {
+			b.scrubResponses = cfg.Proxy.ScrubResponses
+		}
+		return b, nil
 	}
 
 	rules, err := broker.FromConfigRules(cfg.Rules)
@@ -316,6 +324,7 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		blockNonBrokered: cfg.Proxy.OnNoMatch == config.OnNoMatchBlock,
 		adminListen:      cfg.Proxy.AdminListen,
 		health:           health,
+		scrubResponses:   cfg.Proxy.ScrubResponses,
 		version:          version,
 	}, nil
 }

@@ -195,6 +195,12 @@ func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.
 			slog.String("reason", "the proxy-wide body cap is bound at startup; restart postern to apply (per-rule inject.max_body_bytes hot-reloads)"),
 		)
 	}
+	if !scrubResponsesEqual(reloaded.Proxy.ScrubResponses, baseline.Proxy.ScrubResponses) {
+		logger.Warn("config edit ignored",
+			slog.String("field", "proxy.scrub_responses"),
+			slog.String("reason", "the response scrub is bound at startup; restart postern to apply"),
+		)
+	}
 	if !credStoresEqual(reloaded.CredStores, baseline.CredStores) {
 		logger.Warn("config edit ignored",
 			slog.String("field", "credstores"),
@@ -207,6 +213,21 @@ func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.
 // equivalent. Cache is a struct of comparable durations, so a nil-aware value
 // comparison suffices.
 func cacheBlockEqual(a, b *config.Cache) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
+	}
+}
+
+// scrubResponsesEqual reports whether two optional scrub_responses settings
+// are equivalent. The field is a *bool so that "absent" (the default, scrub
+// on) and "explicitly false" are distinguishable, which means pointer identity
+// cannot answer this; a nil-aware value comparison can.
+func scrubResponsesEqual(a, b *bool) bool {
 	switch {
 	case a == nil && b == nil:
 		return true

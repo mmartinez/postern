@@ -613,3 +613,77 @@ func TestRunReloader_ReturnsOnContextCancel(t *testing.T) {
 		t.Fatal("RunReloader did not return on context cancel")
 	}
 }
+
+// TestRunReloader_WarnsOnScrubResponsesDrift confirms that turning the
+// response scrub off on disk trips a restart warning. The scrub is bound into
+// the goproxy handler chain at startup, so a live edit would otherwise leave
+// the operator believing the credential is being stripped when it is not —
+// and an operator who turned it OFF must not be left believing it is on.
+func TestRunReloader_WarnsOnScrubResponsesDrift(t *testing.T) {
+	t.Parallel()
+
+	on := true
+	off := false
+
+	for _, tc := range []struct {
+		name             string
+		baseline, reedit *bool
+	}{
+		{name: "explicit on to explicit off", baseline: &on, reedit: &off},
+		{name: "unset default to explicit off", baseline: nil, reedit: &off},
+		{name: "explicit on to unset default", baseline: &on, reedit: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine := broker.NewEngine(nil)
+			logBuf := &syncBuffer{}
+			logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+			baseline := &broker.Baseline{
+				Proxy: config.Proxy{
+					Listen:         "127.0.0.1:1701",
+					CacheTTL:       15 * time.Minute,
+					OnNoMatch:      config.OnNoMatchPassthrough,
+					ScrubResponses: tc.baseline,
+				},
+				CredStores: []config.CredStore{{
+					Name:  config.DefaultCredStoreName,
+					Token: config.Token{Source: config.TokenSourceAuto, EnvVar: "OP_SERVICE_ACCOUNT_TOKEN"},
+				}},
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			events := make(chan config.Event, 1)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				broker.RunReloader(ctx, engine, events, logger, baseline)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				close(events)
+				wg.Wait()
+			})
+
+			events <- config.Event{
+				New: &config.Config{
+					Proxy: config.Proxy{
+						Listen:         "127.0.0.1:1701",
+						CacheTTL:       15 * time.Minute,
+						OnNoMatch:      config.OnNoMatchPassthrough,
+						ScrubResponses: tc.reedit,
+					},
+					CredStores: baseline.CredStores,
+				},
+			}
+
+			require.Eventually(t, func() bool {
+				s := logBuf.String()
+				return strings.Contains(s, "config edit ignored") && strings.Contains(s, "scrub_responses")
+			}, 2*time.Second, 10*time.Millisecond, "expected a Warn about scrub_responses drift; got %s", logBuf.String())
+		})
+	}
+}

@@ -175,3 +175,53 @@ func TestValidatorScopingLints(t *testing.T) {
 		})
 	}
 }
+
+// TestProxy_ScrubResponses pins the response-scrub knob in both directions: the
+// field is optional in YAML and the effective default is ON, so an operator who
+// says nothing about it gets the credential stripped from upstream responses.
+func TestProxy_ScrubResponses(t *testing.T) {
+	t.Parallel()
+
+	off, on := false, true
+	for _, tc := range []struct {
+		name string
+		in   config.Proxy
+		want bool
+	}{
+		{name: "absent defaults to on", in: config.Proxy{}, want: true},
+		{name: "explicit true", in: config.Proxy{ScrubResponses: &on}, want: true},
+		{name: "explicit false", in: config.Proxy{ScrubResponses: &off}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, tc.in.ScrubResponsesEnabled())
+		})
+	}
+}
+
+// TestProxy_ScrubResponses_YAMLBinding confirms the knob round-trips through
+// the strict loader under its documented key, so strict mode does not reject a
+// config that only sets it.
+func TestProxy_ScrubResponses_YAMLBinding(t *testing.T) {
+	t.Parallel()
+
+	const body = `proxy:
+  listen: 127.0.0.1:1701
+  scrub_responses: false
+  cache_ttl: 15m
+token:
+  source: env
+  env_var: OP_SERVICE_ACCOUNT_TOKEN
+rules:
+  - host: api.example.com
+    secret_ref: op://V/I/f
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+`
+	cfg, lints, err := config.LoadAndValidate(strings.NewReader(body))
+	require.NoError(t, err)
+	require.Empty(t, lints)
+	require.False(t, cfg.Proxy.ScrubResponsesEnabled())
+}

@@ -185,6 +185,7 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 				)
 				return failClosed(req)
 			}
+			markInjectedCredentials(req, cred)
 			logger.Info("broker injected",
 				slog.String("host", host),
 				slog.String("rule", rule.Host),
@@ -214,6 +215,9 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 				)
 				return failClosed(req)
 			}
+			// Only the consumer key and the access token reach the wire; the
+			// two secrets are HMAC-SHA1 inputs and never appear in the header.
+			markInjectedCredentials(req, creds.consumerKey, creds.token)
 			logger.Info("broker injected",
 				slog.String("host", host),
 				slog.String("rule", rule.Host),
@@ -250,6 +254,7 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 			)
 			return failClosed(req)
 		}
+		markInjectedCredentials(req, cred)
 
 		logger.Info("broker injected",
 			slog.String("host", host),
