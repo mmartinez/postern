@@ -66,6 +66,18 @@ type Config struct {
 	// It is ignored when ShouldIntercept is nil (every host is intercepted).
 	BlockNonBrokered bool
 
+	// ScrubResponses controls whether the response path removes the credential
+	// the broker injected before the response reaches the agent. Nil (the
+	// default) enables the scrub; a pointer to false disables it. The pointer
+	// shape is what lets "unset" and "explicitly off" differ, which a plain
+	// bool cannot express while still defaulting to on.
+	//
+	// Disabling it re-opens the one remaining escape route around the broker:
+	// an upstream that reflects the injected credential back would hand it to
+	// the agent. Only set it for an upstream whose response provably cannot
+	// carry the credential.
+	ScrubResponses *bool
+
 	// TestDialTimeout overrides the outbound dialer's 10s connect timeout
 	// for tests that cannot wait out the production default. Zero keeps
 	// the default. Test-only: production wiring never sets it and it is
@@ -157,6 +169,12 @@ func New(cfg Config) (*Proxy, error) {
 	// or non-brokered inner request is rejected before anything
 	// dereferences req.URL.
 	installInnerGuard(gp, cfg.Logger)
+	// Registered before the logging handler so the "proxy response" line
+	// describes what the agent actually receives, not what upstream sent.
+	// This is the response-path half of the broker's containment: the request
+	// hook records the credential it injected, and this filter removes that
+	// credential from anything the upstream sends back.
+	installResponseScrubber(gp, cfg.Logger, scrubEnabled(cfg.ScrubResponses))
 	installHandlers(gp, cfg.Logger)
 	installPreUpstream(gp, cfg.Logger, cfg.PreUpstreamHandler)
 	installConnectionErrHandler(gp, cfg.Logger)

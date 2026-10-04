@@ -36,7 +36,7 @@ func (f *fakeResolver) Resolve(_ context.Context, vaultID, ref string) (string, 
 func newHookFixture(t *testing.T, rule broker.Rule, res broker.Resolver) func(*http.Request) *http.Response {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, logger) //nolint:bodyclose // hook is a closure; bodyclose can't trace ownership across return
+	return broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, true, logger) //nolint:bodyclose // hook is a closure; bodyclose can't trace ownership across return
 }
 
 // closeIfNonNil drains and closes the hook's response body so tests can
@@ -83,7 +83,7 @@ func TestHook_NoMatchBlocksWhenOnNoMatchBlock(t *testing.T) {
 		Host:      "api.anthropic.com",
 		SecretRef: "op://V/I/f",
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
-	}}), res, config.OnNoMatchBlock, 0, nil)
+	}}), res, config.OnNoMatchBlock, 0, true, nil)
 
 	req, _ := http.NewRequest(http.MethodGet, "https://api.openai.com/v1/models", http.NoBody)
 	resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
@@ -237,7 +237,7 @@ func TestHook_DoubleDotHostNeverBrokers(t *testing.T) {
 	t.Run("passthrough forwards untouched with zero injection", func(t *testing.T) {
 		t.Parallel()
 		res := &fakeResolver{value: "sk-secret"}
-		hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, nil)
+		hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, true, nil)
 
 		req := newReq()
 		resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
@@ -256,7 +256,7 @@ func TestHook_DoubleDotHostNeverBrokers(t *testing.T) {
 	t.Run("block denies at the hook", func(t *testing.T) {
 		t.Parallel()
 		res := &fakeResolver{value: "sk-secret"}
-		hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchBlock, 0, nil)
+		hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchBlock, 0, true, nil)
 
 		resp := hook(newReq()) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch
 		defer closeIfNonNil(t, resp)
@@ -315,7 +315,7 @@ func TestHook_NilLoggerDefaultsToNoop(t *testing.T) {
 		Host:      "api.example.com",
 		SecretRef: "op://V/I/f",
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
-	}}), res, config.OnNoMatchPassthrough, 0, nil)
+	}}), res, config.OnNoMatchPassthrough, 0, true, nil)
 
 	req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/", http.NoBody)
 	resp := hook(req) //nolint:bodyclose // closeIfNonNil below handles the non-nil branch

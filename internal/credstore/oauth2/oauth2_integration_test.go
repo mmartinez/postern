@@ -45,7 +45,7 @@ func TestIntegration_OAuth2BearerInjectedFromLiveExchange(t *testing.T) {
 			Template: "Bearer {{ CREDENTIAL }}",
 		},
 	}})
-	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, discardLog()) //nolint:bodyclose // returns nil on success
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, true, discardLog()) //nolint:bodyclose // returns nil on success
 
 	req, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
 	require.NoError(t, err)
@@ -81,7 +81,7 @@ func TestIntegration_OAuth2FailsClosedOnTokenEndpointError(t *testing.T) {
 		SecretRef: "oauth2://corp",
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "authorization", Template: "Bearer {{ CREDENTIAL }}"},
 	}})
-	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, discardLog()) //nolint:bodyclose // closure
+	hook := broker.Hook(engine, res, config.OnNoMatchPassthrough, 0, true, discardLog()) //nolint:bodyclose // closure
 
 	req, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
 	require.NoError(t, err)

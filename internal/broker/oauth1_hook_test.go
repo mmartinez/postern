@@ -60,7 +60,7 @@ func TestHook_OAuth1SignsAndSetsAuthorization(t *testing.T) {
 		vals:  map[string]string{"op://v/ck": "ckv", "op://v/cs": "csv", "op://v/tk": "tkv", "op://v/ts": "tsv"},
 		calls: map[string]int{},
 	}
-	hook := broker.Hook(oauth1Engine(), res, config.OnNoMatchPassthrough, 0, discardLog()) //nolint:bodyclose // closure
+	hook := broker.Hook(oauth1Engine(), res, config.OnNoMatchPassthrough, 0, true, discardLog()) //nolint:bodyclose // closure
 
 	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/1.1/statuses/update.json?include_entities=true", strings.NewReader("status=hi"))
 	require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestHook_OAuth1FailsClosedOnRefError(t *testing.T) {
 		calls: map[string]int{},
 		errOn: "op://v/ts",
 	}
-	hook := broker.Hook(oauth1Engine(), res, config.OnNoMatchPassthrough, 0, discardLog()) //nolint:bodyclose // closure
+	hook := broker.Hook(oauth1Engine(), res, config.OnNoMatchPassthrough, 0, true, discardLog()) //nolint:bodyclose // closure
 
 	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/x", nil)
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestHook_OAuth1FailsClosedOnEmptyCredential(t *testing.T) {
 		vals:  map[string]string{"op://v/ck": "ckv", "op://v/cs": "", "op://v/tk": "tkv", "op://v/ts": "tsv"},
 		calls: map[string]int{},
 	}
-	hook := broker.Hook(oauth1Engine(), res, config.OnNoMatchPassthrough, 0, discardLog()) //nolint:bodyclose // closure
+	hook := broker.Hook(oauth1Engine(), res, config.OnNoMatchPassthrough, 0, true, discardLog()) //nolint:bodyclose // closure
 
 	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/x", nil)
 	require.NoError(t, err)

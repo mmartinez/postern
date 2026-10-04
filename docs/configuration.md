@@ -91,6 +91,7 @@ proxy:
     max_stale: 24h            # keep serving a cached value this long if refreshes fail
   on_no_match: passthrough    # passthrough (tunnel, no MITM) | block (reject the CONNECT)
   max_body_bytes: 1048576     # body buffering cap for body substitution (1 MiB)
+  scrub_responses: true       # strip the credential out of upstream responses (default: on)
 ```
 
 | Field | Required | Meaning |
@@ -100,6 +101,7 @@ proxy:
 | `cache_ttl` | yes* | **Legacy alias for `cache.ttl`.** Go duration (`5m`, `30s`). Required unless a `cache:` block supplies `ttl`; omitting both fails validation. Setting both to different values is a config error. |
 | `on_no_match` | no | What to do with a `CONNECT` to a host that matches no rule. `passthrough` (default) tunnels the connection untouched — postern does **not** terminate TLS, so the agent reaches the real upstream with the real certificate and only needs to trust the postern CA for brokered hosts. `block` rejects the `CONNECT` with a `502` and never contacts the upstream (allowlist-only egress for proxied traffic). Only meaningful when at least one rule exists: a config with zero rules starts brokerless, which intercepts every host and applies neither policy. See [security.md](security.md#egress-containment-with-on_no_match). |
 | `max_body_bytes` | no | Cap (in bytes) on how much of a request body postern buffers when a rule rewrites the body (`inject.in` includes `body`). Default 1 MiB when unset or `0`. A larger body is rejected with `413 Request Entity Too Large` and never reaches the upstream. Bound at startup; a hot-reload edit warns and does not take effect (a per-rule `inject.max_body_bytes` override does hot-reload). |
+| `scrub_responses` | no | Strip the injected credential back out of upstream responses before the agent sees them — response headers, trailers, and body. Default `true` when unset; set `false` to disable. The body is scrubbed as it streams, so incremental delivery and SSE flushes survive, and metadata describing the pre-scrub body (`ETag`, `Content-Range`, integrity digests) is dropped rather than left describing bytes the agent did not receive. An upstream response still compressed in an encoding the transport did not decode fails closed with `502`, because the credential is unreachable inside it. Bound at startup; a hot-reload edit warns and does not take effect. Turning it off means an upstream that reflects the credential back **will** expose it to the agent. |
 | `admin_listen` | no | Optional second listener exposing `GET /healthz` for container orchestrators and monitoring; see [`proxy.admin_listen`](#proxyadmin_listen). Loopback-only: validation rejects any non-loopback address. Unset (the default) starts no listener and leaves behavior identical. |
 
 The timeout budget around the proxy itself is fixed constants, not YAML options: outbound dial 10s, TCP keep-alive 30s, upstream TLS handshake 10s, response-header wait 30s, and idle pooled upstream connections reaped after 90s; on the inbound side, idle keep-alive connections are closed after 2m and request headers must arrive within 30s.

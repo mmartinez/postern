@@ -94,7 +94,7 @@ func TestHook_PathsScope(t *testing.T) {
 			t.Parallel()
 
 			res := &fakeResolver{value: "sk-secret"}
-			hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(tc.paths, nil)}), res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // hook is a closure; broker owns the synthetic body
+			hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(tc.paths, nil)}), res, config.OnNoMatchPassthrough, 0, true, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // hook is a closure; broker owns the synthetic body
 
 			req, _ := http.NewRequest(tc.method, "https://api.anthropic.com"+tc.path, http.NoBody)
 			resp := hook(req) //nolint:bodyclose // closeIfNonNil/assertScopedOut handles the response
@@ -136,7 +136,7 @@ func TestHook_MethodsScope(t *testing.T) {
 			t.Parallel()
 
 			res := &fakeResolver{value: "sk-secret"}
-			hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, []string{"POST"})}), res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, []string{"POST"})}), res, config.OnNoMatchPassthrough, 0, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 			req, _ := http.NewRequest(tc.method, "https://api.anthropic.com/v1/messages", http.NoBody)
 			resp := hook(req) //nolint:bodyclose // closeIfNonNil/assertScopedOut handles the response
@@ -165,7 +165,7 @@ func TestHook_MethodMatchCaseInsensitive(t *testing.T) {
 	t.Parallel()
 
 	res := &fakeResolver{value: "sk-secret"}
-	hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, []string{"get", "Post"})}), res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, []string{"get", "Post"})}), res, config.OnNoMatchPassthrough, 0, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	req, _ := http.NewRequest(http.MethodGet, "https://api.anthropic.com/v1/messages", http.NoBody)
 	resp := hook(req) //nolint:bodyclose // closeIfNonNil/assertScopedOut handles the response
@@ -201,7 +201,7 @@ func TestHook_CombinedPathsAndMethodsScope(t *testing.T) {
 
 			res := &fakeResolver{value: "sk-secret"}
 			rule := scopedRule([]string{"/v1/messages"}, []string{"POST"})
-			hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, 0, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 			req, _ := http.NewRequest(tc.method, "https://api.anthropic.com"+tc.path, http.NoBody)
 			resp := hook(req) //nolint:bodyclose // closeIfNonNil/assertScopedOut handles the response
@@ -229,7 +229,7 @@ func TestHook_UnscopedRuleBehavesAsToday(t *testing.T) {
 	t.Parallel()
 
 	res := &fakeResolver{value: "sk-secret"}
-	hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, nil)}), res, config.OnNoMatchPassthrough, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	hook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, nil)}), res, config.OnNoMatchPassthrough, 0, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/anything"},
@@ -260,13 +260,13 @@ func TestHook_ScopedOut502IsWireIdenticalToOtherBroker502s(t *testing.T) {
 
 	// Stage A: scoping refusal (declared prefix misses).
 	scopeRes := &fakeResolver{value: "sk-secret"}
-	scopeHook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule([]string{"/v1/messages"}, nil)}), scopeRes, config.OnNoMatchPassthrough, 0, nil)
+	scopeHook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule([]string{"/v1/messages"}, nil)}), scopeRes, config.OnNoMatchPassthrough, 0, true, nil)
 	scopedReq, _ := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/other", http.NoBody)
 	scopedResp := scopeHook(scopedReq) //nolint:bodyclose // closed via closeIfNonNil below
 
 	// Stage B: the pre-existing insecure-transport refusal for the same rule.
 	plainRes := &fakeResolver{value: "sk-secret"}
-	plainHook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, nil)}), plainRes, config.OnNoMatchPassthrough, 0, nil)
+	plainHook := broker.Hook(broker.NewEngine([]broker.Rule{scopedRule(nil, nil)}), plainRes, config.OnNoMatchPassthrough, 0, true, nil)
 	plainReq, _ := http.NewRequest(http.MethodPost, "http://api.anthropic.com/v1/messages", http.NoBody)
 	plainResp := plainHook(plainReq) //nolint:bodyclose // closed via closeIfNonNil below
 

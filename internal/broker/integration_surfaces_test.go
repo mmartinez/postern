@@ -25,7 +25,7 @@ func surfaceProxy(t *testing.T, upstream *httptest.Server, rule broker.Rule, val
 	root := fixtureCA(t)
 	minter := fixtureMinter(t, root)
 	res := &fakeResolver{value: value}
-	hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, maxBodyBytes, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
+	hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, maxBodyBytes, true, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // synthetic body; goproxy closes it after writing to the client
 
 	p, err := proxy.New(proxy.Config{
 		CA:                 root,

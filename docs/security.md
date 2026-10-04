@@ -71,14 +71,19 @@ When a token must be referenced in human-facing output, it is masked to a
 
 - *Credential theft from the agent.* The agent never holds the real secret by
   construction, so prompt injection or a compromised dependency in the agent has
-  nothing to exfiltrate beyond placeholders. Two leaks remain possible: an
-  upstream that **reflects** the injected credential back in its response
-  (responses are forwarded unmodified), and anything covered by the caveats
-  below. This still requires **correctly-scoped rules** and a **process/uid
-  boundary** between the agent and postern. Rule-level `paths` / `methods`
-  scoping makes that first caveat enforceable instead of aspirational: a rule
-  can shrink its own blast radius from the whole host to exactly the endpoints
-  it exists for, with everything else refused before the resolver runs.
+  nothing to exfiltrate beyond placeholders. An upstream that **reflects** the
+  injected credential back in its response is scrubbed: response headers,
+  trailers, and the body are stripped of it on the way back, controlled by
+  `proxy.scrub_responses` (on by default). A body postern cannot inspect — one
+  an upstream left compressed in an encoding the transport did not decode —
+  fails closed with a `502` instead of being forwarded. What is left is the
+  caveat below: a `101` protocol tunnel opened by a brokered host is relayed
+  without inspection. This still requires **correctly-scoped rules** and a
+  **process/uid boundary** between the agent and postern. Rule-level `paths` /
+  `methods` scoping makes that first caveat enforceable instead of aspirational:
+  a rule can shrink its own blast radius from the whole host to exactly the
+  endpoints it exists for, with everything else refused before the resolver
+  runs.
 - *Accidental credential logging.* Redaction and the no-secret-in-logs rule
   reduce the chance a credential lands in a log aggregator.
 - *Silent auth bypass.* Fail-closed means a broker failure cannot degrade into

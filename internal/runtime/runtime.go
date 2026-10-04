@@ -111,6 +111,10 @@ type Options struct {
 	// AdminListen is set; New rejects the half-wired combination so an
 	// admin endpoint can never come up serving guesses about its own state.
 	HealthStatus func() HealthReport
+
+	// ScrubResponses mirrors proxy.scrub_responses. nil (the default) keeps
+	// response scrubbing on; a pointer to false turns it off. Boot-bound.
+	ScrubResponses *bool
 }
 
 // Runtime is the constructed-but-not-yet-running postern server. Build it
@@ -163,6 +167,7 @@ func New(opts Options) (*Runtime, error) {
 		PreUpstreamHandler: opts.PreUpstreamHandler,
 		ShouldIntercept:    opts.ShouldIntercept,
 		BlockNonBrokered:   opts.BlockNonBrokered,
+		ScrubResponses:     opts.ScrubResponses,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("init proxy: %w", err)

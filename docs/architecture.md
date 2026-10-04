@@ -96,8 +96,12 @@ The intended boundary: the real credential exists only inside the postern
 process and on the wire between postern and the upstream.
 
 - The agent holds no credential — only the placeholder it sent (if any).
-  Postern does not scrub upstream responses: an upstream that reflects the
-  injected credential back in its response can still expose it to the agent.
+  Postern scrubs upstream responses, stripping the injected credential back out
+  of headers, trailers and the body as it streams, so an upstream that reflects
+  it back cannot hand it over. A body postern cannot inspect — one an upstream
+  left compressed in an encoding the transport did not decode — fails closed
+  with a `502` instead of being forwarded. Protocol tunnels a `101` opens are
+  not scrubbed; see [security.md](security.md).
 - `postern rules list` shows rule-level fields (host and `secret_ref`), never
   a resolved value.
 - Logs redact credential-bearing headers and never print a resolved secret.

@@ -60,6 +60,7 @@ func TestProxy_PlainHTTPMatch_FailsClosed_UpstreamNotContacted(t *testing.T) {
 		countingResolver{&resolverCalls},
 		config.OnNoMatchPassthrough,
 		0,
+		true,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 

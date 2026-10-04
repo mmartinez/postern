@@ -195,6 +195,12 @@ func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.
 			slog.String("reason", "the proxy-wide body cap is bound at startup; restart postern to apply (per-rule inject.max_body_bytes hot-reloads)"),
 		)
 	}
+	if !scrubResponsesEqual(reloaded.Proxy.ScrubResponses, baseline.Proxy.ScrubResponses) {
+		logger.Warn("config edit ignored",
+			slog.String("field", "proxy.scrub_responses"),
+			slog.String("reason", "the response scrub is bound at startup; restart postern to apply"),
+		)
+	}
 	if !credStoresEqual(reloaded.CredStores, baseline.CredStores) {
 		logger.Warn("config edit ignored",
 			slog.String("field", "credstores"),
@@ -216,6 +222,20 @@ func cacheBlockEqual(a, b *config.Cache) bool {
 		return *a == *b
 	}
 }
+
+// scrubResponsesEqual reports whether two optional scrub_responses settings are
+// equivalent. Absent means the default, which is scrubbing on, so "absent" and
+// "explicitly true" name the same setting. Comparing pointers or nil-ness
+// would fire a bogus "config edit ignored, restart to apply" warning for an
+// edit that changes nothing, which is exactly the kind of false signal that
+// teaches operators to ignore real ones.
+func scrubResponsesEqual(a, b *bool) bool {
+	return scrubResponsesOn(a) == scrubResponsesOn(b)
+}
+
+// scrubResponsesOn resolves the setting to its effective value: on unless the
+// operator pointed it at false.
+func scrubResponsesOn(cfg *bool) bool { return cfg == nil || *cfg }
 
 // credStoresEqual reports whether two credstore lists are semantically
 // the same. The comparison is order-insensitive: a cosmetic reorder of
