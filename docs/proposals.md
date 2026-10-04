@@ -25,11 +25,16 @@ The stated threat model is a prompt-injected or compromised agent (README.md:29-
 Scoping injection to declared path prefixes and methods shrinks the blast radius from "whole host" to "the endpoints the rule exists for", which is the product's own thesis applied one level deeper.
 
 ### Evidence
-- internal/config/schema.go:258-278: `Rule` fields are `template`, `host`, `secret_ref`, `inject`/`injects`, `routes` only; there is no path or method field.
+> The evidence below is as-of the graph survey that produced this proposal, not
+> a description of the tree today. Where the gap is closed, the line says so and
+> cites where the fix landed — several of the original assertions are no longer
+> true of the current code, and are marked rather than left to mislead.
+
+- internal/config/schema.go:305-317: `Rule` now carries `Paths` and `Methods` alongside `template`, `host`, `secret_ref`, `inject`/`injects`, `routes`. At survey time those two fields did not exist — that absence is the gap this proposal closed.
 - internal/broker/rule.go:165-190: `Match` is hostname-only (literal or single-label TLS-wildcard glob).
-- internal/broker/hook.go:29-68: the hook brokers every request whose host matched; no path/method stage exists between match and inject.
-- `grep -i 'paths|methods|PathPrefix'` over internal/config and internal/broker returns no matches.
-- Per-rule knob precedent already exists: `Inject.MaxBodyBytes` (internal/config/schema.go:342-345) and the hook honors it (internal/broker/hook.go:55-58), so schema, validator, and hook extension points are established.
+- internal/broker/hook.go:69: at survey time the hook brokered every request whose host matched, with no path/method stage between match and inject. Scoping is now step 2 of the hook (internal/broker/hook.go:38-42, enforced at `:93`) — see the acceptance criteria below.
+- A `grep -i 'paths|methods|PathPrefix'` over internal/config and internal/broker returned no matches at survey time; it now matches `schema.go`, `rule.go`, and `validator_scoping.go`.
+- Per-rule knob precedent already exists: `Inject.MaxBodyBytes` (internal/config/schema.go:342-345), and the hook lets the per-rule override win over the proxy-wide cap at internal/broker/hook.go:144 — so schema, validator, and hook extension points are established.
 - Fail-closed behavior for scoped-out requests has an in-repo model: unknown/ambiguous route tokens 502 without calling the resolver (docs/ideas/placeholder-token-routing.md:58-59, implemented in `SelectRoute`, internal/broker/rule.go:53-89).
 
 ### Acceptance criteria
@@ -78,7 +83,7 @@ Operators cannot distinguish "listening" from "serving with a validated credstor
 The boot-time credstore ping proves validity once (internal/cli/server.go:334-343); nothing re-exposes state after boot.
 
 ### Evidence
-- internal/runtime/runtime.go:35-83: `Options` carries no admin/status surface; the `Runtime` binds exactly one listener, the proxy (internal/runtime/runtime.go:242).
+- internal/runtime/runtime.go:35-112: `Options` exposes no status endpoint on the proxy port. Its only listener field beyond `Addr` is `AdminListen` (`:105`), which starts a *second* loopback port for `GET /healthz` and defaults to empty. Nothing answers a probe on the proxy listener. `Runtime.Run` correspondingly binds the proxy listener at `:242` and the admin one only when configured (`:247-249`, conditional on `r.admin != nil`).
 - docker-compose.yml:31-44: the example deployment has no `healthcheck` and no endpoint one could point one at; `restart: unless-stopped` is the only recovery mechanism.
 - The CLI surface is `ca`, `config`, `token`, `rules`, `server`, `bootstrap` only (docs/architecture.md:128); there is no `status` command and the proxy port answers proxied traffic, not probes.
 - Per-request summary logging exists (internal/logging/summary.go:20-34) but requires log scraping rather than a probe.
