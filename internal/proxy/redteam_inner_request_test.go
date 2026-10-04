@@ -2,6 +2,7 @@ package proxy_test
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -42,11 +43,11 @@ type mitmTunnel struct {
 
 // openTunnel CONNECTs to target through the proxy and returns the raw
 // connection once the proxy accepts the tunnel.
-func openTunnel(t *testing.T, proxyURL, target string) net.Conn {
+func openTunnel(ctx context.Context, t *testing.T, proxyURL, target string) net.Conn {
 	t.Helper()
 	u, err := url.Parse(proxyURL)
 	require.NoError(t, err)
-	conn, err := net.Dial("tcp", u.Host)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", u.Host)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -65,7 +66,7 @@ func openTunnel(t *testing.T, proxyURL, target string) net.Conn {
 // handshake, trusting only postern's CA.
 func openMITMTunnel(t *testing.T, proxyURL, target string, root *ca.CA) *mitmTunnel {
 	t.Helper()
-	conn := openTunnel(t, proxyURL, target)
+	conn := openTunnel(t.Context(), t, proxyURL, target)
 	host, _, err := net.SplitHostPort(target)
 	require.NoError(t, err)
 	pool := x509.NewCertPool()
@@ -282,6 +283,10 @@ func TestRedTeam_InnerRequest_DefaultPortHost(t *testing.T) {
 		{"explicit 443 host on a 443 tunnel is brokered", "api.example:443", "api.example:443", false, http.StatusOK},
 		{"port-less host on an 8443 tunnel fails closed", "api.example:8443", "api.example", false, http.StatusBadGateway},
 		{"another host on a 443 tunnel fails closed", "api.example:443", "other.example", false, http.StatusBadGateway},
+		// goproxy peeks the first tunnel byte and serves a client that
+		// does not start a TLS handshake as plain HTTP (scheme http, dials
+		// :80), so this request is parsed and reaches the guard; the log
+		// assertion below proves the 502 is the guard's.
 		{"plaintext port-less host on a 443 tunnel fails closed", "api.example:443", "api.example", true, http.StatusBadGateway},
 	}
 	for _, tc := range cases {
@@ -310,7 +315,7 @@ func TestRedTeam_InnerRequest_DefaultPortHost(t *testing.T) {
 			require.NoError(t, err)
 			var tn *mitmTunnel
 			if tc.plaintext {
-				conn := openTunnel(t, startProxy(t, p), tc.target)
+				conn := openTunnel(t.Context(), t, startProxy(t, p), tc.target)
 				tn = &mitmTunnel{conn: conn, br: bufio.NewReader(conn)}
 			} else {
 				tn = openMITMTunnel(t, startProxy(t, p), tc.target, root)
