@@ -252,3 +252,61 @@ func TestRedTeam_InnerRequest_SequentialOverOneTunnel(t *testing.T) {
 
 	require.Equal(t, int64(2), hits.Load(), "exactly the two bound requests must reach the upstream")
 }
+
+// TestRedTeam_InnerRequest_DefaultPortHost pins the guard against goproxy
+// v1.9.2, which builds an origin-form inner URL from the inner Host header
+// instead of the CONNECT authority. Real clients omit the default port from
+// Host, so a :443 tunnel carries "Host: api.example" and req.URL.Host loses
+// its port. The guard must treat a missing port as :443 and stay strict for
+// every other port and host. The broker hook stands in for the upstream so
+// the tunnel can name port 443 without a listener there.
+func TestRedTeam_InnerRequest_DefaultPortHost(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		target     string
+		hostHeader string
+		wantStatus int
+	}{
+		{"port-less host on a 443 tunnel is brokered", "api.example:443", "api.example", http.StatusOK},
+		{"explicit 443 host on a 443 tunnel is brokered", "api.example:443", "api.example:443", http.StatusOK},
+		{"port-less host on an 8443 tunnel fails closed", "api.example:8443", "api.example", http.StatusBadGateway},
+		{"another host on a 443 tunnel fails closed", "api.example:443", "other.example", http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var hits atomic.Int64
+			root := fixtureCA(t)
+			p, err := proxy.New(proxy.Config{
+				CA:     root,
+				Minter: fixtureMinter(t, root),
+				PreUpstreamHandler: func(req *http.Request) *http.Response {
+					hits.Add(1)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						ProtoMajor: 1,
+						ProtoMinor: 1,
+						Request:    req,
+						Header:     http.Header{},
+						Body:       io.NopCloser(strings.NewReader("brokered")),
+					}
+				},
+			})
+			require.NoError(t, err)
+			tn := openMITMTunnel(t, startProxy(t, p), tc.target, root)
+
+			status, body := tn.roundTrip(t, "GET /v1/x HTTP/1.1\r\nHost: "+tc.hostHeader+"\r\n\r\n")
+			require.Equal(t, tc.wantStatus, status)
+			if tc.wantStatus == http.StatusOK {
+				require.Equal(t, "brokered", body)
+				require.Equal(t, int64(1), hits.Load())
+				return
+			}
+			require.Equal(t, guardBadBody, body)
+			require.Zero(t, hits.Load(), "a rejected inner request must never reach the broker")
+		})
+	}
+}

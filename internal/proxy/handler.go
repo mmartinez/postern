@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
@@ -64,8 +65,15 @@ func installInnerGuard(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 		}
 		// Full-authority comparison (host AND port): a port-stripped match
 		// would let an absolute-form inner request for api.example:8443 ride
-		// an api.example:443 tunnel and collect its credential.
-		if reqHost := strings.ToLower(req.URL.Host); reqHost != authority {
+		// an api.example:443 tunnel and collect its credential. goproxy
+		// v1.9.2+ builds origin-form URLs from the inner Host header, which
+		// clients send without the default port, so a missing port is the
+		// MITM scheme's :443 and nothing else.
+		reqHost := strings.ToLower(req.URL.Host)
+		if req.URL.Port() == "" {
+			reqHost = net.JoinHostPort(strings.ToLower(req.URL.Hostname()), "443")
+		}
+		if reqHost != authority {
 			logger.Info("rejecting non-brokered inner host",
 				slog.Int64("session", ctx.Session),
 				slog.String("method", req.Method),
