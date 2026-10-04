@@ -289,10 +289,12 @@ func TestRedTeam_InnerRequest_DefaultPortHost(t *testing.T) {
 			t.Parallel()
 
 			var hits atomic.Int64
+			logBuf := &lockedBuffer{}
 			root := fixtureCA(t)
 			p, err := proxy.New(proxy.Config{
 				CA:     root,
 				Minter: fixtureMinter(t, root),
+				Logger: slog.New(slog.NewTextHandler(logBuf, nil)),
 				PreUpstreamHandler: func(req *http.Request) *http.Response {
 					hits.Add(1)
 					return &http.Response{
@@ -319,10 +321,14 @@ func TestRedTeam_InnerRequest_DefaultPortHost(t *testing.T) {
 			if tc.wantStatus == http.StatusOK {
 				require.Equal(t, "brokered", body)
 				require.Equal(t, int64(1), hits.Load())
+				require.NotContains(t, logBuf.String(), "rejecting non-brokered inner host")
 				return
 			}
 			require.Equal(t, guardBadBody, body)
 			require.Zero(t, hits.Load(), "a rejected inner request must never reach the broker")
+			// The connection-error path emits the same body, so only the log
+			// line proves the guard parsed the request and rejected it.
+			require.Contains(t, logBuf.String(), "rejecting non-brokered inner host")
 		})
 	}
 }
