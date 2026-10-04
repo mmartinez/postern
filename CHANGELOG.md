@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/mmartinez/postern/compare/v0.9.1...v0.10.0) (2026-10-04)
+
+
+### Features
+
+* **proxy:** scrub brokered credentials out of upstream responses ([#105](https://github.com/mmartinez/postern/issues/105)) ([efd889a](https://github.com/mmartinez/postern/commit/efd889abfcbc4faa988dcc524a32f78a387b3f84))
+
 ## [0.9.1](https://github.com/mmartinez/postern/compare/v0.9.0...v0.9.1) (2026-10-02)
 
 
