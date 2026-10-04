@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/mmartinez/postern/compare/v0.10.0...v0.10.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **proxy:** treat a port-less inner host as :443 in the MITM guard ([#108](https://github.com/mmartinez/postern/issues/108)) ([5b91719](https://github.com/mmartinez/postern/commit/5b91719af7e7f039f29369624ca435a56b56d966))
+
 ## [0.10.0](https://github.com/mmartinez/postern/compare/v0.9.1...v0.10.0) (2026-10-04)
 
 
