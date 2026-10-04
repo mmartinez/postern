@@ -223,20 +223,19 @@ func cacheBlockEqual(a, b *config.Cache) bool {
 	}
 }
 
-// scrubResponsesEqual reports whether two optional scrub_responses settings
-// are equivalent. The field is a *bool so that "absent" (the default, scrub
-// on) and "explicitly false" are distinguishable, which means pointer identity
-// cannot answer this; a nil-aware value comparison can.
+// scrubResponsesEqual reports whether two optional scrub_responses settings are
+// equivalent. Absent means the default, which is scrubbing on, so "absent" and
+// "explicitly true" name the same setting. Comparing pointers or nil-ness
+// would fire a bogus "config edit ignored, restart to apply" warning for an
+// edit that changes nothing, which is exactly the kind of false signal that
+// teaches operators to ignore real ones.
 func scrubResponsesEqual(a, b *bool) bool {
-	switch {
-	case a == nil && b == nil:
-		return true
-	case a == nil || b == nil:
-		return false
-	default:
-		return *a == *b
-	}
+	return scrubResponsesOn(a) == scrubResponsesOn(b)
 }
+
+// scrubResponsesOn resolves the setting to its effective value: on unless the
+// operator pointed it at false.
+func scrubResponsesOn(cfg *bool) bool { return cfg == nil || *cfg }
 
 // credStoresEqual reports whether two credstore lists are semantically
 // the same. The comparison is order-insensitive: a cosmetic reorder of
