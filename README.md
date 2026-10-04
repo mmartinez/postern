@@ -38,13 +38,6 @@ does not protect a host an attacker already has a shell on. Run postern as a
 separate trust principal from the agent and from your vault tokens — see
 [docs/security.md](docs/security.md).
 
-Postern's architecture lines up with the *expired* CB4A Internet-Draft
-(`draft-hartman-credential-broker-4-agents-00`, expired 2026-09-30, no
-successor revision). It is useful vocabulary, not a standard, and postern makes
-no conformance claim to it;
-[docs/cb4a.md](docs/cb4a.md) records exactly where postern matches it and where
-it does not, deviations included.
-
 ## See it
 
 Your agent makes a normal request through the proxy, with **no `Authorization`
@@ -251,7 +244,6 @@ the process.
 - [Security model](docs/security.md) — fail-closed semantics, logging, threat model, key handling.
 - [Configuration](docs/configuration.md) — the full YAML reference.
 - [Providers](docs/providers.md) — the credential-vendor plugin contract (1Password, Bitwarden) and the OAuth2 short-lived-token provider.
-- [CB4A alignment](docs/cb4a.md) — how postern relates to the CB4A Internet-Draft, deviations included.
 
 ## Developing postern
 

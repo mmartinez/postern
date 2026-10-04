@@ -334,8 +334,7 @@ Three things this section does **not** buy, which are easy to assume:
 The trade-off is that the target must cooperate: it needs a token endpoint and
 the operator needs a client registered there. That is exactly why postern also
 ships the vault path. The two are not alternatives — one `secret_ref` scheme
-per rule, so a config routinely brokers both at once. For how this maps onto
-the (expired, non-normative) CB4A Internet-Draft, see [cb4a.md](cb4a.md).
+per rule, so a config routinely brokers both at once.
 
 ### The provider contract
 

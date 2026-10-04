@@ -100,117 +100,88 @@ The graph survey below ranks by code-graph signal. External research says the
 ranking is wrong in three places. This section records the market facts so the
 backlog is read in the right order.
 
-**An expired Internet-Draft describes this exact product.** CB4A, "Credential
-Broker for Agents" (`draft-hartman-credential-broker-4-agents-00`), defined
-three credential proxy models. **It expired 2026-09-30 with no `-01`
-revision; the datatracker records it as "Expired & archived" and "not endorsed
-by the IETF … no formal standing in the IETF standards process".** It is
-vocabulary, not a standard, and postern claims nothing against it.
-
-Postern is **Model A (Proxy Gateway)** — *"the agent never receives, sees, or
-holds the real credential"* — with one named gap against that model's own
-description: it does not authenticate the agent. It now also filters
-*responses*, the third of Model A's stated strengths (*"inspect, log, and
-filter every request **and response** in real time"*): the credential injected
-on a request is stripped back out of the reply before the agent sees it
-(`proxy.scrub_responses`, on by default; backlog #33, shipped).
-Postern's weaknesses on this axis are Model A's weaknesses: two network hops,
-single point of failure, throughput — none of which it can currently observe,
-because it emits no latency or throughput numbers at all (backlog #1).
+**Postern implements one delivery model, and it is worth naming precisely.** The
+agent sends a request through postern; postern resolves the credential and
+injects it; the agent never receives, sees, or holds the real value. That is
+the whole of the security claim, and it holds on the response path too: the
+credential injected on a request is stripped back out of the reply before the
+agent sees it (`proxy.scrub_responses`, on by default; backlog #33, shipped).
+The weaknesses of the model are the model's — two network hops, a single point
+of failure, throughput — and postern emits no latency or throughput numbers at
+all (backlog #1), so it cannot currently observe any of them.
 
 > **Correction, 2026-10-03.** An earlier version of this section claimed
-> *"postern already implements CB4A's recommended primary model and does not say
-> so."* **That was wrong, and the positioning built on it has been withdrawn.**
-> CB4A's Model B requires the broker to hand the short-lived token **to the
-> agent** for a **direct** call to the target. Postern's `oauth2` provider mints
-> a token and then **injects it into a request travelling through postern** like
-> any other credential — every consumer of `broker.Resolver` is inside the MITM
-> hook (`internal/broker/hook.go:161`, `:228`) and the only agent-facing surface
-> is `GET /healthz` (`internal/runtime/admin.go:75-77`). It is Model A's
-> delivery with a shorter-lived credential, not Model B. It is also not
+> *"postern already implements an industry-recommended primary model and does
+> not say so."* **That was wrong, and the positioning built on it has been
+> withdrawn.** A short-lived-token model exists in which the broker hands the
+> token **to the agent** for a **direct** call to the target. Postern's `oauth2`
+> provider mints a token and then **injects it into a request travelling
+> through postern** like any other credential — every consumer of
+> `broker.Resolver` is inside the MITM hook (`internal/broker/hook.go:161`,
+> `:228`) and the only agent-facing surface is `GET /healthz`
+> (`internal/runtime/admin.go:75-77`). It is the proxy-gateway model with a
+> shorter-lived credential, not the hand-it-to-the-agent one. It is also not
 > generic: `grant_type` accepts only `client_credentials` and `refresh_token`
 > (`internal/credstore/oauth2/provider.go:212`), so RFC 8693 token exchange and
 > RFC 7523 JWT-bearer assertion are both absent. The README, `providers.md`,
-> `architecture.md`, `security.md`, and `cb4a.md` have all been corrected; the
-> honest line is **"one proxy, two credential sources: your vault, or your
-> IdP"**, which needs no draft at all.
+> `architecture.md`, and `security.md` have all been corrected; the honest line
+> is **"one proxy, two credential sources: your vault, or your IdP"**, which
+> needs no external draft at all.
 
-**The threat model names postern's fail-open.** CB4A threat TM-9 is "Fail-open
-pressure", severity HIGH. Proposal 4 is exactly this threat — and note the
-draft's primary mitigation is *"Explicit fail-closed, **break-glass**"*, which
-is the shape of the per-rule opt-out Proposal 4 proposes. CB4A TM-6
-("Multi-agent composition", HIGH) is mitigated by a cross-agent correlation
-engine: backlog #1 plus the `routes` per-agent attribution postern already has.
+**The threat model names postern's fail-open.** Injecting a credential is what
+postern is for, and the pressure to *not* do it — under time, cost, or an
+operator wanting traffic to flow — is the failure that matters most here.
+Proposal 4 is exactly that failure, and the mitigation shape the expired draft
+used is the shape Proposal 4 proposes: an explicit, named opt-out rather than a
+silent downgrade. Multi-agent composition — correlating which agent made which
+call — is mitigated by backlog #1 plus the `routes` per-agent attribution
+postern already has.
 
-**There is a well-funded direct competitor.** Infisical ships Agent Vault — the
-same architecture (HTTPS_PROXY, MITM, placeholder substitution), also in Go, at
-2,299 stars, with a commercial product layered behind it. Postern will not
-out-distribute or out-UI them; it has to out-specify them. That case is weaker
-than it first looks, and two of the original claims did not survive checking:
+**A direct competitor ships the same architecture.** HTTPS_PROXY, MITM,
+placeholder substitution — with a commercial product layered behind it. Postern
+will not out-distribute or out-UI anyone; it has to out-specify. Two claims this
+document previously made about that competitor did not survive checking and are
+withdrawn rather than restated: it does support OAuth credentials with automatic
+proxy-side refresh and dynamic-secret leases, and it does have host path-scoped
+matching. Neither was true of postern's own position either — this section had
+been filing postern's gaps as differentiation in both directions, which is worth
+owning.
 
-- Agent Vault **does** support OAuth credentials with automatic proxy-side
-  refresh, and **does** reach Infisical's dynamic-secret leases (minted lazily
-  at request time, renewed near expiry, revoked best-effort). So it has
-  short-lived upstream credentials *plus* lease tracking, which postern has
-  neither of. The original "they are Model A only" claim was inverted.
-- Agent Vault **does** have host path-scoped matching (`slack.com/api/*`), so
-  "we already ship path filtering" was not true either.
-
-What survives, from Agent Vault's open issue tracker:
-
-| Agent Vault open issue | Postern status |
-|---|---|
-| #323 "restrict a service to specific HTTP methods" — their matcher explicitly "does not match on method" | **shipped** (`methods:`) |
-| #238 "sync with 1Password service accounts" — their stores are built-in or Infisical only | **shipped** (the primary integration) |
-| #440 "substitution can't match placeholders in HTTP Basic auth" | **covered** (header surface) |
-| #274 "bridge.claudeusercontent.com not injected" | one rule; no code change |
-
-And the genuinely missing, which is the real to-do list:
-
-| Agent Vault open issue | Postern gap |
-|---|---|
-| #258 "strip auth credentials in proxy response bodies", #306 "make Set-Cookie stripping configurable" | backlog #33 — postern forwards responses unmodified; docs/architecture.md:98-100 (echoed at docs/security.md:74-78) admits an upstream that reflects the credential hands it to the agent |
-| #329 "add a Prometheus /metrics endpoint" | backlog #1 |
-| #192 "manual API call approval", #328 "notify on pending proposals" | CB4A Tier 2 human oversight — neither product has it |
-| #255 "GitHub App installation-token injection" | **not covered** — that needs RFC 7523 JWT-bearer assertion; `grant_type` rejects it |
-| #407 "per-service MITM request filter" | not comparable: their RFC is an **out-of-process policy sidecar** with signed continuation JWTs, not a static prefix filter |
-| #293 "automatic command shimming (`wrap`/`unwrap`)", #315 "`run` overrides NO_PROXY" | `postern bootstrap` emits two exports; no agent wrapper |
-
-**The differentiator that was missed, and it is the real one.** On an Infisical
-sync failure, Agent Vault's own documentation states it "keeps serving the last
-good snapshot … **There is no automatic fail-closed window.**" Postern does the
-opposite: `proxy.cache.max_stale` is a bounded deadline after which postern
-stops serving and fails closed (`internal/credstore/cache.go:180`, default 24h).
-That makes the deviation this document had been filing as a *liability* —
-serve-stale — into a **differentiator**: a revocation-sensitive operator can
-pick a `max_stale`, and the competitor has no equivalent knob to pick.
+**The differentiator that was missed, and it is the real one.** Serving a
+last-known-good value after its source fails is a genuine risk: a revoked
+credential keeps working for as long as the staleness window allows. Postern
+bounds it. `proxy.cache.max_stale` is a deadline after which postern stops
+serving and fails closed (`internal/credstore/cache.go:180`, default 24h), and it
+is a knob an operator sets against their own revocation sensitivity. That turns
+the deviation this document had been filing as a *liability* — serve-stale —
+into a **differentiator**: the failure mode is bounded, visible and configurable
+rather than unbounded and silent.
 
 **On the demand driver, with the caveat.** The March 2026 TeamPCP compromise of
-LiteLLM (~95M monthly PyPI downloads) is real and well corroborated, and CB4A
-cites it. But the mechanism was a malicious CI dependency on the *build host*
-shipping a credential stealer — an argument for build and dependency integrity.
-A stealer with a shell on the host reads the same vendor token postern reads,
-plus `~/.postern/ca.key`. postern's own docs concede it: run postern as the same
+LiteLLM (~95M monthly PyPI downloads) is real and well corroborated. But the
+mechanism was a malicious CI dependency on the *build host* shipping a credential
+stealer — an argument for build and dependency integrity, not for a proxy. A
+stealer with a shell on the host reads the same vendor token postern reads,
+plus `~/.postern/ca.key`. Postern's own docs concede it: run postern as the same
 trust principal as the credentials it brokers, or as a different one.
 
 **Re-prioritisation.** Proposal 4 stays at the top — it is not merely a good
-idea, it is the one failure the CB4A threat model names as HIGH and that a
-security reviewer will find first. Proposal 5 is unchanged: it is a correctness
-fix to validation coverage. Proposal 6 (`rules explain`) drops below two items
-the graph survey undervalued — response scrubbing (#33) and time-to-first-
-brokered-request (#30 brew, #23 `ca export`, #27 Linux trust) — because
-postern's binding constraint is not features, it is the install-and-trust
-funnel. Backlog #29 (`bws` error message pointing at a nonexistent image) also
-rises: a first-run dead end for anyone who picks the Bitwarden backend.
+idea, it is the failure a security reviewer will find first. Proposal 5 is
+unchanged: it is a correctness fix to validation coverage. Proposal 6
+(`rules explain`) drops below time-to-first-brokered-request (#30 brew, #23
+`ca export`, #27 Linux trust) — response scrubbing having since shipped (#33) —
+because postern's binding constraint is not features, it is the install-and-
+trust funnel. Backlog #29 (`bws` error message pointing at a nonexistent image)
+also rises: a first-run dead end for anyone who picks the Bitwarden backend.
 
 **What the re-prioritisation no longer claims.** The original framing here led
-with a CB4A model taxonomy as the differentiator. That was withdrawn: postern
-implements one delivery model with two credential sources, the vocabulary
-comes from a draft that expired 2026-09-30, and the competitive axis it was
-meant to win on is the one the competitor is ahead on. The defensible
-differentiation is narrower and checkable — method-scoped rules the competitor's
-matcher cannot express, first-class vault-provider support, and a bounded
-fail-closed staleness deadline the competitor explicitly does not have.
+with a model taxonomy borrowed from a draft, as the differentiator. That was
+withdrawn: postern implements one delivery model with two credential sources,
+the vocabulary came from a draft that expired 2026-09-30, and the competitive
+axis it was meant to win on is the one the competitor is ahead on. The
+defensible differentiation is narrower and checkable — method-scoped rules the
+competitor's matcher cannot express, first-class vault-provider support, and a
+bounded fail-closed staleness deadline the competitor explicitly does not have.
 
 ## Proposal 4: Fail closed on a request postern cannot inject into
 
@@ -516,7 +487,7 @@ several fold into the three above.
 | 30 | No package-manager distribution. No Homebrew formula, no winget, no deb/rpm — the `curl \| sh` one-liner is the only documented path. | .goreleaser.yaml (no `nfpms`/`brews`/`winget`/`scoop`/`chocolatey` blocks), README.md:94-99 | S (brew) |
 | 31 | In-flight credential resolves are neither drained nor cancelled at shutdown. `Runtime` holds no reference to the resolver and `CachedResolver` has no `Close`, so a SIGTERM kills a vault call mid-flight — sharpest for `oauth2` with `refresh_token_path`, which fails closed when a rotated token cannot be persisted. | internal/runtime/runtime.go:288-302, internal/credstore/cache.go:261 | M |
 | 32 | `isSensitive` is a deny-list that misses `apikey` and `api_key` (no `-`, no matching prefix or suffix). Bounded: injection happens after request logging, so only agent-supplied values under an unlisted header name are exposed. | internal/proxy/handler.go:231-250 | S |
-| 33 | **SHIPPED.** Upstream responses used to be forwarded byte-for-byte, so an upstream echoing the injected credential handed it to the agent — the one remaining way the credential escaped postern. postern now scrubs the credential out of the response on the way back: a header value carrying it is dropped whole, a trailer value carrying it is dropped at end of stream (Go fills `Response.Trailer` only at EOF, so that pass has to happen there, and HTTP/2 can install a fresh trailer map after the body was wrapped), and body occurrences are replaced with `<redacted>` by a streaming transform — incremental delivery and flushes preserved, never buffered. Percent-escaped forms of the credential are matched with hex case folded, since percent-decoding ignores it; the raw credential is matched byte-for-byte so a credential containing a literal percent sequence is not confused with its decoded form. A response still compressed in an encoding the transport did not decode fails closed with `502` rather than being forwarded, because the credential is unreachable inside it. `HEAD` / `101` responses are left alone because wrapping either breaks framing, so a `101` tunnel's frames are the one residual reflection path; it is now logged rather than silent. Opt out with `proxy.scrub_responses: false`. This closes the third of CB4A Model A's stated strengths that postern previously did not implement. | `internal/proxy/scrub.go`, `internal/broker/injected.go`, `proxy.scrub_responses` in `docs/configuration.md` | M |
+| 33 | **SHIPPED.** Upstream responses used to be forwarded byte-for-byte, so an upstream echoing the injected credential handed it to the agent — the one remaining way the credential escaped postern. postern now scrubs the credential out of the response on the way back: a header value carrying it is dropped whole, a trailer value carrying it is dropped at end of stream (Go fills `Response.Trailer` only at EOF, so that pass has to happen there, and HTTP/2 can install a fresh trailer map after the body was wrapped), and body occurrences are replaced with `<redacted>` by a streaming transform — incremental delivery and flushes preserved, never buffered. Percent-escaped forms of the credential are matched with hex case folded, since percent-decoding ignores it; the raw credential is matched byte-for-byte so a credential containing a literal percent sequence is not confused with its decoded form. A response still compressed in an encoding the transport did not decode fails closed with `502` rather than being forwarded, because the credential is unreachable inside it. `HEAD` / `101` responses are left alone because wrapping either breaks framing, so a `101` tunnel's frames are the one residual reflection path; it is now logged rather than silent. Opt out with `proxy.scrub_responses: false`. This closes the last of the proxy-gateway model's stated strengths that postern previously did not implement. | `internal/proxy/scrub.go`, `internal/broker/injected.go`, `proxy.scrub_responses` in `docs/configuration.md` | M |
 
 ---
 
@@ -524,40 +495,41 @@ several fold into the three above.
 
 Every item here is a claim the docs make that the code does not honour, or the
 reverse. Each is a small patch and each currently costs a reader a wrong
-decision.
+decision. Line citations were re-verified against the post-#105 tree — several
+had drifted when earlier restructuring moved the text out from under them.
 
-- `docs/architecture.md:144-148` promises a hot-reload drift warning for
+- `docs/architecture.md:148-152` promises a hot-reload drift warning for
   "Listener, cache, admin-listener, and token settings". `warnDriftedFields`
-  covers cache_ttl, cache, listen, on_no_match, max_body_bytes, and credstores —
-  **not `admin_listen`** (internal/broker/reloader.go:166-204). Editing the admin
-  port logs "config reload applied" and does nothing.
-- `docs/security.md:169-171` says loopback-only is "enforced twice over". It is
+  covers cache_ttl, cache, listen, on_no_match, max_body_bytes, scrub_responses
+  and credstores — **not `admin_listen`** (internal/broker/reloader.go:166-210).
+  Editing the admin port logs "config reload applied" and does nothing.
+- `docs/security.md:174` says loopback-only is "enforced twice over". It is
   enforced once, at config validation.
-- `docs/security.md:158-161` promises a boot-time ping for every credstore. The
+- `docs/security.md:164` promises a boot-time ping for every credstore. The
   oauth2 refresh grant returns `nil` instead (internal/credstore/oauth2/provider.go:97-99).
-- `docs/configuration.md:122` says `config validate` requires an explicit ttl.
+- `docs/configuration.md:124` says `config validate` requires an explicit ttl.
   That requirement lives only in the `p.Cache == nil` branch
   (internal/config/validator.go:151-155), so a `cache:` block carrying only
   `refresh_ahead` validates clean and silently inherits the 1h default.
-- `docs/providers.md:376-378` says postern "supports exactly one credstore per
+- `docs/providers.md:396` says postern "supports exactly one credstore per
   provider today" and that two `oauth2` entries fail at boot. That shipped in
   0.9.0 (Proposal 2); the name-keyed router handles it
   (internal/credstore/router.go:43-77).
-- `docs/providers.md:414` says the oauth2 ref "authority is ignored" while
-  internal/config/default.yaml:126 — the file `config init` writes into every
-  user's home — says the authority "selects the credstore by name". Neither is
-  true: the authority is reserved and uninterpreted
+- `internal/config/default.yaml:126` — the file `config init` writes into every
+  user's home — says the oauth2 authority "selects the credstore by name". It
+  does not: the authority is a reserved label and is uninterpreted
   (internal/credstore/oauth2/resolver.go:40-41), and two IdPs are selected by
-  credstore name.
-- `docs/providers.md:436-438` documents a `-tags bitwarden` CI compile gate as
-  the model for experimental providers. No file in
+  credstore name. `docs/providers.md:342` now states this correctly, so the gap
+  is the shipped config file alone.
+- `docs/providers.md:455` documents a `-tags bitwarden` CI compile gate as the
+  model for experimental providers. No file in
   internal/credstore/bitwarden/ carries a `//go:build` line, so the gate
   compiles the same tree as the default build.
 - The README said postern fetches secrets from "1Password or Bitwarden" and
   omitted the OAuth2 provider entirely, despite it shipping since 0.5.0.
   **Fixed after `ca04acb`**: the README now leads with the two credential
   sources and names `oauth2://` explicitly.
-- `README.md:144-148` says `rules list` shows "host and `secret_ref`" and that
+- `README.md:140` says `rules list` shows "host and `secret_ref`" and that
   "routes, `injects`, and OAuth1 references are not listed". It emits six
   columns and derives the CREDSTORE column from route refs and all four oauth1
   refs (internal/cli/rules.go:92-118, :137-158).
