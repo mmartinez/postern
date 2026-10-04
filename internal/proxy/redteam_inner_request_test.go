@@ -2,6 +2,7 @@ package proxy_test
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -28,25 +29,25 @@ import (
 
 const guardBadBody = "postern: bad gateway\n"
 
-// mitmTunnel is an established MITM connection: the CONNECT succeeded and the
-// TLS handshake against postern's minted leaf completed. Responses are read
-// through the TLS connection; only the plaintext CONNECT exchange runs
-// outside it.
+// mitmTunnel is an established MITM connection: the CONNECT succeeded and,
+// for a TLS tunnel, the handshake against postern's minted leaf completed.
+// Responses are read through the TLS connection; only the plaintext CONNECT
+// exchange runs outside it.
 type mitmTunnel struct {
-	conn *tls.Conn
+	conn net.Conn
 	// br wraps conn and is reused across responses: go1.26's
 	// http.ReadResponse needs a *bufio.Reader and may buffer ahead into
 	// the next response.
 	br *bufio.Reader
 }
 
-// openMITMTunnel CONNECTs to target through the proxy and completes the MITM
-// handshake, trusting only postern's CA.
-func openMITMTunnel(t *testing.T, proxyURL, target string, root *ca.CA) *mitmTunnel {
+// openTunnel CONNECTs to target through the proxy and returns the raw
+// connection once the proxy accepts the tunnel.
+func openTunnel(ctx context.Context, t *testing.T, proxyURL, target string) net.Conn {
 	t.Helper()
 	u, err := url.Parse(proxyURL)
 	require.NoError(t, err)
-	conn, err := net.Dial("tcp", u.Host)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", u.Host)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -58,7 +59,14 @@ func openMITMTunnel(t *testing.T, proxyURL, target string, root *ca.CA) *mitmTun
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode, "CONNECT must be accepted")
+	return conn
+}
 
+// openMITMTunnel CONNECTs to target through the proxy and completes the MITM
+// handshake, trusting only postern's CA.
+func openMITMTunnel(t *testing.T, proxyURL, target string, root *ca.CA) *mitmTunnel {
+	t.Helper()
+	conn := openTunnel(t.Context(), t, proxyURL, target)
 	host, _, err := net.SplitHostPort(target)
 	require.NoError(t, err)
 	pool := x509.NewCertPool()
@@ -251,4 +259,81 @@ func TestRedTeam_InnerRequest_SequentialOverOneTunnel(t *testing.T) {
 	require.Equal(t, "ok", body)
 
 	require.Equal(t, int64(2), hits.Load(), "exactly the two bound requests must reach the upstream")
+}
+
+// TestRedTeam_InnerRequest_DefaultPortHost pins the guard against goproxy
+// v1.9.2, which builds an origin-form inner URL from the inner Host header
+// instead of the CONNECT authority. Real clients omit the default port from
+// Host, so a :443 tunnel carries "Host: api.example" and req.URL.Host loses
+// its port. The guard must fill a missing port from the scheme goproxy will
+// dial (443 for TLS, 80 for a plaintext tunnel) and stay strict for every
+// other port and host. The broker hook stands in for the upstream so the
+// tunnel can name port 443 without a listener there.
+func TestRedTeam_InnerRequest_DefaultPortHost(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		target     string
+		hostHeader string
+		plaintext  bool
+		wantStatus int
+	}{
+		{"port-less host on a 443 tunnel is brokered", "api.example:443", "api.example", false, http.StatusOK},
+		{"explicit 443 host on a 443 tunnel is brokered", "api.example:443", "api.example:443", false, http.StatusOK},
+		{"port-less host on an 8443 tunnel fails closed", "api.example:8443", "api.example", false, http.StatusBadGateway},
+		{"another host on a 443 tunnel fails closed", "api.example:443", "other.example", false, http.StatusBadGateway},
+		// goproxy peeks the first tunnel byte and serves a client that
+		// does not start a TLS handshake as plain HTTP (scheme http, dials
+		// :80), so this request is parsed and reaches the guard; the log
+		// assertion below proves the 502 is the guard's.
+		{"plaintext port-less host on a 443 tunnel fails closed", "api.example:443", "api.example", true, http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var hits atomic.Int64
+			logBuf := &lockedBuffer{}
+			root := fixtureCA(t)
+			p, err := proxy.New(proxy.Config{
+				CA:     root,
+				Minter: fixtureMinter(t, root),
+				Logger: slog.New(slog.NewTextHandler(logBuf, nil)),
+				PreUpstreamHandler: func(req *http.Request) *http.Response {
+					hits.Add(1)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						ProtoMajor: 1,
+						ProtoMinor: 1,
+						Request:    req,
+						Header:     http.Header{},
+						Body:       io.NopCloser(strings.NewReader("brokered")),
+					}
+				},
+			})
+			require.NoError(t, err)
+			var tn *mitmTunnel
+			if tc.plaintext {
+				conn := openTunnel(t.Context(), t, startProxy(t, p), tc.target)
+				tn = &mitmTunnel{conn: conn, br: bufio.NewReader(conn)}
+			} else {
+				tn = openMITMTunnel(t, startProxy(t, p), tc.target, root)
+			}
+
+			status, body := tn.roundTrip(t, "GET /v1/x HTTP/1.1\r\nHost: "+tc.hostHeader+"\r\n\r\n")
+			require.Equal(t, tc.wantStatus, status)
+			if tc.wantStatus == http.StatusOK {
+				require.Equal(t, "brokered", body)
+				require.Equal(t, int64(1), hits.Load())
+				require.NotContains(t, logBuf.String(), "rejecting non-brokered inner host")
+				return
+			}
+			require.Equal(t, guardBadBody, body)
+			require.Zero(t, hits.Load(), "a rejected inner request must never reach the broker")
+			// The connection-error path emits the same body, so only the log
+			// line proves the guard parsed the request and rejected it.
+			require.Contains(t, logBuf.String(), "rejecting non-brokered inner host")
+		})
+	}
 }

@@ -22,12 +22,14 @@ pre-commit:
       # golangci-lint accepts package paths, not arbitrary file lists. Derive
       # the unique set of changed package dirs from the staged file list and
       # pass those to --fast-only (v2 replacement for --fast), restricted to
-      # new findings (--new-from-rev=HEAD).
+      # new findings (--new-from-rev=HEAD). --build-tags=e2e because every
+      # file in test/e2e carries that tag; without it a commit touching only
+      # that package fails with "build constraints exclude all Go files".
       run: |
         dirs=$(printf '%s\n' {staged_files} | xargs -n1 dirname | sort -u | sed 's|^|./|')
         if [ -z "$dirs" ]; then exit 0; fi
         # shellcheck disable=SC2086 # word-split intended
-        golangci-lint run --fast-only --new-from-rev=HEAD $dirs
+        golangci-lint run --fast-only --new-from-rev=HEAD --build-tags=e2e $dirs
 
     secret-scan:
       run: gitleaks protect --staged --redact --config .gitleaks.toml
