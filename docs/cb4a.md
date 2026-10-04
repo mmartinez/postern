@@ -170,11 +170,16 @@ written down where someone evaluating postern will find them.
    reflects the injected credential back used to hand it straight to the agent,
    because responses were streamed unmodified. `internal/proxy/scrub.go` now
    strips the injected credential out of the response on the way back — header
-   values carrying it are dropped whole, body occurrences are replaced with
-   `<redacted>` by a streaming transform that preserves incremental delivery
-   and never buffers — with `proxy.scrub_responses` as the opt-out. `HEAD` and
+   values carrying it are dropped whole, trailer values carrying it are dropped
+   at end of stream, and body occurrences are replaced with `<redacted>` by a
+   streaming transform that preserves incremental delivery and never buffers. A
+   response still compressed in an encoding the transport did not decode is
+   refused with a `502` rather than forwarded, because the credential is
+   unreachable inside it. `proxy.scrub_responses` is the opt-out. `HEAD` and
    `101` upgrade responses are deliberately excluded, because wrapping either
-   breaks framing rather than protecting anything. That is the whole of
+   breaks framing rather than protecting anything — so the frames of a `101`
+   tunnel remain unscrubbed, which is the one residual reflection path, and postern
+   now logs it rather than passing over it in silence. That is the whole of
    Model A's "filter every response" strength; filtering by anything other than
    the brokered credential is not implemented and is not claimed.
 8. **No agent authentication.** Model A's first sentence says the broker
