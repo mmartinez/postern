@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/zlib"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -437,4 +439,162 @@ func TestScrubResponse_UnderstatedContentLengthNeitherTruncatesNorSkips(t *testi
 	require.NotContains(t, got, "sk-secret-1234", "the undeclared tail went out unscanned")
 	require.Contains(t, got, "harmful tail that was never declared",
 		"bytes beyond the declared length were dropped")
+}
+
+// compressZlib returns s as a zlib stream: a real encoding an upstream can
+// choose that Go's transport never decodes on our behalf.
+func compressZlib(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	_, err := w.Write([]byte(s))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+// postern advertises gzip and the transport decodes exactly that, so the
+// scrubber usually sees plaintext. Every other encoding arrives still
+// compressed — and so does gzip itself on a ranged request, where Go skips
+// transparent decoding outright. A body the scrubber provably cannot inspect
+// must fail closed: forwarded, the agent recovers the credential the moment it
+// decompresses.
+func TestScrubResponse_FailsClosedOnABodyItCannotInspect(t *testing.T) {
+	t.Parallel()
+
+	plaintext := `{"token":"` + testCredential + `"}`
+
+	for _, tc := range []struct {
+		name, encoding string
+		wantStatus     int
+	}{
+		{name: "deflate", encoding: "deflate", wantStatus: http.StatusBadGateway},
+		{name: "brotli", encoding: "br", wantStatus: http.StatusBadGateway},
+		{name: "registered gzip alias", encoding: "x-gzip", wantStatus: http.StatusBadGateway},
+		{name: "stacked gzip", encoding: "gzip, gzip", wantStatus: http.StatusBadGateway},
+		{name: "identity is not an encoding we must refuse", encoding: "identity", wantStatus: http.StatusOK},
+		{name: "no encoding at all", encoding: "", wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The refusals carry a genuinely compressed body; the two
+			// pass-through cases carry the plaintext one, so they prove the
+			// guard does not over-block and that scrubbing still happens.
+			body := []byte(plaintext)
+			if tc.wantStatus == http.StatusBadGateway {
+				body = compressZlib(t, plaintext)
+			}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Request:    requestWithCredential(http.MethodGet, testCredential),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}
+			if tc.encoding != "" {
+				resp.Header.Set("Content-Encoding", tc.encoding)
+			}
+
+			got := scrubResponse(resp, discardLogger())
+			defer func() { _ = got.Body.Close() }()
+
+			require.Equal(t, tc.wantStatus, got.StatusCode)
+			delivered := readAll(t, got.Body)
+			require.NotContains(t, delivered, testCredential)
+			if tc.wantStatus == http.StatusOK {
+				require.Contains(t, delivered, scrubbedMarker,
+					"an inspectable body must still be scrubbed, not merely passed through")
+			}
+		})
+	}
+}
+
+// A gzip body the transport already decoded is plaintext by the time the
+// scrubber runs, so the guard must not refuse it: resp.Uncompressed is the
+// transport's own record that it inflated the body.
+func TestScrubResponse_AllowsAnEncodingTheTransportAlreadyDecoded(t *testing.T) {
+	t.Parallel()
+
+	plaintext := `{"token":"` + testCredential + `"}`
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		Request:       requestWithCredential(http.MethodGet, testCredential),
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		Body:          io.NopCloser(strings.NewReader(plaintext)),
+		ContentLength: int64(len(plaintext)),
+		Uncompressed:  true,
+	}
+	// A transport that decoded the body but left the header behind must not be
+	// treated as an uninspectable body.
+	resp.Header.Set("Content-Encoding", "gzip")
+
+	got := scrubResponse(resp, discardLogger())
+	defer func() { _ = got.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, got.StatusCode, "a body the transport decoded is inspectable")
+	require.Equal(t, `{"token":"`+scrubbedMarker+`"}`, readAll(t, got.Body))
+}
+
+// The encoding gate must read Content-Encoding before the header scrubber can
+// delete it. scrubHeaderValues drops a header whole when its value carries the
+// credential, so an upstream that folds the credential into its own
+// Content-Encoding value would have that header removed first — leaving the
+// gate to see no encoding at all and forward a compressed body it cannot
+// inspect.
+func TestScrubResponse_EncodingGateSurvivesHeaderScrubbing(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Request:    requestWithCredential(http.MethodGet, testCredential),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(compressZlib(t, `{"token":"`+testCredential+`"}`))),
+	}
+	resp.Header.Set("Content-Encoding", "br; token="+testCredential)
+
+	got := scrubResponse(resp, discardLogger())
+	defer func() { _ = got.Body.Close() }()
+
+	require.Equal(t, http.StatusBadGateway, got.StatusCode,
+		"the encoding gate was defeated by header scrubbing, so a compressed body went out uninspected")
+}
+
+// The Content-Encoding value is upstream-controlled and can carry the
+// credential itself, so the refusal warning must never echo it. Reporting only
+// a recognised coding name is what keeps the secret out of the log — this
+// project forbids writing a credential to any log, stdout, or file, and the
+// ordering regression test above deliberately puts one in this exact header.
+func TestScrubResponse_EncodingWarningNeverLogsTheCredential(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, encoding, wantLabel string
+	}{
+		{name: "credential is the whole value", encoding: testCredential, wantLabel: "other"},
+		{name: "credential is a coding parameter", encoding: "deflate; token=" + testCredential, wantLabel: "deflate"},
+		{name: "credential ahead of a parameter", encoding: testCredential + "; q=1", wantLabel: "other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			logger, logs := captureLogger()
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Request:    requestWithCredential(http.MethodGet, testCredential),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(compressZlib(t, "harmless"))),
+			}
+			resp.Header.Set("Content-Encoding", tc.encoding)
+
+			got := scrubResponse(resp, logger)
+			defer func() { _ = got.Body.Close() }()
+
+			require.Equal(t, http.StatusBadGateway, got.StatusCode)
+			out := logs.String()
+			require.Contains(t, out, "refusing an upstream response",
+				"the refusal must still be logged; silence would hide the refusal from operators")
+			require.Contains(t, out, "content_encoding="+tc.wantLabel)
+			require.NotContains(t, out, testCredential, "the credential reached the log")
+		})
+	}
 }

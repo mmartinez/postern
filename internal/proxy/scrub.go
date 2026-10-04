@@ -190,6 +190,38 @@ func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 	// as exposed as one echoed in the body, and it arrives in the same escaped
 	// forms.
 	needles := credentialNeedles(creds)
+
+	// A HEAD response, a 101 upgrade and a bodyless response are left alone:
+	// wrapping those breaks framing or the tunnel rather than protecting
+	// anything.
+	scrubbable := bodyIsScrubbable(resp)
+
+	// The encoding gate is decided before this function mutates a single
+	// header. It reads Content-Encoding, which scrubHeaderValues below deletes
+	// whole when the value carries the credential — so an upstream that folds
+	// the credential into its own Content-Encoding value would have that header
+	// removed first, and the gate would then see no encoding at all and forward
+	// a compressed body it cannot inspect.
+	//
+	// The broker hook drops Accept-Encoding on brokered requests, so this
+	// transport negotiates and transparently decodes gzip itself, which is what
+	// leaves the scrubber plaintext. Anything still carrying a Content-Encoding
+	// at this point reached us compressed with the credential sealed inside,
+	// where no byte matcher can reach it: deflate, br, the x-gzip alias, a
+	// stacked "gzip, gzip", and anything at all on a ranged request, where Go
+	// skips transparent decoding outright. Forwarding that hands the agent the
+	// credential the moment it decompresses, so fail closed with the same
+	// generic 502 every other refusal already uses.
+	encoding := resp.Header.Get("Content-Encoding")
+	if scrubbable && !resp.Uncompressed && encoding != "" && !strings.EqualFold(encoding, "identity") {
+		logger.Warn("refusing an upstream response the credential scrubber cannot inspect",
+			slog.String("host", hostOf(resp.Request)),
+			slog.String("content_encoding", encodingLabel(encoding)),
+		)
+		_ = resp.Body.Close()
+		return bad502(resp.Request)
+	}
+
 	scrubHeaderValues(resp.Header, needles)
 	// Go fills Response.Trailer in two stages: the keys arrive with the header
 	// block, the values only once the body reaches EOF. This pass takes
@@ -198,24 +230,16 @@ func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 	// when upstream declares the body over.
 	scrubHeaderValues(resp.Trailer, needles)
 
-	// A HEAD response, a 101 upgrade and a bodyless response are left alone:
-	// wrapping those breaks framing or the tunnel rather than protecting
-	// anything.
-	if bodyIsScrubbable(resp) {
+	if scrubbable {
 		resp.Body = newScrubber(resp.Body, needles, &resp.Trailer)
 		dropStaleBodyMetadata(resp)
-	}
-
-	// The broker hook drops Accept-Encoding on brokered requests so this
-	// transport negotiates (and transparently decodes) compression itself,
-	// leaving the scrubber plaintext. An upstream that ignored that and
-	// encoded anyway has put the credential inside a deflate stream no byte
-	// matcher can reach; say so loudly rather than let the scrubber look
-	// like it did its job.
-	if ce := resp.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
-		logger.Warn("upstream response is encoded; the credential scrubber cannot inspect it",
+	} else if resp.StatusCode == http.StatusSwitchingProtocols {
+		// The tunnel itself cannot be scanned — goproxy hijacks the connection
+		// and relays raw frames — and that is a recorded caveat. Say it on every
+		// one, so a brokered host that upgrades is never mistaken for a host
+		// postern inspected end to end.
+		logger.Warn("brokered request upgraded to a protocol tunnel; its frames are not scrubbed",
 			slog.String("host", hostOf(resp.Request)),
-			slog.String("content_encoding", ce),
 		)
 	}
 
@@ -287,6 +311,22 @@ func hostOf(req *http.Request) string {
 		return req.Host
 	}
 	return req.URL.Host
+}
+
+// encodingLabel names the coding an upstream used, for the refusal warning.
+// The Content-Encoding value is upstream-controlled and can carry the
+// credential itself, so it is never echoed: only a name on this fixed list is
+// reported and everything else collapses to "other". That is what makes it
+// safe — no byte of the input reaches the log, whatever the upstream sends.
+func encodingLabel(encoding string) string {
+	coding, _, _ := strings.Cut(encoding, ";")
+	coding = strings.ToLower(strings.TrimSpace(coding))
+	switch coding {
+	case "gzip", "x-gzip", "deflate", "br", "zstd", "compress", "identity":
+		return coding
+	default:
+		return "other"
+	}
 }
 
 // scrubber wraps an upstream response body and replaces every occurrence of a

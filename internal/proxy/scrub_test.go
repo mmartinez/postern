@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -343,4 +345,28 @@ func TestScrubResponse_NilResponseIsSafe(t *testing.T) {
 	t.Parallel()
 
 	require.Nil(t, scrubResponse(nil, discardLogger())) //nolint:bodyclose // nil in, nil out
+}
+
+// syncBuffer collects log output without racing the scrubber.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogger returns a logger writing every level into a retrievable buffer.
+func captureLogger() (*slog.Logger, *syncBuffer) {
+	buf := &syncBuffer{}
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})), buf
 }
