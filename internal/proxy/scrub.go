@@ -51,6 +51,14 @@ func dropStaleBodyMetadata(resp *http.Response) {
 // that copy in the response. The escaped forms are what
 // broker's substitutePath and substituteQuery can emit, so they are the forms
 // worth carrying.
+//
+// Their hex casing is deliberately not pinned. Percent-decoding is
+// case-insensitive, so %2f and %2F decode to the same byte, and indexNeedle
+// matches the two digits behind a % in either case — covering an upstream that
+// re-encodes the path it was handed, and one that mixes casing digit by digit,
+// without carrying 2^n variants of every escaped needle. The raw credential is
+// still matched byte-for-byte, because a credential is case-sensitive and
+// SK-ANT-... is not the secret.
 func credentialNeedles(creds []string) [][]byte {
 	needles := make([][]byte, 0, len(creds)*3)
 	seen := make(map[string]struct{}, len(creds)*3)
@@ -70,6 +78,84 @@ func credentialNeedles(creds []string) [][]byte {
 		add(url.PathEscape(c))
 	}
 	return needles
+}
+
+// indexNeedle returns the offset of the first occurrence of needle in hay, or
+// -1 if there is none. A needle with no % in it — the raw credential, and every
+// credential built only from characters postern never escapes — takes the
+// assembly-optimised bytes.Index path unchanged.
+func indexNeedle(hay, needle []byte) int {
+	pct := bytes.IndexByte(needle, '%')
+	if pct < 0 {
+		return bytes.Index(hay, needle)
+	}
+	// Anchor the scan on the leading literal run: it must match byte for byte,
+	// and bytes.Index locates its occurrences fast, so the candidate set stays
+	// small instead of testing every offset in the body.
+	anchor := []byte{'%'}
+	if pct > 0 {
+		anchor = needle[:pct]
+	}
+	for off := 0; ; {
+		j := bytes.Index(hay[off:], anchor)
+		if j < 0 {
+			return -1
+		}
+		off += j
+		if equalNeedle(needle, hay[off:]) {
+			return off
+		}
+		off++
+	}
+}
+
+// equalNeedle reports whether needle occurs at the start of hay. Bytes must
+// match exactly, except the two hex digits behind a % in the needle, which
+// match in either ASCII case because percent-decoding ignores hex case. A byte
+// is foldable only while it sits inside the %HH group the needle itself
+// declares, so literal text after an escape is never case-folded.
+func equalNeedle(needle, hay []byte) bool {
+	if len(needle) > len(hay) {
+		return false
+	}
+	escaped := 0 // bytes left in the %HH group being matched
+	for i := range len(needle) {
+		if needle[i] == '%' {
+			escaped = 2
+			if hay[i] != '%' {
+				return false
+			}
+			continue
+		}
+		foldable := escaped > 0
+		if escaped > 0 {
+			escaped--
+		}
+		if needle[i] == hay[i] {
+			continue
+		}
+		if foldable && isHexLetter(needle[i]) && isHexLetter(hay[i]) &&
+			lowerHexDigit(needle[i]) == lowerHexDigit(hay[i]) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// isHexLetter reports whether c is a letter a-f or A-F. Digits 0-9 need no
+// folding, and anything else is literal text that must match exactly.
+func isHexLetter(c byte) bool {
+	return (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')
+}
+
+// lowerHexDigit maps an uppercase hex letter to lowercase and returns
+// everything else — digits, lowercase letters, non-hex bytes — untouched.
+func lowerHexDigit(c byte) byte {
+	if c >= 'A' && c <= 'F' {
+		return c + ('a' - 'A')
+	}
+	return c
 }
 
 // scrubResponse strips the credential the broker injected on this request out
@@ -116,7 +202,7 @@ func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 	// wrapping those breaks framing or the tunnel rather than protecting
 	// anything.
 	if bodyIsScrubbable(resp) {
-		resp.Body = newScrubber(resp.Body, needles, resp.Trailer)
+		resp.Body = newScrubber(resp.Body, needles, &resp.Trailer)
 		dropStaleBodyMetadata(resp)
 	}
 
@@ -187,7 +273,7 @@ func scrubHeaderValues(h http.Header, needles [][]byte) {
 // echoing a percent-encoded path or query carries the escaped form.
 func containsAnyNeedle(v string, needles [][]byte) bool {
 	for _, n := range needles {
-		if bytes.Contains([]byte(v), n) {
+		if indexNeedle([]byte(v), n) >= 0 {
 			return true
 		}
 	}
@@ -221,7 +307,8 @@ func hostOf(req *http.Request) string {
 //
 // The trailer map is scrubbed at the terminal read instead of on the way in,
 // because that is the only moment its values exist: Go fills them in the Read
-// that reports the end of the body.
+// that reports the end of the body. It is held as a pointer to the field for
+// the same reason — HTTP/2 may install a fresh map after the scrubber is built.
 type scrubber struct {
 	src     io.ReadCloser
 	needles [][]byte
@@ -234,9 +321,11 @@ type scrubber struct {
 	fill []byte
 	// ready is scrubbed bytes waiting for the caller to take them.
 	ready []byte
-	// trailer is the upstream response's trailer map, scrubbed once the body
-	// is over. nil when the caller has no trailers to protect.
-	trailer http.Header
+	// trailer points at the response's trailer map, read once the body is over
+	// rather than captured by value, because HTTP/2 can install a brand-new map
+	// into resp.Trailer after this scrubber was constructed. nil when the caller
+	// has no trailers to protect.
+	trailer *http.Header
 	// err is the sticky terminal error from src.
 	err error
 }
@@ -245,7 +334,7 @@ type scrubber struct {
 // scrubbedMarker. An empty needle set still streams, so the caller does not
 // need a separate pass-through type. trailer, when non-nil, is scrubbed at the
 // end of the stream.
-func newScrubber(src io.ReadCloser, needles [][]byte, trailer http.Header) *scrubber {
+func newScrubber(src io.ReadCloser, needles [][]byte, trailer *http.Header) *scrubber {
 	return &scrubber{
 		src:     src,
 		needles: needles,
@@ -284,7 +373,16 @@ func (s *scrubber) fillOnce() {
 		// This is the only moment the trailer values exist: Go fills them in
 		// the Read that reports the end of the body, and goproxy copies
 		// resp.Trailer to the agent only after the body has been drained.
-		scrubHeaderValues(s.trailer, s.needles)
+		//
+		// The field is read through the pointer rather than captured by value,
+		// because HTTP/2 installs a brand-new map into resp.Trailer when an
+		// upstream sends a trailer it never announced: copyTrailers does
+		// `if *t == nil { *t = make(http.Header) }` against &resp.Trailer. A
+		// snapshot taken when the scrubber was built would still be the old,
+		// empty map.
+		if s.trailer != nil {
+			scrubHeaderValues(*s.trailer, s.needles)
+		}
 		s.err = err
 		return
 	}
@@ -362,7 +460,7 @@ func replaceAll(dst, src []byte, needles [][]byte) (out []byte, lastCut int) {
 func nextMatch(src []byte, needles [][]byte, from int) (at, width int) {
 	at, width = -1, 0
 	for _, n := range needles {
-		i := bytes.Index(src[from:], n)
+		i := indexNeedle(src[from:], n)
 		if i < 0 {
 			continue
 		}
@@ -397,7 +495,7 @@ func partialSuffixLen(b []byte, needles [][]byte) int {
 	for k := min(longest, len(b)); k > 0; k-- {
 		suffix := b[len(b)-k:]
 		for _, n := range needles {
-			if len(n) > k && bytes.Equal(n[:k], suffix) {
+			if len(n) > k && equalNeedle(n[:k], suffix) {
 				return k
 			}
 		}

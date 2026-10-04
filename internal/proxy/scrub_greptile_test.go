@@ -122,6 +122,114 @@ func TestScrubResponse_ScrubsEscapedFormsOfTheCredential(t *testing.T) {
 	require.NotContains(t, got, url.QueryEscape(cred), "query-escaped credential survived")
 }
 
+// Percent-decoding is case-insensitive, so an upstream that re-encodes the
+// path it was handed can reflect %2f where postern sent %2F. The agent decodes
+// both to the same credential, so the lowercase rendering is just as exposed as
+// the one postern emits.
+func TestScrubResponse_ScrubsLowercaseEscapedFormsOfTheCredential(t *testing.T) {
+	t.Parallel()
+
+	cred := "sk+ant/api03=secret"
+	lower := "sk%2bant%2fapi03%3dsecret"
+	decoded, err := url.QueryUnescape(lower)
+	require.NoError(t, err)
+	require.Equal(t, cred, decoded,
+		"precondition: percent-decoding ignores hex case, so this is the same credential")
+	require.NotEqual(t, url.QueryEscape(cred), lower,
+		"precondition: the lowercase rendering is not the needle already carried")
+
+	body := "url=https://x/v1?k=" + lower + "&ok=1"
+	resp := &http.Response{
+		Request:       requestWithCredential(http.MethodGet, cred),
+		Header:        http.Header{"Content-Type": []string{"text/plain"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+
+	scrubbed := scrubResponse(resp, discardLogger())
+	defer func() { _ = scrubbed.Body.Close() }()
+	got := readAll(t, scrubbed.Body)
+
+	require.NotContains(t, got, lower, "a lowercase percent-escaped credential survived")
+	require.Contains(t, got, "&ok=1", "the surrounding response was mangled")
+}
+
+// The case-insensitive hex match has to survive a read boundary, not just work
+// inside one buffer. partialSuffixLen is what decides this: if it compares the
+// trailing bytes case-sensitively, a body ending in %2b is emitted immediately,
+// the rest arrives on the next read, and the agent reassembles the credential
+// out of two halves that each looked harmless.
+func TestScrubber_MixedCaseEscapeSplitAcrossReadsIsCaught(t *testing.T) {
+	t.Parallel()
+
+	cred := "sk+ant/api03=secret"
+	mixed := "sk%2bant%2Fapi03%3dsecret"
+	split := strings.Index(mixed, "%2F") + 2 // land inside an escape group
+	require.Equal(t, "sk%2bant%2", mixed[:split], "precondition: the split lands mid-escape")
+
+	r := io.MultiReader(
+		strings.NewReader("head "+mixed[:split]),
+		strings.NewReader(mixed[split:]+" tail"),
+	)
+	s := newScrubber(io.NopCloser(r), credentialNeedles([]string{cred}), nil)
+
+	got := readAll(t, s)
+	require.NotContains(t, got, mixed, "a mixed-case escaped credential survived")
+	require.Contains(t, got, "head ", "the response before the credential was mangled")
+	require.Contains(t, got, " tail", "the response after the credential was mangled")
+}
+
+// The raw credential is case-sensitive and must stay that way: SK-ANT-... is
+// not the secret, and redacting it would corrupt an honest response.
+func TestScrubber_RawCredentialIsMatchedCaseSensitively(t *testing.T) {
+	t.Parallel()
+
+	upper := strings.ToUpper(testCredential)
+	require.NotEqual(t, testCredential, upper)
+
+	s := newScrubber(
+		io.NopCloser(strings.NewReader("token="+upper)),
+		credentialNeedles([]string{testCredential}),
+		nil,
+	)
+	require.Equal(t, "token="+upper, readAll(t, s),
+		"a credential differing only in case was redacted, which corrupts the response")
+}
+
+// HTTP/2 stores a pointer to resp.Trailer in the transport, and for a trailer
+// the upstream never announced it installs a brand-new map at end of stream:
+// copyTrailers does `if *t == nil { *t = make(http.Header) }`. HTTP/2 allows
+// unannounced trailers where HTTP/1.1 does not, so a real h2 server can
+// produce this shape; Go's own test server announces every trailer and so
+// cannot, which is why the assignment is reproduced here directly. A scrubber
+// that captured resp.Trailer by value would still hold the nil map it saw when
+// the body was wrapped, and the credential would reach the agent intact.
+func TestScrubResponse_ScrubsTrailerMapInstalledAfterTheBodyWasWrapped(t *testing.T) {
+	t.Parallel()
+
+	body := "harmless body"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Request:    requestWithCredential(http.MethodGet, testCredential),
+		Header:     http.Header{"Content-Type": []string{"text/plain"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Trailer:    nil, // unannounced HTTP/2 trailers leave this nil until EOF
+	}
+
+	scrubbed := scrubResponse(resp, discardLogger())
+	defer func() { _ = scrubbed.Body.Close() }()
+
+	// Exactly what http2's copyTrailers does against &resp.Trailer.
+	if scrubbed.Trailer == nil {
+		scrubbed.Trailer = make(http.Header)
+	}
+	scrubbed.Trailer.Set("X-Audit", "key="+testCredential)
+
+	require.Equal(t, body, readAll(t, scrubbed.Body))
+	require.Empty(t, scrubbed.Trailer.Get("X-Audit"),
+		"the credential survived in a trailer installed after the body was wrapped")
+}
+
 // Greptile P2: redaction changes the body's length, so every piece of metadata
 // describing the pre-redaction body is now wrong. Content-Length is already
 // dropped; the rest must go too, or a client assembling ranges or verifying a
