@@ -68,10 +68,15 @@ func installInnerGuard(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 		// an api.example:443 tunnel and collect its credential. goproxy
 		// v1.9.2+ builds origin-form URLs from the inner Host header, which
 		// clients send without the default port, so a missing port is the
-		// MITM scheme's :443 and nothing else.
+		// scheme's default: the port goproxy will actually dial. A plaintext
+		// request inside a :443 tunnel is scheme http and dials :80.
 		reqHost := strings.ToLower(req.URL.Host)
 		if req.URL.Port() == "" {
-			reqHost = net.JoinHostPort(strings.ToLower(req.URL.Hostname()), "443")
+			port := "443"
+			if req.URL.Scheme == "http" {
+				port = "80"
+			}
+			reqHost = net.JoinHostPort(strings.ToLower(req.URL.Hostname()), port)
 		}
 		if reqHost != authority {
 			logger.Info("rejecting non-brokered inner host",
