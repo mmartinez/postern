@@ -3,6 +3,7 @@ package proxy
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -50,7 +51,7 @@ func TestScrubber_SelfOverlappingNeedleIsNotSplitAcrossBoundary(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newScrubber(io.NopCloser(strings.NewReader(tc.body)), [][]byte{[]byte(tc.needle)})
+			s := newScrubber(io.NopCloser(strings.NewReader(tc.body)), [][]byte{[]byte(tc.needle)}, nil)
 			got := readAll(t, s)
 			require.NotContains(t, got, tc.needle,
 				"the credential survived because it was split across the emit boundary")
@@ -63,7 +64,7 @@ func TestScrubber_SelfOverlappingNeedleIsNotSplitAcrossBoundary(t *testing.T) {
 func TestScrubber_SelfOverlappingNeedleByteAtATime(t *testing.T) {
 	t.Parallel()
 
-	s := newScrubber(io.NopCloser(&oneByteReader{data: []byte("abab")}), [][]byte{[]byte("abab")})
+	s := newScrubber(io.NopCloser(&oneByteReader{data: []byte("abab")}), [][]byte{[]byte("abab")}, nil)
 	got := readAll(t, s)
 	require.NotContains(t, got, "abab")
 }
@@ -87,7 +88,7 @@ func TestScrubber_TerminalReadReturningDataAndEOFTogether(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newScrubber(&eofWithDataReader{data: []byte(tc.body)}, [][]byte{[]byte(tc.needle)})
+			s := newScrubber(&eofWithDataReader{data: []byte(tc.body)}, [][]byte{[]byte(tc.needle)}, nil)
 			got := readAll(t, s)
 			require.Equal(t, tc.want, got, "bytes were dropped or reordered by the terminal read")
 			require.NotContains(t, got, tc.needle)
@@ -150,22 +151,23 @@ func TestScrubResponse_DropsMetadataThatDescribesTheUnredactedBody(t *testing.T)
 	}
 }
 
-// endlessReader emits an unending run of one byte, standing in for a
-// long-lived stream (an event feed, a watch) that never ends.
-type endlessReader struct {
+// repeatingPrefixReader serves one long run of a single byte and then io.EOF,
+// counting its reads. It stands in for a long-lived stream — an event feed, a
+// watch — whose every byte is a possible credential prefix. It ends after a
+// fixed byte count on purpose: a reader that never returns EOF turns a
+// reintroduced stall into a hung suite instead of a failing test.
+type repeatingPrefixReader struct {
 	b     byte
-	chunk int
 	left  int
+	reads int
 }
 
-func (r *endlessReader) Read(p []byte) (int, error) {
+func (r *repeatingPrefixReader) Read(p []byte) (int, error) {
+	r.reads++
 	if r.left == 0 {
-		r.left = r.chunk
+		return 0, io.EOF
 	}
-	n := len(p)
-	if n > r.left {
-		n = r.left
-	}
+	n := min(len(p), r.left)
 	for i := range n {
 		p[i] = r.b
 	}
@@ -173,37 +175,119 @@ func (r *endlessReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (r *endlessReader) Close() error { return nil }
+func (r *repeatingPrefixReader) Close() error { return nil }
 
-// A body whose bytes keep repeating a credential prefix must not stall. An
-// earlier version walked the withhold boundary back whenever the bytes before
-// it could start an occurrence; against an endless run of "a" with credential
-// "aa" that never terminates, so nothing was ever emitted and the fill grew
-// for the life of the stream.
-func TestScrubber_RepeatingCredentialPrefixDoesNotStallOrGrowUnbounded(t *testing.T) {
+// A body whose bytes keep repeating a credential PREFIX must not stall and
+// must not be buffered. An earlier version walked the withhold boundary back
+// whenever the bytes before it could start an occurrence; against a run of "a"
+// with credential "ab", every trailing "a" is a possible prefix and no
+// complete occurrence ever exists, so that version emitted nothing, never
+// terminated its scan, and grew the fill for the life of the stream.
+func TestScrubber_RepeatingCredentialPrefixDoesNotStallOrBuffer(t *testing.T) {
 	t.Parallel()
 
-	s := newScrubber(&endlessReader{b: 'a', chunk: 512}, [][]byte{[]byte("aa")})
+	const needle = "ab"
+	src := &repeatingPrefixReader{b: 'a', left: 4 * scrubChunkSize}
+	s := newScrubber(src, [][]byte{[]byte(needle)}, nil)
 
 	first := make([]byte, 4096)
 	n, err := s.Read(first)
 	require.NoError(t, err)
 	require.Positive(t, n, "a stream of repeated credential prefixes must still deliver data")
-	require.LessOrEqual(t, len(s.fill), len("aa")+8,
-		"the scrubber retained far more than one credential length; it is buffering the stream")
-
-	for range 64 {
-		if _, err := s.Read(first); err != nil {
-			t.Fatalf("read failed partway: %v", err)
-		}
-	}
-	require.LessOrEqual(t, len(s.fill), len("aa")+8,
-		"retained state must stay bounded no matter how long the response runs")
+	require.Equal(t, 1, src.reads,
+		"the first read had to drain the stream before it could answer; upstream's pace is the agent's pace")
+	require.LessOrEqual(t, len(s.fill), len(needle),
+		"the scrubber retained more than one credential length, so it is buffering the stream")
 }
 
-// Redaction that never happens must not cost an honest response its metadata.
-// For a body small enough to settle up front the decision is exact.
-func TestScrubResponse_UnchangedBodyKeepsItsMetadata(t *testing.T) {
+// countingReader counts Read calls so a test can tell whether a body was
+// drained before the response was handed to the agent.
+type countingReader struct {
+	data  []byte
+	off   int
+	reads int
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	r.reads++
+	if r.off >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.off:])
+	r.off += n
+	return n, nil
+}
+
+func (r *countingReader) Close() error { return nil }
+
+// Greptile P1: a small fixed-length response must not have its body drained
+// before the response is handed on. An earlier version read any response
+// declaring 64 KiB or less in full so it could decide the metadata exactly,
+// which means an upstream streaming 5 KB incrementally delivers neither
+// headers nor the first chunk until every declared byte has arrived — the
+// stall this scrubber exists to prevent.
+func TestScrubResponse_DoesNotDrainSmallFixedLengthBodyBeforeReturning(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Repeat("x", 5<<10)
+	src := &countingReader{data: []byte(body)}
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		Request:       requestWithCredential(http.MethodGet, testCredential),
+		Header:        http.Header{"Content-Type": []string{"text/plain"}},
+		Body:          src,
+		ContentLength: int64(len(body)),
+	}
+
+	scrubbed := scrubResponse(resp, discardLogger())
+	defer func() { _ = scrubbed.Body.Close() }()
+
+	require.Zero(t, src.reads,
+		"scrubResponse read the upstream body before returning; a fixed-length response would stall the exchange")
+	require.Equal(t, body, readAll(t, scrubbed.Body),
+		"an unchanged body must still reach the agent byte-for-byte")
+}
+
+// A credential reflected in a wire trailer must not reach the agent. Go fills
+// Response.Trailer in two stages — the keys arrive with the header block, the
+// values only once the body hits EOF — so a scrub that runs before the body is
+// read sees an empty map and the trailer goes out carrying the credential.
+// This drives a real chunked response over a real transport, because a
+// hand-built response with a pre-populated Trailer map cannot reproduce the
+// timing that turns this into a leak.
+func TestScrubResponse_ScrubsCredentialFromWireTrailer(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Trailer", "X-Audit")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "harmless body")
+		w.Header().Set("X-Audit", "key="+testCredential)
+	}))
+	defer upstream.Close()
+
+	resp, err := http.Get(upstream.URL)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	resp.Request = requestWithCredential(http.MethodGet, testCredential)
+	require.Empty(t, resp.Trailer.Get("X-Audit"),
+		"precondition: trailer values arrive only at EOF, which is why an early scrub finds nothing to delete")
+
+	scrubbed := scrubResponse(resp, discardLogger())
+	defer func() { _ = scrubbed.Body.Close() }()
+	require.Equal(t, "harmless body", readAll(t, scrubbed.Body))
+
+	require.Empty(t, scrubbed.Trailer.Get("X-Audit"),
+		"the credential survived in a trailer the agent receives after the body")
+}
+
+// A response that never echoes the credential must reach the agent exactly as
+// upstream sent it. The scrubber cannot know whether it will redact anything
+// until the body has started flowing, so it commits to streaming and drops the
+// validators up front rather than risk a Content-Range or digest describing
+// bytes it is about to rewrite. Losing a validator is the accepted cost; a
+// false one is a framing bug.
+func TestScrubResponse_UnchangedBodyIsDeliveredByteForByte(t *testing.T) {
 	t.Parallel()
 
 	body := "a perfectly ordinary json body with nothing secret in it"
@@ -215,22 +299,17 @@ func TestScrubResponse_UnchangedBodyKeepsItsMetadata(t *testing.T) {
 		Body:          io.NopCloser(strings.NewReader(body)),
 		ContentLength: int64(len(body)),
 	}
-	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
-	resp.Header.Set("Content-Range", "bytes 0-"+strconv.Itoa(len(body)-1)+"/1024")
-	resp.Header.Set("ETag", `"v1"`)
 
 	scrubbed := scrubResponse(resp, discardLogger())
 	defer func() { _ = scrubbed.Body.Close() }()
 
 	require.Equal(t, body, readAll(t, scrubbed.Body), "an unchanged body must pass through byte-for-byte")
-	require.Equal(t, `"v1"`, resp.Header.Get("ETag"), "nothing was redacted, so the validator is still true")
-	require.NotEmpty(t, resp.Header.Get("Content-Range"), "nothing was redacted, so the range still describes the body")
 }
 
 // A response that under-declares its Content-Length must not be truncated, and
-// must not have its unscanned tail handed to the agent. Content-Length is a
-// hint; reading exactly that many bytes would drop the rest and would only
-// have scrubbed the part it read.
+// must not have its unscanned tail handed to the agent. An upstream-declared
+// length is never a bound: the body streams to EOF, so the undeclared tail is
+// both delivered and scanned.
 func TestScrubResponse_UnderstatedContentLengthNeitherTruncatesNorSkips(t *testing.T) {
 	t.Parallel()
 

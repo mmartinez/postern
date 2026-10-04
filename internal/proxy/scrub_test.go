@@ -15,8 +15,10 @@ import (
 
 const testCredential = "sk-ant-api03-SUPERSECRET"
 
-// testNeedles is testCredential in the byte-slice form the scrubber scans for.
-var testNeedles = [][]byte{[]byte(testCredential)}
+// testNeedles is testCredential in the byte-slice form the scrubber scans
+// for. It is a function rather than a package-level var because a mutable
+// global outside main is banned by the project rules.
+func testNeedles() [][]byte { return [][]byte{[]byte(testCredential)} }
 
 // oneByteReader hands out its payload one byte per Read, so a credential can
 // only be found by a scrubber that carries a partial match across reads.
@@ -136,7 +138,7 @@ func TestScrubber_RemovesCredential(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newScrubber(io.NopCloser(strings.NewReader(tc.in)), testNeedles)
+			s := newScrubber(io.NopCloser(strings.NewReader(tc.in)), testNeedles(), nil)
 			require.Equal(t, tc.want, readAll(t, s))
 		})
 	}
@@ -154,7 +156,7 @@ func TestScrubber_CredentialSpanningReadBoundary(t *testing.T) {
 
 	for split := 0; split <= len(payload); split++ {
 		r := io.MultiReader(strings.NewReader(payload[:split]), strings.NewReader(payload[split:]))
-		s := newScrubber(io.NopCloser(r), testNeedles)
+		s := newScrubber(io.NopCloser(r), testNeedles(), nil)
 		got := readAll(t, s)
 		require.NotContains(t, got, testCredential, "split at %d leaked the credential", split)
 		if split == len(payload) {
@@ -163,7 +165,7 @@ func TestScrubber_CredentialSpanningReadBoundary(t *testing.T) {
 		require.Equal(t, want, got, "split at %d", split)
 	}
 
-	require.Equal(t, want, readAll(t, newScrubber(io.NopCloser(strings.NewReader(payload)), testNeedles)))
+	require.Equal(t, want, readAll(t, newScrubber(io.NopCloser(strings.NewReader(payload)), testNeedles(), nil)))
 }
 
 // TestScrubber_ByteAtATimeBoundary is the same invariant under the most
@@ -172,7 +174,7 @@ func TestScrubber_CredentialSpanningReadBoundary(t *testing.T) {
 func TestScrubber_ByteAtATimeBoundary(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, "a"+scrubbedMarker+"b", readAll(t, newScrubber(io.NopCloser(&oneByteReader{data: []byte("a" + testCredential + "b")}), testNeedles)))
+	require.Equal(t, "a"+scrubbedMarker+"b", readAll(t, newScrubber(io.NopCloser(&oneByteReader{data: []byte("a" + testCredential + "b")}), testNeedles(), nil)))
 }
 
 // TestScrubber_EmitsWithoutWaitingForMoreUpstreamBytes pins the streaming
@@ -185,7 +187,7 @@ func TestScrubber_EmitsWithoutWaitingForMoreUpstreamBytes(t *testing.T) {
 	t.Parallel()
 
 	src := &erroringReader{payload: []byte("data: chunk-0\n\n")}
-	s := newScrubber(io.NopCloser(src), testNeedles)
+	s := newScrubber(io.NopCloser(src), testNeedles(), nil)
 
 	buf := make([]byte, 64)
 	n, err := s.Read(buf)
@@ -210,20 +212,20 @@ func TestScrubber_HoldsBackOnlyAPartialNeedlePrefix(t *testing.T) {
 	// needle never completes, so the withheld bytes are released verbatim
 	// rather than dropped. "sk-ant" was never a credential.
 	src := &chunkReader{data: []byte("data: sk-ant"), chunk: 11}
-	require.Equal(t, "data: sk-ant", readAll(t, newScrubber(io.NopCloser(src), testNeedles)))
+	require.Equal(t, "data: sk-ant", readAll(t, newScrubber(io.NopCloser(src), testNeedles(), nil)))
 }
 
 func TestScrubber_EmptyNeedlesStreamUntouched(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, "payload", readAll(t, newScrubber(io.NopCloser(strings.NewReader("payload")), nil)))
+	require.Equal(t, "payload", readAll(t, newScrubber(io.NopCloser(strings.NewReader("payload")), nil, nil)))
 }
 
 func TestScrubber_PropagatesUpstreamError(t *testing.T) {
 	t.Parallel()
 
 	want := errors.New("upstream read failed")
-	s := newScrubber(io.NopCloser(errReader{err: want}), testNeedles)
+	s := newScrubber(io.NopCloser(errReader{err: want}), testNeedles(), nil)
 	_, err := io.ReadAll(s)
 	require.ErrorIs(t, err, want)
 }
@@ -236,7 +238,7 @@ func TestScrubber_CloseClosesUpstream(t *testing.T) {
 	t.Parallel()
 
 	up := &trackingCloser{Reader: strings.NewReader("x")}
-	require.NoError(t, newScrubber(up, testNeedles).Close())
+	require.NoError(t, newScrubber(up, testNeedles(), nil).Close())
 	require.True(t, up.closed)
 }
 

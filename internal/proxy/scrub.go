@@ -26,12 +26,6 @@ const scrubChunkSize = 32 << 10
 // operator explicitly pointed it at false.
 func scrubEnabled(cfg *bool) bool { return cfg == nil || *cfg }
 
-// maxScrubBufferedBody is the largest response postern will read into memory to
-// decide whether redaction actually happened. Small enough that no realistic
-// API response feels the latency, large enough to cover the JSON and ranged
-// responses where keeping the metadata matters. Anything bigger streams.
-const maxScrubBufferedBody = 64 << 10
-
 // dropStaleBodyMetadata removes the headers that describe the body as it
 // arrived upstream. Once redaction has rewritten that body they all describe
 // something the agent will never receive: a length it is not, a byte range
@@ -48,17 +42,6 @@ func dropStaleBodyMetadata(resp *http.Response) {
 		resp.Header.Del(h)
 	}
 }
-
-// rechain puts already-read bytes back in front of a body that is still
-// streaming, and keeps the original body's Close. Needed because io.MultiReader
-// is only an io.Reader, and a scrubber must stay an io.ReadCloser so the
-// response can still be closed.
-type rechain struct {
-	io.Reader
-	closer io.Closer
-}
-
-func (r rechain) Close() error { return r.closer.Close() }
 
 // credentialNeedles builds the byte patterns that must never reach the agent.
 //
@@ -91,16 +74,23 @@ func credentialNeedles(creds []string) [][]byte {
 
 // scrubResponse strips the credential the broker injected on this request out
 // of the upstream response, so an upstream that reflects the credential back —
-// in a Set-Cookie, in a JSON error body, in an SSE frame — cannot hand it to
-// the agent.
+// in a Set-Cookie, in a JSON error body, in an SSE frame, in a trailer — cannot
+// hand it to the agent.
 //
 // It returns resp unchanged when the broker injected no credential, which is
 // the passthrough case: no scan, no allocation, no new reader. That is why the
 // credential hand-off is a request-context value rather than a filter the
 // broker installs unconditionally.
 //
-// The body is scrubbed by a streaming transform, never by buffering: SSE and
-// chunked responses keep their incremental delivery and their flushes.
+// The body is scrubbed by a streaming transform and never buffered. Anything
+// else turns a trickling upstream into a stalled agent: an earlier version
+// read small fixed-length responses whole so the metadata decision could be
+// exact, and an upstream sending 5 KB incrementally then delivered neither
+// headers nor a first chunk until every declared byte had arrived. The price
+// is that validators are dropped before anyone knows whether redaction will
+// happen — a response that echoes nothing loses an ETag it could have kept.
+// A dropped validator is recoverable; a Content-Range or digest that no
+// longer describes the delivered bytes is not.
 func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 	if resp == nil || resp.Request == nil {
 		return resp
@@ -115,47 +105,18 @@ func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 	// forms.
 	needles := credentialNeedles(creds)
 	scrubHeaderValues(resp.Header, needles)
+	// Go fills Response.Trailer in two stages: the keys arrive with the header
+	// block, the values only once the body reaches EOF. This pass takes
+	// whatever is already there — which for the shapes whose body is never
+	// wrapped is all there ever is — and the scrubber takes the real values
+	// when upstream declares the body over.
 	scrubHeaderValues(resp.Trailer, needles)
 
-	switch {
-	case !bodyIsScrubbable(resp):
-		// Nothing to decide: HEAD, 101, or a body that is not ours to wrap.
-	case resp.ContentLength >= 0 && resp.ContentLength <= maxScrubBufferedBody:
-		// A body that claims to be small enough to settle up front. Reading it
-		// costs one bounded buffer, never the whole response, and lets the
-		// metadata decision be exact: a response that carried no credential
-		// keeps its length, ranges and validators, because nothing about them
-		// became untrue.
-		//
-		// Content-Length is a hint here, never a bound. Reading exactly that
-		// many bytes would truncate a response that under-declares its length,
-		// and — worse — would hand the agent a body that was never scanned for
-		// the credential. Read to the cap instead and decide from what actually
-		// arrived.
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxScrubBufferedBody+1))
-		if err != nil || len(raw) > maxScrubBufferedBody {
-			// Larger than the cap, or the read failed: put back what we took and
-			// stream, dropping the metadata because we cannot know yet.
-			resp.Body = newScrubber(rechain{io.MultiReader(bytes.NewReader(raw), resp.Body), resp.Body}, needles)
-			dropStaleBodyMetadata(resp)
-			break
-		}
-		_ = resp.Body.Close()
-		out, _ := replaceAll(nil, raw, needles)
-		if len(out) == len(raw) && bytes.Equal(out, raw) {
-			resp.Body = io.NopCloser(bytes.NewReader(raw))
-			break
-		}
-		resp.Body = io.NopCloser(bytes.NewReader(out))
-		resp.ContentLength = int64(len(out))
-		dropStaleBodyMetadata(resp)
-	default:
-		// Streamed or chunked: the body has to start before anything is known
-		// about it, so the metadata is dropped up front. Redaction may not
-		// happen, and the agent loses a validator it did not need to lose —
-		// the alternative is a Content-Range or digest describing bytes that
-		// were rewritten, which is worse.
-		resp.Body = newScrubber(resp.Body, needles)
+	// A HEAD response, a 101 upgrade and a bodyless response are left alone:
+	// wrapping those breaks framing or the tunnel rather than protecting
+	// anything.
+	if bodyIsScrubbable(resp) {
+		resp.Body = newScrubber(resp.Body, needles, resp.Trailer)
 		dropStaleBodyMetadata(resp)
 	}
 
@@ -257,6 +218,10 @@ func hostOf(req *http.Request) string {
 // would not be delivered until that many trailing bytes arrived.
 // partialSuffixLen withholds only what can actually still match, so the common
 // case retains nothing and each event goes out as soon as upstream sends it.
+//
+// The trailer map is scrubbed at the terminal read instead of on the way in,
+// because that is the only moment its values exist: Go fills them in the Read
+// that reports the end of the body.
 type scrubber struct {
 	src     io.ReadCloser
 	needles [][]byte
@@ -269,17 +234,22 @@ type scrubber struct {
 	fill []byte
 	// ready is scrubbed bytes waiting for the caller to take them.
 	ready []byte
+	// trailer is the upstream response's trailer map, scrubbed once the body
+	// is over. nil when the caller has no trailers to protect.
+	trailer http.Header
 	// err is the sticky terminal error from src.
 	err error
 }
 
 // newScrubber wraps src so every occurrence of a needle is replaced with
 // scrubbedMarker. An empty needle set still streams, so the caller does not
-// need a separate pass-through type.
-func newScrubber(src io.ReadCloser, needles [][]byte) *scrubber {
+// need a separate pass-through type. trailer, when non-nil, is scrubbed at the
+// end of the stream.
+func newScrubber(src io.ReadCloser, needles [][]byte, trailer http.Header) *scrubber {
 	return &scrubber{
 		src:     src,
 		needles: needles,
+		trailer: trailer,
 		buf:     make([]byte, scrubChunkSize),
 		ready:   make([]byte, 0, scrubChunkSize),
 	}
@@ -311,6 +281,10 @@ func (s *scrubber) fillOnce() {
 		// on one pass — a second pass would reset the ready buffer and discard
 		// whatever the data-bearing read already moved into it.
 		s.scrubFill(true)
+		// This is the only moment the trailer values exist: Go fills them in
+		// the Read that reports the end of the body, and goproxy copies
+		// resp.Trailer to the agent only after the body has been drained.
+		scrubHeaderValues(s.trailer, s.needles)
 		s.err = err
 		return
 	}
