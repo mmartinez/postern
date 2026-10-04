@@ -27,17 +27,17 @@ Scoping injection to declared path prefixes and methods shrinks the blast radius
 ### Evidence
 - internal/config/schema.go:258-278: `Rule` fields are `template`, `host`, `secret_ref`, `inject`/`injects`, `routes` only; there is no path or method field.
 - internal/broker/rule.go:165-190: `Match` is hostname-only (literal or single-label TLS-wildcard glob).
-- internal/broker/hook.go:29-48: the hook brokers every request whose host matched; no path/method stage exists between match and inject.
+- internal/broker/hook.go:29-68: the hook brokers every request whose host matched; no path/method stage exists between match and inject.
 - `grep -i 'paths|methods|PathPrefix'` over internal/config and internal/broker returns no matches.
-- Per-rule knob precedent already exists: `Inject.MaxBodyBytes` (internal/config/schema.go:302-305) and the hook honors it (internal/broker/hook.go:55-57), so schema, validator, and hook extension points are established.
+- Per-rule knob precedent already exists: `Inject.MaxBodyBytes` (internal/config/schema.go:342-345) and the hook honors it (internal/broker/hook.go:55-58), so schema, validator, and hook extension points are established.
 - Fail-closed behavior for scoped-out requests has an in-repo model: unknown/ambiguous route tokens 502 without calling the resolver (docs/ideas/placeholder-token-routing.md:58-59, implemented in `SelectRoute`, internal/broker/rule.go:53-89).
 
 ### Acceptance criteria
-- [x] A rule declaring `paths: ["/v1/messages"]` injects for requests under that prefix and returns the uniform fail-closed 502 (`failClosedBody`, internal/broker/hook.go:246) for every other path, with the resolver provably never called (test asserts resolver call count is 0 on the 502 path).
+- [x] A rule declaring `paths: ["/v1/messages"]` injects for requests under that prefix and returns the uniform fail-closed 502 (`failClosedBody`, internal/broker/hook.go:291-297) for every other path, with the resolver provably never called (test asserts resolver call count is 0 on the 502 path).
 - [x] A rule declaring `methods: [POST]` injects for POST and 502s GET with the resolver never called.
 - [x] A rule with no `paths`/`methods` behaves exactly as today: the full existing broker and config test suites pass without modification.
 - [x] `postern config validate` emits line-numbered lint errors for an empty `paths` or `methods` list and for a `paths` entry not starting with `/`.
-- [x] Scoped-out 502s are indistinguishable from other broker 502s on the wire (same `failClosedBody`, no stage-revealing headers), per the oracle-avoidance rule at internal/broker/hook.go:240-245.
+- [x] Scoped-out 502s are indistinguishable from other broker 502s on the wire (same `failClosedBody`, no stage-revealing headers), per the oracle-avoidance rule at internal/broker/hook.go:291-297.
 
 ## Proposal 2: Credstore-qualified secret refs (two accounts of one vendor)
 
@@ -78,9 +78,9 @@ Operators cannot distinguish "listening" from "serving with a validated credstor
 The boot-time credstore ping proves validity once (internal/cli/server.go:334-343); nothing re-exposes state after boot.
 
 ### Evidence
-- internal/runtime/runtime.go:35-83: `Options` carries no admin/status surface; the `Runtime` binds exactly one listener, the proxy (internal/runtime/runtime.go:87-101, 179-220).
+- internal/runtime/runtime.go:35-83: `Options` carries no admin/status surface; the `Runtime` binds exactly one listener, the proxy (internal/runtime/runtime.go:242).
 - docker-compose.yml:31-44: the example deployment has no `healthcheck` and no endpoint one could point one at; `restart: unless-stopped` is the only recovery mechanism.
-- The CLI surface is `ca`, `config`, `token`, `rules`, `server`, `bootstrap` only (docs/architecture.md:108); there is no `status` command and the proxy port answers proxied traffic, not probes.
+- The CLI surface is `ca`, `config`, `token`, `rules`, `server`, `bootstrap` only (docs/architecture.md:128); there is no `status` command and the proxy port answers proxied traffic, not probes.
 - Per-request summary logging exists (internal/logging/summary.go:20-34) but requires log scraping rather than a probe.
 
 ### Acceptance criteria
@@ -117,8 +117,8 @@ all (backlog #1), so it cannot currently observe any of them.
 > token **to the agent** for a **direct** call to the target. Postern's `oauth2`
 > provider mints a token and then **injects it into a request travelling
 > through postern** like any other credential — every consumer of
-> `broker.Resolver` is inside the MITM hook (`internal/broker/hook.go:161`,
-> `:228`) and the only agent-facing surface is `GET /healthz`
+> `broker.Resolver` is inside the MITM hook (`internal/broker/hook.go:185`,
+> `:252`) and the only agent-facing surface is `GET /healthz`
 > (`internal/runtime/admin.go:75-77`). It is the proxy-gateway model with a
 > shorter-lived credential, not the hand-it-to-the-agent one. It is also not
 > generic: `grant_type` accepts only `client_credentials` and `refresh_token`
@@ -196,7 +196,7 @@ content type), postern resolves the real credential from the vault, injects
 it nowhere, and forwards the request to the brokered upstream **unauthenticated**
 — with the placeholder token still in the body. No 502 is returned, and the
 request is logged at `info` as **`broker injected`**
-(`internal/broker/hook.go:270`), because the hook reaches that line whenever
+(`internal/broker/hook.go:283`), because the hook reaches that line whenever
 `Inject` returns nil. That log line is a false audit record: an operator
 reading the trail sees a successful injection for a call that carried no
 credential at all. It is the worst part of this failure, because it removes the
@@ -230,8 +230,8 @@ or with what the sibling code path already does.
   branch is guarded on `eligible > 0`.
 - internal/broker/inject.go:348-353 — `bodySkippable` is the trigger: any
   `Content-Encoding` other than `identity`, or any `multipart/*` media type.
-- internal/broker/hook.go:119 — buffering is skipped for the same requests, so
-  the cap never applies; hook.go:258 returns `nil`, which goproxy treats as
+- internal/broker/hook.go:141 — buffering is skipped for the same requests, so
+  the cap never applies; hook.go:287 returns `nil`, which goproxy treats as
   "forward it".
 - internal/broker/routing_test.go:264-288 — **the sibling path already fails
   closed on the identical input.** `TestHook_RouteBodyCompressedFailsClosed`
@@ -267,9 +267,9 @@ Two limits, so this proposal is not over-read:
   log line is absent on this path and present on a successful injection.
 - [ ] A request whose rule matched but whose declared surfaces are all
   ineligible (body-only rule + compressed/multipart body) returns the uniform
-  fail-closed `502` (`failClosedBody`, internal/broker/hook.go:284), and the
+  fail-closed `502` (`failClosedBody`, internal/broker/hook.go:306), and the
   resolver is provably never called — the check happens **before** resolve,
-  matching the existing scope (hook.go:87) and https-only (hook.go:108) stages,
+  matching the existing scope (hook.go:93) and https-only (hook.go:107) stages,
   which both fail closed without touching the vault.
 - [ ] The eligibility check is a stage in the hook, not a late return from
   `substituteToken`, so the pointless vault round-trip is skipped too.
@@ -279,8 +279,8 @@ Two limits, so this proposal is not over-read:
   visible in `docs/configuration.md` next to the surface table.
 - [ ] Scoped-out 502s stay indistinguishable on the wire from every other
   broker 502 — same `failClosedBody`, no stage-revealing header — per the
-  oracle-avoidance contract at internal/broker/hook.go:262-268.
-- [ ] The `413` over-cap path (hook.go:291-308) is unchanged: an oversized body
+  oracle-avoidance contract at internal/broker/hook.go:291-297.
+- [ ] The `413` over-cap path (hook.go:320-339) is unchanged: an oversized body
   is still a client error, not a credential-handling failure.
 - [ ] The four tests that pin today's behaviour
   (internal/broker/hook_surfaces_test.go:70-104,
@@ -457,23 +457,23 @@ several fold into the three above.
 |---|---|---|---|
 | 1 | No request-path telemetry at all. `/healthz` carries three fields; there is no counter, gauge, or histogram anywhere in the module, cache hits log at Debug, and the per-request summary line carries no rule, no route, and no duration. "Which of my 12 rules is failing?" is unanswerable. | internal/runtime/admin.go:28-32, internal/credstore/cache.go:177 | M |
 | 2 | Broker failure lines cannot be joined to the request that produced them — the hook receives only `*http.Request`, never `*goproxy.ProxyCtx`, so `session` (logged by the proxy) is structurally unreachable from all 15 broker log sites. | internal/broker/hook.go:62, internal/broker/hook.go:163-168, internal/proxy/handler.go:203 | S |
-| 3 | Log level is immutable. The level is a `slog.Level` value baked into the handler at construction; there is no `slog.LevelVar` and SIGHUP is not in the signal set. An operator cannot escalate to `debug` during a 502 storm without a restart that force-closes live tunnels. | internal/logging/logging.go:62, :66, :82-95; internal/cli/server.go:112 | S |
+| 3 | Log level is immutable. The level is a `slog.Level` value baked into the handler at construction; there is no `slog.LevelVar` and SIGHUP is not in the signal set. An operator cannot escalate to `debug` during a 502 storm without a restart that force-closes live tunnels. | internal/logging/logging.go:62, :66, :82-95; internal/cli/server.go:68 | S |
 | 4 | `postern token set` ignores `keychain_account` entirely. Every token subcommand uses a hard-coded `"default"`, while the server honours the config field — so `token set` can store a token the server will never read, and `token status` reports it healthy. | cmd/postern/main.go:111-114, internal/token/resolve.go:41 | S |
 | 5 | `ca.Load` checks nothing but the key file mode. No expiry check, no key-to-cert correspondence, no self-signature check. **[reproduced]** An 11-year-old CA loads without error and mints leaves whose `NotAfter` is the CA's `NotAfter` — a year in the past. Every brokered handshake then fails with an opaque TLS error while `/healthz` reports `ok`. | internal/ca/gen.go:147-185, internal/ca/mint.go:149-151 | S |
 | 6 | No way to invalidate the credential cache. A vault-side rotation is not noticed until the entry passes `refresh_ahead` (45 minutes at defaults); there is no CLI verb, no admin route, no SIGHUP, and hot reload never touches the cache. | internal/credstore/cache.go:174-180, internal/runtime/admin.go:76 | S-M |
 | 7 | `postern config validate` cannot see the token chain. The `token:` block is never schema-validated, so an unknown `source:`, an unset `env_var`, or a `file:` path that does not exist passes CI and fails at boot with no line number. | internal/config/validator.go:197-233, internal/token/resolve.go:52 | S |
 | 8 | Self-loop risk: the upstream transport sets `Proxy: http.ProxyFromEnvironment`, and the documented workflow is `eval "$(postern bootstrap)"` in the same shell. An operator who exports `HTTPS_PROXY` before starting postern makes every upstream call re-enter postern through itself. Current behaviour is pinned by a test, so this needs a decision, not a drive-by. | internal/proxy/proxy.go:209, internal/cli/bootstrap.go:111-112 | S |
-| 9 | `on_no_match: block` answers CONNECT refusals with a distinctive body, `"blocked by postern: host not brokered"`, letting an agent fingerprint rule-set membership per host — the differential `failClosedBody` exists to remove. Judgment call: `block` is an opt-in allowlist, and the body is genuinely more debuggable. Keep the log informative, make the wire constant. | internal/proxy/proxy.go:133, internal/broker/hook.go:262-268 | S |
+| 9 | `on_no_match: block` answers CONNECT refusals with a distinctive body, `"blocked by postern: host not brokered"`, letting an agent fingerprint rule-set membership per host — the differential `failClosedBody` exists to remove. Judgment call: `block` is an opt-in allowlist, and the body is genuinely more debuggable. Keep the log informative, make the wire constant. | internal/proxy/proxy.go:145 | S |
 | 10 | No credential-cache invalidation or introspection for the long-lived service-account token either: it is resolved once at boot and never re-resolved, so a vendor-side SA-token rotation 502s every brokered request until someone restarts the process. | internal/cli/server.go:221, :412-424 | M |
 | 11 | `token set` / `token test` validate against 1Password only, regardless of the configured provider, and print "Validated against credential vendor" naming no vendor. The CLI is strictly less accurate than the runtime it fronts. | cmd/postern/main.go:30-39, internal/cli/token.go:74 | M |
 | 12 | Exit codes are 0/1/2. "config is broken", "vault rejected the token", and "platform unsupported" are indistinguishable to a script, despite the sentinel errors already existing for each. | cmd/postern/main.go:116-124, internal/ca/trust.go:30 | S |
 | 13 | Machine-readable output exists in exactly one place. `config validate`, `token status`, `ca install`/`uninstall`, and `server healthcheck` are prose; only `rules list --format json` and `/healthz` are structured. | internal/cli/rules.go:81, internal/cli/config.go:76-85 | S-M |
 | 14 | Rule selection is host-only, so "different credential for a different path or method on the same host" is inexpressible. `Match` returns the first host hit, `paths`/`methods` are a filter that 502s rather than falls through, and duplicate hosts are a fatal lint. | internal/broker/engine.go:26-31, internal/config/validator.go:245 | M |
 | 15 | Unbounded vendor fan-out on non-cacheable refs. The `ShouldCache == false` branch bypasses both the cache and the singleflight group with no concurrency limit, so N concurrent requests mean N concurrent vault calls — and both OTP refs and every `oauth2` ref take that branch by design. | internal/credstore/cache.go:158-166, internal/credstore/oauth2/provider.go:52 | S |
-| 16 | The MITM `tls.Config` advertises no ALPN, so every brokered connection negotiates HTTP/1.1 — gRPC and h2-refusing clients cannot be brokered at all. Verify goproxy's MITM server is h2-capable **before** adding `NextProtos`; doing it blind would break every brokered request. | internal/proxy/proxy.go:239-243, internal/proxy/proxy.go:214 | S? |
-| 17 | WebSocket upgrade on a brokered host has no code path and no test — only an honest note in the security doc that it "is not yet handled". | docs/security.md:215-217 | ? |
-| 18 | The admin listener's loopback guarantee is enforced once, not "twice over" as documented. The only check is in config validation; `runtime.New` binds whatever address it is handed. | docs/security.md:169-171, internal/runtime/runtime.go:204-206 | S |
-| 19 | `oauth2` credstores using the refresh grant skip the boot ping entirely and return `nil`, so `/healthz` reports them permanently `ok` and a dead IdP surfaces as a first-request 502. Directly contradicts the boot-validation guarantee. | internal/credstore/oauth2/provider.go:97-99, docs/security.md:158-161 | M |
+| 16 | The MITM `tls.Config` advertises no ALPN, so every brokered connection negotiates HTTP/1.1 — gRPC and h2-refusing clients cannot be brokered at all. Verify goproxy's MITM server is h2-capable **before** adding `NextProtos`; doing it blind would break every brokered request. | internal/proxy/proxy.go:251-262, internal/proxy/proxy.go:214 | S? |
+| 17 | WebSocket upgrade on a brokered host has no code path and no test — only an honest note in the security doc that it "is not yet handled". | docs/security.md:220 | ? |
+| 18 | The admin listener's loopback guarantee is enforced once, not "twice over" as documented. The only check is in config validation; `runtime.New` binds whatever address it is handed. | docs/security.md:174, internal/runtime/runtime.go:204-206 | S |
+| 19 | `oauth2` credstores using the refresh grant skip the boot ping entirely and return `nil`, so `/healthz` reports them permanently `ok` and a dead IdP surfaces as a first-request 502. Directly contradicts the boot-validation guarantee. | internal/credstore/oauth2/provider.go:97-99, docs/security.md:164 | M |
 | 20 | Rule counts are uncapped and `Match` is a linear scan run twice per CONNECT (once for interception, once per in-tunnel request). At a few thousand rules the tail is unreachable in practice. | internal/broker/engine.go:26-31, internal/cli/server.go:312 | M |
 | 21 | A glob and a literal host under it can silently shadow: dedup is byte-equality only, and first-match-wins means a wildcard listed first steals every literal beneath it. | internal/config/validator.go:244-250, internal/broker/engine.go:26-31 | S |
 | 22 | `install.sh` verifies integrity but not authenticity: `checksums.txt` is fetched from the same origin as the tarball, and the cosign bundle the release publishes is never fetched. The script also takes no arguments at all — `sh install.sh --help` installs. | install.sh:60-74 | M |
