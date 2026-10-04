@@ -685,3 +685,47 @@ func TestCredentialNeedles_KeepsExactAndFoldedCopiesOfOnePattern(t *testing.T) {
 	require.Equal(t, "url=?k="+scrubbedMarker, readAll(t, s),
 		"a second credential's escaped, lowercased form was not scrubbed")
 }
+
+// The refusal must inspect every Content-Encoding value. http.Header.Get
+// returns only the first, so an upstream sending `identity` and a compression
+// coding as separate header fields hides the coding behind the one the gate
+// reads — and the credential rides out inside the compressed body, where the
+// byte scrubber cannot reach it.
+func TestScrubResponse_FailsClosedOnALaterContentEncodingValue(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		values  []string
+		wantRef bool
+	}{
+		{name: "identity first, brotli second", values: []string{"identity", "br"}, wantRef: true},
+		{name: "brotli first, identity second", values: []string{"br", "identity"}, wantRef: true},
+		{name: "identity alone", values: []string{"identity"}, wantRef: false},
+		{name: "identity repeated", values: []string{"identity", "identity"}, wantRef: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Request:    requestWithCredential(http.MethodGet, testCredential),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(compressZlib(t, `{"token":"`+testCredential+`"}`))),
+			}
+			for _, v := range tc.values {
+				resp.Header.Add("Content-Encoding", v)
+			}
+
+			got := scrubResponse(resp, discardLogger())
+			defer func() { _ = got.Body.Close() }()
+
+			if tc.wantRef {
+				require.Equal(t, http.StatusBadGateway, got.StatusCode,
+					"a later Content-Encoding value was not inspected; a compressed body went out unscrubbed")
+				return
+			}
+			require.Equal(t, http.StatusOK, got.StatusCode)
+		})
+	}
+}

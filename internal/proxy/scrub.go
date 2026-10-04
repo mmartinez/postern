@@ -246,11 +246,11 @@ func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 	// skips transparent decoding outright. Forwarding that hands the agent the
 	// credential the moment it decompresses, so fail closed with the same
 	// generic 502 every other refusal already uses.
-	encoding := resp.Header.Get("Content-Encoding")
-	if scrubbable && !resp.Uncompressed && encoding != "" && !strings.EqualFold(encoding, "identity") {
+	codings := contentCodings(resp.Header)
+	if scrubbable && !resp.Uncompressed && hasCompressedCoding(codings) {
 		logger.Warn("refusing an upstream response the credential scrubber cannot inspect",
 			slog.String("host", hostOf(resp.Request)),
-			slog.String("content_encoding", encodingLabel(encoding)),
+			slog.String("content_encoding", encodingLabel(codings)),
 		)
 		_ = resp.Body.Close()
 		return bad502(resp.Request)
@@ -347,20 +347,53 @@ func hostOf(req *http.Request) string {
 	return req.URL.Host
 }
 
-// encodingLabel names the coding an upstream used, for the refusal warning.
-// The Content-Encoding value is upstream-controlled and can carry the
-// credential itself, so it is never echoed: only a name on this fixed list is
-// reported and everything else collapses to "other". That is what makes it
-// safe — no byte of the input reaches the log, whatever the upstream sends.
-func encodingLabel(encoding string) string {
-	coding, _, _ := strings.Cut(encoding, ";")
-	coding = strings.ToLower(strings.TrimSpace(coding))
-	switch coding {
-	case "gzip", "x-gzip", "deflate", "br", "zstd", "compress", "identity":
-		return coding
-	default:
-		return "other"
+// contentCodings returns every coding the response names in Content-Encoding,
+// lowercased and stripped of parameters.
+//
+// Every header value is read, not just the first: http.Header.Get returns one
+// of them, so an upstream sending `identity` and `br` as separate header fields
+// would hide the coding behind the single value the gate used to inspect.
+func contentCodings(h http.Header) []string {
+	var codings []string
+	for _, v := range h.Values("Content-Encoding") {
+		coding, _, _ := strings.Cut(v, ";")
+		if coding = strings.ToLower(strings.TrimSpace(coding)); coding != "" {
+			codings = append(codings, coding)
+		}
 	}
+	return codings
+}
+
+// hasCompressedCoding reports whether any coding is something other than
+// identity, which is the case where the body reaches the agent still
+// compressed and no byte matcher can reach the credential inside it.
+func hasCompressedCoding(codings []string) bool {
+	for _, c := range codings {
+		if c != "identity" {
+			return true
+		}
+	}
+	return false
+}
+
+// encodingLabel names the coding for the refusal warning. The header is
+// upstream-controlled and can carry the credential itself, so it is never
+// echoed: only a name on this fixed list is reported and everything else
+// collapses to "other". That is what makes it safe — no byte of the input
+// reaches the log, whatever the upstream sends.
+func encodingLabel(codings []string) string {
+	for _, c := range codings {
+		if c == "identity" {
+			continue
+		}
+		switch c {
+		case "gzip", "x-gzip", "deflate", "br", "zstd", "compress":
+			return c
+		default:
+			return "other"
+		}
+	}
+	return "other"
 }
 
 // scrubber wraps an upstream response body and replaces every occurrence of a
