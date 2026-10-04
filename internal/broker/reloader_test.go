@@ -619,6 +619,11 @@ func TestRunReloader_ReturnsOnContextCancel(t *testing.T) {
 // the goproxy handler chain at startup, so a live edit would otherwise leave
 // the operator believing the credential is being stripped when it is not —
 // and an operator who turned it OFF must not be left believing it is on.
+//
+// Only genuine flips belong here. Absent means the default, which is scrubbing
+// on, so `explicit true` and absent name the same setting and flipping between
+// them is covered as silence by
+// TestRunReloader_IgnoresEquivalentScrubResponsesEdit.
 func TestRunReloader_WarnsOnScrubResponsesDrift(t *testing.T) {
 	t.Parallel()
 
@@ -631,7 +636,6 @@ func TestRunReloader_WarnsOnScrubResponsesDrift(t *testing.T) {
 	}{
 		{name: "explicit on to explicit off", baseline: &on, reedit: &off},
 		{name: "unset default to explicit off", baseline: nil, reedit: &off},
-		{name: "explicit on to unset default", baseline: &on, reedit: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -684,6 +688,85 @@ func TestRunReloader_WarnsOnScrubResponsesDrift(t *testing.T) {
 				s := logBuf.String()
 				return strings.Contains(s, "config edit ignored") && strings.Contains(s, "scrub_responses")
 			}, 2*time.Second, 10*time.Millisecond, "expected a Warn about scrub_responses drift; got %s", logBuf.String())
+		})
+	}
+}
+
+// TestRunReloader_IgnoresEquivalentScrubResponsesEdit is the other half of the
+// drift signal: an edit that leaves the effective setting alone must stay
+// silent. Absent means the default, which is scrubbing on, so flipping between
+// absent and an explicit true changes nothing. Telling the operator to restart
+// for a no-op is how a real restart notice stops being read.
+func TestRunReloader_IgnoresEquivalentScrubResponsesEdit(t *testing.T) {
+	t.Parallel()
+
+	on := true
+
+	for _, tc := range []struct {
+		name             string
+		baseline, reedit *bool
+	}{
+		{name: "unset default to explicit on", baseline: nil, reedit: &on},
+		{name: "explicit on to unset default", baseline: &on, reedit: nil},
+		{name: "unset default to unset default", baseline: nil, reedit: nil},
+		{name: "explicit on to explicit on", baseline: &on, reedit: &on},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine := broker.NewEngine(nil)
+			logBuf := &syncBuffer{}
+			logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+			baseline := &broker.Baseline{
+				Proxy: config.Proxy{
+					Listen:         "127.0.0.1:1701",
+					CacheTTL:       15 * time.Minute,
+					OnNoMatch:      config.OnNoMatchPassthrough,
+					ScrubResponses: tc.baseline,
+				},
+				CredStores: []config.CredStore{{
+					Name:  config.DefaultCredStoreName,
+					Token: config.Token{Source: config.TokenSourceAuto, EnvVar: "OP_SERVICE_ACCOUNT_TOKEN"},
+				}},
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			events := make(chan config.Event, 1)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				broker.RunReloader(ctx, engine, events, logger, baseline)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				close(events)
+				wg.Wait()
+			})
+
+			events <- config.Event{
+				New: &config.Config{
+					Proxy: config.Proxy{
+						Listen:         "127.0.0.1:1701",
+						CacheTTL:       15 * time.Minute,
+						OnNoMatch:      config.OnNoMatchPassthrough,
+						ScrubResponses: tc.reedit,
+					},
+					CredStores: baseline.CredStores,
+				},
+			}
+
+			// Positive control: unless the reload was actually applied and the
+			// drift pass ran, the silence asserted below proves nothing.
+			require.Eventually(t, func() bool {
+				return strings.Contains(logBuf.String(), "config reload applied")
+			}, 2*time.Second, 10*time.Millisecond, "the reload never applied, so the absence of a warning is vacuous")
+			require.Never(t, func() bool {
+				return strings.Contains(logBuf.String(), "scrub_responses")
+			}, 200*time.Millisecond, 10*time.Millisecond,
+				"an edit that leaves the effective scrub setting unchanged must not demand a restart; got %s", logBuf.String())
 		})
 	}
 }

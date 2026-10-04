@@ -15,34 +15,13 @@ generic constant ("postern: bad gateway") for every failure, so the agent
 cannot tell a missing token from a network blip from a misconfigured rule. One
 documented exception follows below: an already-cached value keeps serving while
 refreshes fail.
-
-**One path currently violates this, and it is not closed.** A placeholder rule
-whose only declared injection surface is `body`, receiving a request that
-postern cannot rewrite — a non-identity `Content-Encoding`, or a `multipart/*`
-content type — resolves the real credential, injects it nowhere, and forwards
-the request to the brokered upstream **unauthenticated**. Worse, the request
-is logged at `info` as `broker injected`, so the audit trail records a
-successful injection for a call that carried no credential. This is tracked as
-[Proposal 4](proposals.md#proposal-4-fail-closed-on-a-request-postern-cannot-inject-into);
-it is reproduced at runtime, and its acceptance criteria are all still open.
-
-It is reachable only for operators who have configured a body-only placeholder
-rule — a header-injection rule, the common case, is not affected. One interim
-mitigation exists and it is not a fix: declaring a second injection surface
-closes the hole outright, because any second eligible surface makes the rule
-fail closed instead of forwarding. Treat a body-only placeholder rule as
-untrusted until Proposal 4 lands.
-
 Connection-level
 failures — a tunnel that cannot dial, or a mid-tunnel copy error — return the
 same generic `502` body rather than the underlying error text, so a hostile
 agent cannot use postern's errors to probe internal network topology.
 
-For resolve and inject errors this is an enforced invariant, not a convention:
-integration tests assert that on a resolver error the upstream-side request
-counter stays at zero. The body-surface exception above is deliberately
-behaviour — `internal/broker/inject.go:219-220` documents it and four tests pin
-it — which is what makes it a tracked proposal rather than a bug.
+This is an enforced invariant, not a convention: integration tests assert that
+on a resolver error the upstream-side request counter stays at zero.
 
 Config ambiguity fails closed too: an unqualified secret reference whose
 scheme two credstores could serve is rejected at `postern config validate`
@@ -92,22 +71,23 @@ When a token must be referenced in human-facing output, it is masked to a
 
 - *Credential theft from the agent.* The agent never holds the real secret by
   construction, so prompt injection or a compromised dependency in the agent has
-  nothing to exfiltrate beyond placeholders. Upstream responses are scrubbed of
-  the injected credential before they reach the agent
-  (`proxy.scrub_responses`, on by default), so an upstream that **reflects** it
-  back cannot hand it over; what remains is anything covered by the caveats
-  below. This still requires **correctly-scoped rules** and a **process/uid
-  boundary** between the agent and postern. Rule-level `paths` / `methods`
-  scoping makes that first caveat enforceable instead of aspirational: a rule
-  can shrink its own blast radius from the whole host to exactly the endpoints
-  it exists for, with everything else refused before the resolver runs.
+  nothing to exfiltrate beyond placeholders. An upstream that **reflects** the
+  injected credential back in its response is scrubbed: response headers,
+  trailers, and the body are stripped of it on the way back, controlled by
+  `proxy.scrub_responses` (on by default). A body postern cannot inspect — one
+  an upstream left compressed in an encoding the transport did not decode —
+  fails closed with a `502` instead of being forwarded. What is left is the
+  caveat below: a `101` protocol tunnel opened by a brokered host is relayed
+  without inspection. This still requires **correctly-scoped rules** and a
+  **process/uid boundary** between the agent and postern. Rule-level `paths` /
+  `methods` scoping makes that first caveat enforceable instead of aspirational:
+  a rule can shrink its own blast radius from the whole host to exactly the
+  endpoints it exists for, with everything else refused before the resolver
+  runs.
 - *Accidental credential logging.* Redaction and the no-secret-in-logs rule
   reduce the chance a credential lands in a log aggregator.
 - *Silent auth bypass.* Fail-closed means a broker failure cannot degrade into
-  an unauthenticated upstream call. **Enforced for every resolve and inject
-  error, with one known exception** — the body-only placeholder rule described
-  under [Fail-closed](#fail-closed), which does forward unauthenticated, and
-  does so with a misleading `broker injected` log line.
+  an unauthenticated upstream call.
 
 **Not defended (out of scope):**
 
@@ -132,42 +112,6 @@ When a token must be referenced in human-facing output, it is masked to a
   `on_no_match: block` policy denies proxied requests that match no rule, but it
   governs only traffic routed through the proxy. See the note on `on_no_match`
   below.
-
-### Alignment with CB4A
-
-CB4A ("Credential Broker for Agents", `draft-hartman-credential-broker-4-agents-00`)
-defined three credential proxy models and a threat model of its own. **It
-expired 2026-09-30 with no successor revision, it was never endorsed by the
-IETF, and its own boilerplate says it is not to be cited as normative
-standards-track material.** The threat list above is postern's and is not
-derived from the draft.
-
-One correction worth making plainly, because the vocabulary is easy to
-over-read: postern implements the draft's **Model A (proxy gateway)** and
-**not** its Model B. The `oauth2` provider mints a short-lived access token, but
-that token is injected into a request travelling *through* postern like any
-other credential — the agent never receives it. It is Model A's delivery with a
-shorter-lived credential, not the model the draft describes. Postern makes no
-conformance claim to an expired Informational draft.
-
-Two of postern's own decisions above are genuine deviations from what the
-draft asks for, and both are already conceded here:
-
-- **The credential cache** (see [Credential caching and revocation
-  window](#credential-caching-and-revocation-window)) extends the exposure
-  window for a revoked credential. The draft forbids holding a decrypted
-  credential beyond the minting operation. Postern trades that for surviving a
-  vault outage, and bounds the trade-off with `proxy.cache.max_stale`.
-- **`on_no_match` is not network-level enforcement** (see [Egress containment
-  with `on_no_match`](#egress-containment-with-on_no_match)). The draft asks for
-  broker bypass to be prevented at the network layer; postern's `block` policy
-  only governs traffic that reaches the proxy.
-
-Two further gaps the draft names are not mitigated at all: postern uses no DPoP
-sender-constrained tokens on the IdP path, and it has no anomaly detection or
-behavioral baseline. Response filtering, by contrast, is implemented — see
-[Fail-closed](#fail-closed). [cb4a.md](cb4a.md) carries the full
-statement-by-statement and threat-by-threat comparison with source pointers.
 
 ## Key and token handling
 

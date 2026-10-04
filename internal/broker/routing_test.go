@@ -238,7 +238,7 @@ func TestHook_RouteTokenNeverLogged(t *testing.T) {
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	hook := broker.Hook(broker.NewEngine([]broker.Rule{routedRule()}), &fakeResolver{value: "sk-secret"}, config.OnNoMatchPassthrough, 0, logger) //nolint:bodyclose // closeIfNonNil handles the non-nil branch
+	hook := broker.Hook(broker.NewEngine([]broker.Rule{routedRule()}), &fakeResolver{value: "sk-secret"}, config.OnNoMatchPassthrough, 0, true, logger) //nolint:bodyclose // closeIfNonNil handles the non-nil branch
 
 	req, _ := http.NewRequest(http.MethodPost, "https://api.telegram.org/sendMessage", http.NoBody)
 	req.Header.Set("authorization", "Bearer tg_max_8Kq2Lp9wZ")

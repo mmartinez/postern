@@ -81,15 +81,6 @@ agent                     postern (127.0.0.1:1701)                 upstream
    response back to the agent without buffering, so server-sent events and other
    incremental responses arrive as they are produced.
 
-6. **Scrub.** On the way back, the credential postern injected on this request is
-   stripped out of the response: a header value carrying it is dropped whole,
-   and body occurrences are replaced with `<redacted>` by a streaming
-   transform, so incremental delivery and flushes survive and nothing is
-   buffered. `HEAD` responses and `101` upgrades are left alone — wrapping
-   either breaks framing rather than protecting anything. Requests that injected
-   no credential skip this stage entirely. Disable with
-   `proxy.scrub_responses: false`.
-
 Tunnel lifetime: hijacked tunnels are activity-tracked, not deadline-bound.
 The reaper scans every 30s, so closure lands within the stated bound plus one scan.
 A connection that has moved fewer than 128 bytes of total progress is closed roughly 30-60s after acceptance regardless of any intervening activity, while an established tunnel is closed after roughly 10m without two-way traffic (activity resets that longer timer, so live SSE streams are not cut).
@@ -105,9 +96,12 @@ The intended boundary: the real credential exists only inside the postern
 process and on the wire between postern and the upstream.
 
 - The agent holds no credential — only the placeholder it sent (if any).
-  Upstream responses are scrubbed of the injected credential before they reach
-  the agent (`proxy.scrub_responses`, on by default), so an upstream that
-  reflects it back cannot hand it over.
+  Postern scrubs upstream responses, stripping the injected credential back out
+  of headers, trailers and the body as it streams, so an upstream that reflects
+  it back cannot hand it over. A body postern cannot inspect — one an upstream
+  left compressed in an encoding the transport did not decode — fails closed
+  with a `502` instead of being forwarded. Protocol tunnels a `101` opens are
+  not scrubbed; see [security.md](security.md).
 - `postern rules list` shows rule-level fields (host and `secret_ref`), never
   a resolved value.
 - Logs redact credential-bearing headers and never print a resolved secret.
@@ -116,39 +110,6 @@ The local CA's private key is the other sensitive asset; it lives at
 `~/.postern/ca.key` with `0600` permissions under a `0700` directory. Anyone who
 can read it can mint trusted certificates for the user, so it is treated like
 any other private key.
-
-## Two credential sources
-
-The lifecycle above is one mechanism — one delivery path, one hook, one trust
-boundary — with two possible sources of the credential it injects.
-
-**From a vault.** Steps 2 through 5 as written: the rule's `secret_ref` names a
-vault item, the resolver returns a value that already existed, and the broker
-injects it. The credential's lifetime is a property of the vault operator, and
-postern's credential cache (configurable via `proxy.cache`) exists to keep a
-vault round-trip off the request path and to bound staleness with
-`max_stale`. This path works against any HTTPS API, which is why it is the
-default onboarding.
-
-**From an identity provider.** The same hook, with a different resolver: the
-`oauth2` provider's `secret_ref` names a credstore rather than a secret, and
-resolving it performs a token exchange at an identity provider rather than a
-vault read. Nothing about steps 1 through 5 changes — same match, same scope
-check, same template, same fail-closed 502. What changes is the credential's
-lifetime: an access token the IdP already bounds, held by the `x/oauth2`
-`TokenSource` rather than in postern's own broker cache. Note what does *not*
-change: the token is still injected into a proxied request and never reaches the
-agent, and the long-lived IdP client secret is still resident in the process.
-
-The two compose at the rule level, because the `secret_ref` scheme selects the
-resolver: a config can broker `op://` to one host and `oauth2://` to another in
-the same ruleset, with no cross-cutting coupling.
-
-For comparison against the CB4A Internet-Draft — an expired, non-normative
-document that describes this shape as "Model A" and a separate "Model B" where
-the broker hands the token to the agent for a direct call — see
-[cb4a.md](cb4a.md). It has the model comparison, the threat-model mapping, and
-the list of known deviations.
 
 ## Components
 

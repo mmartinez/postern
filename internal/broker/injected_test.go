@@ -213,7 +213,7 @@ func TestHook_InjectedCredentialNeverLogged(t *testing.T) {
 		SecretRef: "op://V/I/f",
 		Injection: broker.InjectSpec{Type: broker.InjectHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
 	}
-	hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), &fakeResolver{value: cred}, config.OnNoMatchPassthrough, 0, logger) //nolint:bodyclose // hook is a closure; it returns nil on success
+	hook := broker.Hook(broker.NewEngine([]broker.Rule{rule}), &fakeResolver{value: cred}, config.OnNoMatchPassthrough, 0, true, logger) //nolint:bodyclose // hook is a closure; it returns nil on success
 	req, err := http.NewRequest(http.MethodGet, "https://api.anthropic.com/v1/models", http.NoBody)
 	require.NoError(t, err)
 	require.Nil(t, hook(req)) //nolint:bodyclose // nil on success
