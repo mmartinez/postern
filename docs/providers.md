@@ -12,6 +12,13 @@ follow it, you can drop a new credential vendor into postern as a single
 new sub-package plus one side-effect import; the broker and proxy do not
 need to be edited.
 
+The shipped providers fall into two roles, and the distinction matters when
+you reason about what postern holds in memory. `onepassword` and `bitwarden`
+**fetch a stored value** — a long-lived secret that a vault already contains.
+`oauth2` **mints a short-lived one** per resolution. They satisfy the same
+interface and are configured the same way; see
+[OAuth2 — short-lived token minting](#oauth2--short-lived-token-minting).
+
 ## The interface
 
 ```go
@@ -273,13 +280,63 @@ GPL-3.0, postern is Apache-2.0, and we redistribute nothing GPL. You acquire
   `cargo install bws`) and put it on `PATH`. The provider works as soon as
   `bws` is reachable; nothing in postern downloads it for you.
 
-## OAuth2
+## OAuth2 — short-lived token minting
 
-The `oauth2` provider does not fetch a stored secret — it **mints** one. It
-exchanges long-lived client credentials for a short-lived bearer access token at
-a token endpoint and resolves that token, so the rule injects
-`Authorization: Bearer <access-token>`. Token exchange, in-memory caching, and
-automatic refresh on expiry are handled by `golang.org/x/oauth2`.
+The other two providers fetch a **stored** value: a vault holds a long-lived
+API key, postern reads it, and the broker cache holds it until it goes stale.
+The `oauth2` provider is the odd one out. It does not fetch a stored secret —
+it **mints** one, per resolution, from credentials the operator holds and the
+identity provider issues replacements for. That difference is why it is worth
+separating out from the vault backends rather than describing it as a third
+vendor.
+
+At resolve time the provider exchanges long-lived client credentials — or a
+long-lived refresh token — at a token endpoint for a short-lived bearer access
+token, so the rule injects `Authorization: Bearer <access-token>`. Token
+exchange, the token's own in-memory lifetime, and automatic refresh on expiry
+are handled by `golang.org/x/oauth2`.
+
+### What it actually buys, and what it does not
+
+- **The injected credential expires on the IdP's schedule.** It is minted on
+  demand and refreshed as it nears expiry — not once per resolution; a valid
+  token is reused rather than re-exchanged — and dies at the IdP's
+  `expires_in`. So a value lifted from a running proxy has minutes of useful
+  life rather than years. That is a real reduction in how long a leaked
+  credential is worth anything.
+- **Revocation is the IdP's job, not a cache TTL.** Withdraw the grant at the
+  IdP and the next mint fails, and the request fails closed.
+- **It reaches every mintable upstream, not just the ones with a vault
+  integration.** Any IdP speaking the `client_credentials` or `refresh_token`
+  grant is reachable by configuration — no postern code change. Note the limit:
+  RFC 8693 token exchange and RFC 7523 JWT-bearer assertion (what a GitHub App
+  installation token needs) are **not** implemented; `grant_type` accepts only
+  those two grants.
+
+Three things this section does **not** buy, which are easy to assume:
+
+- **The token is still cached in the process.** `golang.org/x/oauth2`'s
+  `TokenSource` holds the access token until it expires, by design. What
+  `ShouldCache` returning false skips is postern's *own* broker cache
+  (`internal/credstore/oauth2/provider.go:48`) — and therefore postern's
+  `max_stale` staleness policy — nothing more. A valid token is reused rather
+  than re-exchanged, which is the point.
+- **postern does hold a long-lived secret for that upstream.** The IdP client
+  secret is resident in the process for its whole lifetime, and under
+  `grant_type: refresh_token` a durable refresh token is held in memory and
+  written to `refresh_token_path`. Choosing this path does not make a
+  compromised postern harmless — it has what it needs to mint indefinitely.
+  What shrinks is the window an *agent* can be tricked into leaking.
+- **The request still traverses postern.** Every call this provider brokers is
+  a proxied request, so the extra network hop and the single point of failure
+  apply here exactly as they do on the vault path.
+
+The trade-off is that the target must cooperate: it needs a token endpoint and
+the operator needs a client registered there. That is exactly why postern also
+ships the vault path. The two are not alternatives — one `secret_ref` scheme
+per rule, so a config routinely brokers both at once.
+
+### The provider contract
 
 - **Name:** `oauth2` · **Scheme:** `oauth2`
 - **`secret_ref` grammar:** `oauth2://<credstore-name>`. The authority is a
@@ -290,9 +347,13 @@ automatic refresh on expiry are handled by `golang.org/x/oauth2`.
   the plain authority form stays the canonical spelling, and with a single
   oauth2 credstore both forms route identically.
 - **Caching:** oauth2 refs **bypass** the broker's global credential cache
-  (`ShouldCache` is always false). The access token's lifetime is governed by the
-  token endpoint's `expires_in`, honored inside the resolver — caching it under a
-  fixed TTL would risk serving an expired token.
+  (`ShouldCache` is always false). This is the sharpest behavioural difference
+  from `onepassword` and `bitwarden`, which both report their refs cacheable
+  and whose resolved long-lived values sit in the TTL cache (served stale up to
+  `max_stale` when a vault refresh fails). Here the access token's lifetime is
+  governed by the token endpoint's `expires_in`, honored inside the resolver —
+  caching it under a fixed TTL would risk serving an expired token, and there
+  is no stale-serving window to bound.
 - **Fail closed:** any token-endpoint error returns 502 and the upstream is never
   contacted. The token-endpoint response body is never logged (it can echo the
   client secret); only the HTTP status is surfaced.
