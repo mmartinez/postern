@@ -17,10 +17,10 @@ import (
 
 const testCredential = "sk-ant-api03-SUPERSECRET"
 
-// testNeedles is testCredential in the byte-slice form the scrubber scans
-// for. It is a function rather than a package-level var because a mutable
-// global outside main is banned by the project rules.
-func testNeedles() [][]byte { return [][]byte{[]byte(testCredential)} }
+// testNeedles is testCredential in the form the scrubber scans for. It is a
+// function rather than a package-level var because a mutable global outside
+// main is banned by the project rules.
+func testNeedles() []credentialNeedle { return credentialNeedles([]string{testCredential}) }
 
 // oneByteReader hands out its payload one byte per Read, so a credential can
 // only be found by a scrubber that carries a partial match across reads.
@@ -204,7 +204,7 @@ func TestScrubber_EmitsWithoutWaitingForMoreUpstreamBytes(t *testing.T) {
 func TestScrubber_HoldsBackOnlyAPartialNeedlePrefix(t *testing.T) {
 	t.Parallel()
 
-	needles := [][]byte{[]byte(testCredential)}
+	needles := testNeedles()
 	require.Equal(t, 6, partialSuffixLen([]byte("data: sk-ant"), needles))
 	require.Equal(t, 0, partialSuffixLen([]byte("data: chunk-0\n\n"), needles))
 	require.Equal(t, 0, partialSuffixLen(nil, needles))

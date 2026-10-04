@@ -53,7 +53,7 @@ func TestScrubber_SelfOverlappingNeedleIsNotSplitAcrossBoundary(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newScrubber(io.NopCloser(strings.NewReader(tc.body)), [][]byte{[]byte(tc.needle)}, nil)
+			s := newScrubber(io.NopCloser(strings.NewReader(tc.body)), credentialNeedles([]string{tc.needle}), nil)
 			got := readAll(t, s)
 			require.NotContains(t, got, tc.needle,
 				"the credential survived because it was split across the emit boundary")
@@ -66,7 +66,7 @@ func TestScrubber_SelfOverlappingNeedleIsNotSplitAcrossBoundary(t *testing.T) {
 func TestScrubber_SelfOverlappingNeedleByteAtATime(t *testing.T) {
 	t.Parallel()
 
-	s := newScrubber(io.NopCloser(&oneByteReader{data: []byte("abab")}), [][]byte{[]byte("abab")}, nil)
+	s := newScrubber(io.NopCloser(&oneByteReader{data: []byte("abab")}), credentialNeedles([]string{"abab"}), nil)
 	got := readAll(t, s)
 	require.NotContains(t, got, "abab")
 }
@@ -90,7 +90,7 @@ func TestScrubber_TerminalReadReturningDataAndEOFTogether(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newScrubber(&eofWithDataReader{data: []byte(tc.body)}, [][]byte{[]byte(tc.needle)}, nil)
+			s := newScrubber(&eofWithDataReader{data: []byte(tc.body)}, credentialNeedles([]string{tc.needle}), nil)
 			got := readAll(t, s)
 			require.Equal(t, tc.want, got, "bytes were dropped or reordered by the terminal read")
 			require.NotContains(t, got, tc.needle)
@@ -298,7 +298,7 @@ func TestScrubber_RepeatingCredentialPrefixDoesNotStallOrBuffer(t *testing.T) {
 
 	const needle = "ab"
 	src := &repeatingPrefixReader{b: 'a', left: 4 * scrubChunkSize}
-	s := newScrubber(src, [][]byte{[]byte(needle)}, nil)
+	s := newScrubber(src, credentialNeedles([]string{needle}), nil)
 
 	first := make([]byte, 4096)
 	n, err := s.Read(first)
@@ -597,4 +597,91 @@ func TestScrubResponse_EncodingWarningNeverLogsTheCredential(t *testing.T) {
 			require.NotContains(t, out, testCredential, "the credential reached the log")
 		})
 	}
+}
+
+// Percent-hex folding belongs to the escaped forms postern produced, not to the
+// raw credential. A credential that itself contains a percent sequence is a
+// case-sensitive literal: abc%2Fdef is not abc%2fdef, and treating them as one
+// rewrites an unrelated response body.
+func TestScrubber_RawCredentialWithPercentSequenceIsMatchedExactly(t *testing.T) {
+	t.Parallel()
+
+	const cred = "abc%2Fdef"
+
+	for _, tc := range []struct {
+		name, body string
+		wantMatch  bool
+	}{
+		{name: "the credential itself", body: "token=" + cred + ";", wantMatch: true},
+		{name: "lowercased hex is a different string", body: "token=abc%2fdef;", wantMatch: false},
+		{name: "uppercased hex is a different string", body: "token=abc%2FDEF;", wantMatch: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newScrubber(
+				io.NopCloser(strings.NewReader(tc.body)),
+				credentialNeedles([]string{cred}),
+				nil,
+			)
+			got := readAll(t, s)
+
+			if tc.wantMatch {
+				require.NotContains(t, got, cred, "the credential itself must still be scrubbed")
+				require.Contains(t, got, scrubbedMarker)
+				return
+			}
+			require.Equal(t, tc.body, got,
+				"text that merely resembles the credential was rewritten; folding leaked into the raw form")
+		})
+	}
+}
+
+// The same rule governs the header path, and there it costs more: a header is
+// deleted whole when it carries the credential, so folding the raw form there
+// drops headers an unrelated upstream response would otherwise keep.
+func TestScrubResponse_HeaderKeptForAPercentCaseResemblance(t *testing.T) {
+	t.Parallel()
+
+	const cred = "abc%2Fdef"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Request:    requestWithCredential(http.MethodGet, cred),
+		Header:     http.Header{"X-Echo": []string{"abc%2fdef"}},
+		Body:       http.NoBody,
+	}
+
+	scrubResponse(resp, discardLogger()) //nolint:bodyclose // the scrubber, not the test, owns the body from here
+
+	require.Equal(t, "abc%2fdef", resp.Header.Get("X-Echo"),
+		"a header that merely resembles the credential was deleted")
+}
+
+// One credential's raw value can be another's percent-escaped form, so the two
+// must be tracked separately rather than deduped by pattern alone. With creds
+// "a%2Fb" and "a/b", both produce the pattern "a%2Fb"; collapsing them drops
+// the folded copy, and "a%2fb" — the escaped, lowercased form of a/b — goes
+// out unscrubbed.
+func TestCredentialNeedles_KeepsExactAndFoldedCopiesOfOnePattern(t *testing.T) {
+	t.Parallel()
+
+	needles := credentialNeedles([]string{"a%2Fb", "a/b"})
+
+	var exact, folded bool
+	for _, n := range needles {
+		if string(n.pat) != "a%2Fb" {
+			continue
+		}
+		if n.foldHex {
+			folded = true
+		} else {
+			exact = true
+		}
+	}
+	require.True(t, exact, "the raw credential a%2Fb must be matched byte-for-byte")
+	require.True(t, folded, "the escaped form of a/b must fold hex case, or a%2fb leaks")
+
+	s := newScrubber(io.NopCloser(strings.NewReader("url=?k=a%2fb")), needles, nil)
+	require.Equal(t, "url=?k="+scrubbedMarker, readAll(t, s),
+		"a second credential's escaped, lowercased form was not scrubbed")
 }

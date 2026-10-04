@@ -43,6 +43,28 @@ func dropStaleBodyMetadata(resp *http.Response) {
 	}
 }
 
+// credentialNeedle is one byte pattern the scrubber must never let past, and
+// whether hex case may be folded when matching it.
+type credentialNeedle struct {
+	pat []byte
+	// foldHex is set only for the percent-escaped forms postern itself
+	// produced. A raw credential is a case-sensitive literal: when it happens
+	// to contain a percent sequence such as abc%2Fdef, folding would make it
+	// also match abc%2fdef — a different string — rewriting an unrelated
+	// response or deleting an unrelated header.
+	foldHex bool
+}
+
+// needleKey identifies a pattern for dedupe. The folding flag is part of the
+// key because the same string can be needed twice under different matching
+// rules: one credential's raw value can be another's percent-escaped form, and
+// suppressing the folded copy would leave that second credential's escaped and
+// lowercased casing unsrubbed.
+type needleKey struct {
+	pat     string
+	foldHex bool
+}
+
 // credentialNeedles builds the byte patterns that must never reach the agent.
 //
 // Injection does not always put the credential on the wire verbatim: a path or
@@ -52,49 +74,49 @@ func dropStaleBodyMetadata(resp *http.Response) {
 // broker's substitutePath and substituteQuery can emit, so they are the forms
 // worth carrying.
 //
-// Their hex casing is deliberately not pinned. Percent-decoding is
+// The escaped forms' hex casing is deliberately not pinned. Percent-decoding is
 // case-insensitive, so %2f and %2F decode to the same byte, and indexNeedle
 // matches the two digits behind a % in either case — covering an upstream that
 // re-encodes the path it was handed, and one that mixes casing digit by digit,
 // without carrying 2^n variants of every escaped needle. The raw credential is
-// still matched byte-for-byte, because a credential is case-sensitive and
-// SK-ANT-... is not the secret.
-func credentialNeedles(creds []string) [][]byte {
-	needles := make([][]byte, 0, len(creds)*3)
-	seen := make(map[string]struct{}, len(creds)*3)
-	add := func(s string) {
+// matched byte-for-byte whatever percent sequences it happens to contain.
+func credentialNeedles(creds []string) []credentialNeedle {
+	needles := make([]credentialNeedle, 0, len(creds)*3)
+	seen := make(map[needleKey]struct{}, len(creds)*3)
+	add := func(s string, foldHex bool) {
 		if s == "" {
 			return
 		}
-		if _, dup := seen[s]; dup {
+		key := needleKey{pat: s, foldHex: foldHex}
+		if _, dup := seen[key]; dup {
 			return
 		}
-		seen[s] = struct{}{}
-		needles = append(needles, []byte(s))
+		seen[key] = struct{}{}
+		needles = append(needles, credentialNeedle{pat: []byte(s), foldHex: foldHex})
 	}
 	for _, c := range creds {
-		add(c)
-		add(url.QueryEscape(c))
-		add(url.PathEscape(c))
+		add(c, false)
+		add(url.QueryEscape(c), true)
+		add(url.PathEscape(c), true)
 	}
 	return needles
 }
 
-// indexNeedle returns the offset of the first occurrence of needle in hay, or
-// -1 if there is none. A needle with no % in it — the raw credential, and every
-// credential built only from characters postern never escapes — takes the
-// assembly-optimised bytes.Index path unchanged.
-func indexNeedle(hay, needle []byte) int {
-	pct := bytes.IndexByte(needle, '%')
-	if pct < 0 {
-		return bytes.Index(hay, needle)
+// indexNeedle returns the offset of the first occurrence of n in hay, or -1 if
+// there is none. Hex folding applies only where n is a percent-escaped form
+// that actually carries a %; everything else takes the assembly-optimised
+// bytes.Index path unchanged.
+func indexNeedle(hay []byte, n credentialNeedle) int {
+	pct := bytes.IndexByte(n.pat, '%')
+	if !n.foldHex || pct < 0 {
+		return bytes.Index(hay, n.pat)
 	}
 	// Anchor the scan on the leading literal run: it must match byte for byte,
 	// and bytes.Index locates its occurrences fast, so the candidate set stays
 	// small instead of testing every offset in the body.
 	anchor := []byte{'%'}
 	if pct > 0 {
-		anchor = needle[:pct]
+		anchor = n.pat[:pct]
 	}
 	for off := 0; ; {
 		j := bytes.Index(hay[off:], anchor)
@@ -102,11 +124,23 @@ func indexNeedle(hay, needle []byte) int {
 			return -1
 		}
 		off += j
-		if equalNeedle(needle, hay[off:]) {
+		if equalNeedle(n.pat, hay[off:]) {
 			return off
 		}
 		off++
 	}
+}
+
+// prefixMatches reports whether the bytes of n.pat preceding suffix's length
+// equal suffix, folding hex case only where n is a percent-escaped form. It is
+// what lets a partial occurrence survive a read boundary with the same casing
+// rules the full scan uses.
+func prefixMatches(n credentialNeedle, suffix []byte) bool {
+	prefix := n.pat[:len(suffix)]
+	if !n.foldHex || bytes.IndexByte(prefix, '%') < 0 {
+		return bytes.Equal(prefix, suffix)
+	}
+	return equalNeedle(prefix, suffix)
 }
 
 // equalNeedle reports whether needle occurs at the start of hay. Bytes must
@@ -281,7 +315,7 @@ func bodyIsScrubbable(resp *http.Response) bool {
 // place) keeps a reflected credential from surviving in any encoding of its
 // neighbours, and a header that carried the credential is not trustworthy
 // anyway.
-func scrubHeaderValues(h http.Header, needles [][]byte) {
+func scrubHeaderValues(h http.Header, needles []credentialNeedle) {
 	for name, values := range h {
 		for _, v := range values {
 			if containsAnyNeedle(v, needles) {
@@ -295,7 +329,7 @@ func scrubHeaderValues(h http.Header, needles [][]byte) {
 // containsAnyNeedle reports whether v holds any needle as a substring. It
 // matches the escaped forms as well as the raw credential, because a header
 // echoing a percent-encoded path or query carries the escaped form.
-func containsAnyNeedle(v string, needles [][]byte) bool {
+func containsAnyNeedle(v string, needles []credentialNeedle) bool {
 	for _, n := range needles {
 		if indexNeedle([]byte(v), n) >= 0 {
 			return true
@@ -351,7 +385,7 @@ func encodingLabel(encoding string) string {
 // the same reason — HTTP/2 may install a fresh map after the scrubber is built.
 type scrubber struct {
 	src     io.ReadCloser
-	needles [][]byte
+	needles []credentialNeedle
 
 	// buf is the scratch buffer upstream bytes are read into. It is allocated
 	// once and reused for the life of the response.
@@ -374,7 +408,7 @@ type scrubber struct {
 // scrubbedMarker. An empty needle set still streams, so the caller does not
 // need a separate pass-through type. trailer, when non-nil, is scrubbed at the
 // end of the stream.
-func newScrubber(src io.ReadCloser, needles [][]byte, trailer *http.Header) *scrubber {
+func newScrubber(src io.ReadCloser, needles []credentialNeedle, trailer *http.Header) *scrubber {
 	return &scrubber{
 		src:     src,
 		needles: needles,
@@ -480,7 +514,7 @@ func (s *scrubber) scrubFill(final bool) {
 // That index is what lets a streaming caller withhold exactly the right bytes:
 // everything up to it is settled, so a fill that already contains a whole
 // occurrence withholds nothing at all.
-func replaceAll(dst, src []byte, needles [][]byte) (out []byte, lastCut int) {
+func replaceAll(dst, src []byte, needles []credentialNeedle) (out []byte, lastCut int) {
 	for i := 0; i < len(src); {
 		at, width := nextMatch(src, needles, i)
 		if width == 0 {
@@ -497,7 +531,7 @@ func replaceAll(dst, src []byte, needles [][]byte) (out []byte, lastCut int) {
 // nextMatch returns the offset of the first occurrence of any needle at or
 // after from, and that occurrence's width. A zero width means no needle occurs
 // in src[from:].
-func nextMatch(src []byte, needles [][]byte, from int) (at, width int) {
+func nextMatch(src []byte, needles []credentialNeedle, from int) (at, width int) {
 	at, width = -1, 0
 	for _, n := range needles {
 		i := indexNeedle(src[from:], n)
@@ -505,8 +539,8 @@ func nextMatch(src []byte, needles [][]byte, from int) (at, width int) {
 			continue
 		}
 		i += from
-		if at < 0 || i < at || (i == at && len(n) > width) {
-			at, width = i, len(n)
+		if at < 0 || i < at || (i == at && len(n.pat) > width) {
+			at, width = i, len(n.pat)
 		}
 	}
 	if at < 0 {
@@ -523,11 +557,11 @@ func nextMatch(src []byte, needles [][]byte, from int) (at, width int) {
 //
 // The result is always less than the longest needle, which bounds the retained
 // state to at most one credential length regardless of body size.
-func partialSuffixLen(b []byte, needles [][]byte) int {
+func partialSuffixLen(b []byte, needles []credentialNeedle) int {
 	longest := 0
 	for _, n := range needles {
-		if len(n)-1 > longest {
-			longest = len(n) - 1
+		if len(n.pat)-1 > longest {
+			longest = len(n.pat) - 1
 		}
 	}
 	// Start from the largest candidate and shrink: the first hit is the
@@ -535,7 +569,7 @@ func partialSuffixLen(b []byte, needles [][]byte) int {
 	for k := min(longest, len(b)); k > 0; k-- {
 		suffix := b[len(b)-k:]
 		for _, n := range needles {
-			if len(n) > k && equalNeedle(n[:k], suffix) {
+			if len(n.pat) > k && prefixMatches(n, suffix) {
 				return k
 			}
 		}
