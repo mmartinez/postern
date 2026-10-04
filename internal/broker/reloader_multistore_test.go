@@ -73,7 +73,7 @@ func TestRunReloader_MultiCredstoreSwapIsAtomicUnderLoad(t *testing.T) {
 		multiStoreRule("api.d.test", "personal"),
 	}
 	engine := broker.NewEngine(mustTranslate(t, initial))
-	hook := broker.Hook(engine, router, config.OnNoMatchBlock, 0, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // hook is a closure; broker owns the synthetic body
+	hook := broker.Hook(engine, router, config.OnNoMatchBlock, 0, true, slog.New(slog.NewTextHandler(io.Discard, nil))) //nolint:bodyclose // hook is a closure; broker owns the synthetic body
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	events, stop := runReloaderUnderTest(t, engine, logger)

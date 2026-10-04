@@ -45,7 +45,7 @@ func scrubProxy(t *testing.T, upstream *httptest.Server, scrub *bool, logs *sync
 
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	engine := broker.NewEngine([]broker.Rule{echoingRule(t, upstream)})
-	hook := broker.Hook(engine, &fakeResolver{value: e2eCredential}, config.OnNoMatchPassthrough, 0, logger) //nolint:bodyclose // closure; broker owns any synthetic body
+	hook := broker.Hook(engine, &fakeResolver{value: e2eCredential}, config.OnNoMatchPassthrough, 0, true, logger) //nolint:bodyclose // closure; broker owns any synthetic body
 
 	root := fixtureCA(t)
 	p, err := proxy.New(proxy.Config{

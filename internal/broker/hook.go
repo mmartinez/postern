@@ -60,7 +60,13 @@ type Resolver interface {
 // maxBodyBytes is the proxy-wide body buffering cap; a value <= 0 falls back
 // to config.DefaultMaxBodyBytes. It is only consulted for rules that declare
 // the body surface.
-func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBodyBytes int, logger *slog.Logger) func(*http.Request) *http.Response {
+//
+// scrubResponses mirrors proxy.scrub_responses. When it is on the hook stops
+// negotiating client-chosen compression on brokered requests, because the
+// response scrubber cannot see plaintext inside a deflate stream. When it is
+// off the hook must not touch the encoding at all, so the opt-out really is a
+// no-op rather than a silent downgrade of what the client asked for.
+func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBodyBytes int, scrubResponses bool, logger *slog.Logger) func(*http.Request) *http.Response {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -110,16 +116,23 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 			return failClosed(req)
 		}
 
-		// Compression negotiation is dropped for brokered requests. The
-		// response scrubber matches the credential as bytes, and a gzipped
-		// body hides those bytes inside a deflate stream — so an upstream
-		// that compressed a reflected credential would slip straight past it
-		// and the agent would recover it on decompression. Deleting the
-		// header does not turn compression off: net/http's Transport adds
-		// its own Accept-Encoding: gzip when absent and transparently
-		// decompresses the reply, so upstream still gets a compressed
-		// response and the scrubber still sees plaintext.
-		req.Header.Del("Accept-Encoding")
+		// Compression negotiation is dropped only while the scrubber is on. The
+		// scrubber matches the credential as bytes, and a gzipped body hides
+		// those bytes inside a deflate stream — so an upstream that compressed
+		// a reflected credential would slip past it and the agent would recover
+		// the credential on decompression. Deleting the header does not turn
+		// compression off: net/http's Transport adds its own Accept-Encoding:
+		// gzip when absent and transparently decompresses the reply, so upstream
+		// still gets a compressed response and the scrubber still sees
+		// plaintext.
+		//
+		// Gated on the opt-out deliberately. With scrubbing disabled this must
+		// not run: a client that asked for br, deflate or identity would get
+		// gzip instead, and `scrub_responses: false` would quietly change the
+		// representation rather than turn one control off.
+		if scrubResponses {
+			req.Header.Del("Accept-Encoding")
+		}
 
 		// Body buffering happens before resolve so an oversized body is
 		// rejected (413) without spending a credential fetch. Only rules that

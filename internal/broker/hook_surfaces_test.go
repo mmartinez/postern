@@ -16,7 +16,7 @@ import (
 func bodySurfaceHook(t *testing.T, res broker.Resolver, maxBodyBytes int, rule broker.Rule) func(*http.Request) *http.Response {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, maxBodyBytes, logger) //nolint:bodyclose // hook closure; broker owns synthetic bodies
+	return broker.Hook(broker.NewEngine([]broker.Rule{rule}), res, config.OnNoMatchPassthrough, maxBodyBytes, true, logger) //nolint:bodyclose // hook closure; broker owns synthetic bodies
 }
 
 // A body over the size cap is a 413 (client error), not a 502, and the

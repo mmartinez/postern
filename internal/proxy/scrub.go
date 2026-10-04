@@ -26,16 +26,39 @@ const scrubChunkSize = 32 << 10
 // operator explicitly pointed it at false.
 func scrubEnabled(cfg *bool) bool { return cfg == nil || *cfg }
 
-// staleBodyMetadata lists the response headers that describe the body as it
+// maxScrubBufferedBody is the largest response postern will read into memory to
+// decide whether redaction actually happened. Small enough that no realistic
+// API response feels the latency, large enough to cover the JSON and ranged
+// responses where keeping the metadata matters. Anything bigger streams.
+const maxScrubBufferedBody = 64 << 10
+
+// dropStaleBodyMetadata removes the headers that describe the body as it
 // arrived upstream. Once redaction has rewritten that body they all describe
-// something the agent will never receive.
-var staleBodyMetadata = []string{
-	"Content-Length",
-	"Content-Range",
-	"ETag",
-	"Digest",
-	"Content-MD5",
+// something the agent will never receive: a length it is not, a byte range
+// that no longer lines up, a digest over bytes it did not get.
+func dropStaleBodyMetadata(resp *http.Response) {
+	resp.ContentLength = -1
+	for _, h := range [...]string{
+		"Content-Length",
+		"Content-Range",
+		"ETag",
+		"Digest",
+		"Content-MD5",
+	} {
+		resp.Header.Del(h)
+	}
 }
+
+// rechain puts already-read bytes back in front of a body that is still
+// streaming, and keeps the original body's Close. Needed because io.MultiReader
+// is only an io.Reader, and a scrubber must stay an io.ReadCloser so the
+// response can still be closed.
+type rechain struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r rechain) Close() error { return r.closer.Close() }
 
 // credentialNeedles builds the byte patterns that must never reach the agent.
 //
@@ -94,18 +117,46 @@ func scrubResponse(resp *http.Response, logger *slog.Logger) *http.Response {
 	scrubHeaderValues(resp.Header, needles)
 	scrubHeaderValues(resp.Trailer, needles)
 
-	if bodyIsScrubbable(resp) {
-		resp.Body = newScrubber(resp.Body, needles)
-		// Redaction changes the body's length and content, so every piece of
-		// metadata describing the pre-redaction body is now a lie: the agent
-		// would be told the delivered body is a length it is not, or verify a
-		// digest over bytes it did not receive. Drop them all rather than let
-		// a client assemble ranges or check integrity against a body that no
-		// longer exists.
-		resp.ContentLength = -1
-		for _, h := range staleBodyMetadata {
-			resp.Header.Del(h)
+	switch {
+	case !bodyIsScrubbable(resp):
+		// Nothing to decide: HEAD, 101, or a body that is not ours to wrap.
+	case resp.ContentLength >= 0 && resp.ContentLength <= maxScrubBufferedBody:
+		// A body that claims to be small enough to settle up front. Reading it
+		// costs one bounded buffer, never the whole response, and lets the
+		// metadata decision be exact: a response that carried no credential
+		// keeps its length, ranges and validators, because nothing about them
+		// became untrue.
+		//
+		// Content-Length is a hint here, never a bound. Reading exactly that
+		// many bytes would truncate a response that under-declares its length,
+		// and — worse — would hand the agent a body that was never scanned for
+		// the credential. Read to the cap instead and decide from what actually
+		// arrived.
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxScrubBufferedBody+1))
+		if err != nil || len(raw) > maxScrubBufferedBody {
+			// Larger than the cap, or the read failed: put back what we took and
+			// stream, dropping the metadata because we cannot know yet.
+			resp.Body = newScrubber(rechain{io.MultiReader(bytes.NewReader(raw), resp.Body), resp.Body}, needles)
+			dropStaleBodyMetadata(resp)
+			break
 		}
+		_ = resp.Body.Close()
+		out, _ := replaceAll(nil, raw, needles)
+		if len(out) == len(raw) && bytes.Equal(out, raw) {
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
+			break
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(out))
+		resp.ContentLength = int64(len(out))
+		dropStaleBodyMetadata(resp)
+	default:
+		// Streamed or chunked: the body has to start before anything is known
+		// about it, so the metadata is dropped up front. Redaction may not
+		// happen, and the agent loses a validator it did not need to lose —
+		// the alternative is a Content-Range or digest describing bytes that
+		// were rewritten, which is worse.
+		resp.Body = newScrubber(resp.Body, needles)
+		dropStaleBodyMetadata(resp)
 	}
 
 	// The broker hook drops Accept-Encoding on brokered requests so this
@@ -269,84 +320,66 @@ func (s *scrubber) fillOnce() {
 }
 
 // scrubFill moves as much of the accumulated fill as can be decided into
-// ready, retaining the trailing bytes that are still a proper prefix of a
-// needle.
+// ready, and withholds only the bytes the leftmost-first scan never settled.
+//
+// The scan reports where it stopped: everything up to there either matched or
+// was literal text before the last consumed occurrence. Only bytes past that
+// point can still become an occurrence, so those are the only ones to hold.
+//
+// Measuring the tail from the end of the fill instead — the obvious reading —
+// is wrong in both directions. It withholds bytes the scan has already decided
+// (needle "abab" over body "abab" would emit "ab" before the occurrence
+// resolved), and the fix for that, walking the boundary back while the
+// preceding bytes could start an occurrence, never terminates on a body whose
+// bytes keep repeating a credential prefix — the boundary slides to zero on
+// every read, nothing is emitted, and the fill grows for the life of the
+// stream. Anchoring the withhold to the scan keeps it bounded by one credential
+// length no matter what the body contains.
 //
 // final reports that the upstream stream has ended, in which case nothing is
-// retained.
+// withheld.
 func (s *scrubber) scrubFill(final bool) {
 	if len(s.fill) == 0 {
 		return
 	}
+	ready, lastCut := replaceAll(s.ready[:0], s.fill, s.needles)
 	hold := 0
 	if !final {
-		hold = partialSuffixLen(s.fill, s.needles)
-		if hold > 0 {
-			hold = s.holdBackSplit(hold)
-		}
+		hold = partialSuffixLen(s.fill[lastCut:], s.needles)
 	}
-	// Read only calls fillOnce when ready is drained, so it is always empty
-	// here and the scrubbed bytes land in its existing capacity.
-	s.ready = replaceAll(s.ready[:0], s.fill[:len(s.fill)-hold], s.needles)
+	// replaceAll appended every byte, including the ones about to be withheld,
+	// so give the withheld tail back before the caller can take it.
+	if hold > 0 {
+		ready = ready[:len(ready)-hold]
+	}
+	s.ready = ready
 	// Move the retained bytes to the front so the buffer does not grow without
-	// bound over a long-lived stream.
+	// bound over a long-lived stream. hold is bounded by one credential length,
+	// so the scrubber's state is bounded no matter what the body contains.
 	s.fill = append(s.fill[:0], s.fill[len(s.fill)-hold:]...)
 }
 
-// holdBackSplit widens the withhold so that no occurrence straddles the
-// emitted/retained boundary.
-//
-// partialSuffixLen answers "can the tail still become an occurrence?", which is
-// necessary but not sufficient. With a self-overlapping needle the retained
-// tail can be the second half of an occurrence whose first half was already
-// emitted: needle "abab" over body "abab" withholds "ab", emits "ab" (no match
-// is visible yet), and then emits the retained "ab" at EOF. The agent
-// reassembles the credential from two halves that each looked innocent.
-//
-// So walk the boundary backwards while the bytes immediately before it are
-// themselves the start of a partial occurrence. When hold is zero there is no
-// pending prefix and none of this can apply, so the common case costs nothing.
-func (s *scrubber) holdBackSplit(hold int) int {
-	boundary := len(s.fill) - hold
-	for boundary > 0 && endsWithNeedlePrefix(s.fill[:boundary], s.needles) {
-		boundary--
-	}
-	return len(s.fill) - boundary
-}
-
-// endsWithNeedlePrefix reports whether some suffix of prefix is a proper
-// prefix of some needle — that is, whether an occurrence could start before
-// the end of prefix and continue past it.
-func endsWithNeedlePrefix(prefix []byte, needles [][]byte) bool {
-	for _, n := range needles {
-		limit := len(n) - 1
-		if limit > len(prefix) {
-			limit = len(prefix)
-		}
-		for k := limit; k > 0; k-- {
-			if bytes.Equal(prefix[len(prefix)-k:], n[:k]) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // replaceAll appends src to dst with every occurrence of a needle replaced by
-// scrubbedMarker. Occurrences are matched leftmost-first and, where two
-// needles match at the same offset, the longest wins — so a credential that is
-// a prefix of another cannot leave the tail of the longer one behind.
-func replaceAll(dst, src []byte, needles [][]byte) []byte {
+// scrubbedMarker, and returns the index in src just past the last occurrence it
+// consumed (0 if it consumed none). Occurrences are matched leftmost-first and,
+// where two needles match at the same offset, the longest wins, so a credential
+// that is a prefix of another cannot leave the tail of the longer one behind.
+//
+// That index is what lets a streaming caller withhold exactly the right bytes:
+// everything up to it is settled, so a fill that already contains a whole
+// occurrence withholds nothing at all.
+func replaceAll(dst, src []byte, needles [][]byte) (out []byte, lastCut int) {
 	for i := 0; i < len(src); {
 		at, width := nextMatch(src, needles, i)
 		if width == 0 {
-			return append(dst, src[i:]...)
+			return append(dst, src[i:]...), lastCut
 		}
 		dst = append(dst, src[i:at]...)
 		dst = append(dst, scrubbedMarker...)
 		i = at + width
+		lastCut = i
 	}
-	return dst
+	return dst, lastCut
 }
 
 // nextMatch returns the offset of the first occurrence of any needle at or
