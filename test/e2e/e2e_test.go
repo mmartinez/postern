@@ -57,6 +57,32 @@ func TestHTTPSBrokeredInjection(t *testing.T) {
 	require.Equal(t, caCommonName, resp.TLS.PeerCertificates[0].Issuer.CommonName)
 }
 
+// TestHTTPSBrokeredInjection_DefaultPort covers the request shape every real
+// HTTPS client sends: the URL omits :443, so the CONNECT authority is
+// host:443 while the inner Host header carries no port. The full flow must
+// still guard, inject, and forward to port 443. postern's upstream dial goes
+// through a local CONNECT relay (HTTPS_PROXY), which records the authority
+// postern asked for and splices it to the stub upstream.
+func TestHTTPSBrokeredInjection_DefaultPort(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+	idp := startIdP(t, e)
+	up := startUpstream(t, e)
+	relay := startConnectRelay(t, "127.0.0.1:"+up.port)
+	proc := startPostern(t, e, renderConfig(idp.URL, defaultPortHost, "passthrough"), "HTTPS_PROXY="+relay.URL)
+	client := proxiedClient(t, proc.proxyURL, e.caPEM)
+
+	status, body := get(t, client, "https://"+defaultPortHost+"/")
+	require.Equal(t, 200, status, "body: %q", body)
+	require.Equal(t, "upstream-ok\n", body)
+	require.NotContains(t, proc.logs.String(), "rejecting non-brokered inner host")
+
+	require.Equal(t, []string{defaultPortHost + ":443"}, relay.Authorities(), "postern must dial the default port")
+	require.Equal(t, []string{defaultPortHost}, up.Hosts())
+	require.Equal(t, "Bearer "+idp.Token(2), up.AuthHeader(0))
+}
+
 // TestPlainHTTPInjectionFailsClosed documents why the plain-HTTP brokered
 // injection scenario is not implementable against this binary without a
 // production change: the broker refuses to inject on any non-https hop by

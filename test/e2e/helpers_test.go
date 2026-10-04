@@ -43,6 +43,11 @@ const clientSecretEnv = "POSTERN_E2E_CLIENT_SECRET"
 // readyTimeout bounds how long startPostern waits for the listener.
 const readyTimeout = 15 * time.Second
 
+// defaultPortHost is the brokered name the default-port scenario requests
+// with no port in the URL. It never resolves: postern reaches it through the
+// CONNECT relay (see startConnectRelay), so no test needs DNS or port 443.
+const defaultPortHost = "api.e2e.test"
+
 // caCommonName is the Subject CN of the CA the tests plant under
 // $HOME/.postern so the server finds it via ca.Load; clients assert the
 // MITM leaf chains to it.
@@ -124,7 +129,8 @@ func plantCA(t *testing.T, home string) []byte {
 
 // selfSignedServingCert mints the cert every local TLS stub serves. It covers
 // 127.0.0.1 and localhost so postern's upstream/token dials verify regardless
-// of which spelling the CONNECT target uses.
+// of which spelling the CONNECT target uses, plus defaultPortHost for the
+// relayed default-port scenario.
 func selfSignedServingCert(t *testing.T) (tls.Certificate, []byte) {
 	t.Helper()
 
@@ -138,7 +144,7 @@ func selfSignedServingCert(t *testing.T) (tls.Certificate, []byte) {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{"localhost", defaultPortHost},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	require.NoError(t, err)
@@ -284,6 +290,70 @@ rules:
 `, clientSecretEnv, tokenURL, onNoMatch, ruleHost))
 }
 
+// connectRelay stands in for an outbound forward proxy on postern's upstream
+// side (postern honors HTTPS_PROXY). It accepts CONNECT, records the
+// requested authority, and splices the tunnel to one fixed local target, so
+// postern can dial a name on :443 that resolves nowhere. Loopback hosts
+// bypass HTTPS_PROXY, so the IdP stub is still reached directly.
+type connectRelay struct {
+	URL         string
+	target      string
+	mu          sync.Mutex
+	authorities []string
+	conns       []net.Conn
+}
+
+func startConnectRelay(t *testing.T, target string) *connectRelay {
+	t.Helper()
+
+	r := &connectRelay{target: target}
+	srv := httptest.NewServer(http.HandlerFunc(r.serve))
+	// Server.Close does not track hijacked tunnels; close them explicitly so
+	// no splice goroutine outlives the test.
+	t.Cleanup(func() {
+		srv.Close()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for _, c := range r.conns {
+			_ = c.Close()
+		}
+	})
+	r.URL = srv.URL
+	return r
+}
+
+func (r *connectRelay) serve(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodConnect {
+		http.Error(w, "CONNECT only", http.StatusMethodNotAllowed)
+		return
+	}
+	up, err := (&net.Dialer{}).DialContext(req.Context(), "tcp", r.target)
+	if err != nil {
+		http.Error(w, "relay dial failed", http.StatusBadGateway)
+		return
+	}
+	client, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		_ = up.Close()
+		return
+	}
+	r.mu.Lock()
+	r.authorities = append(r.authorities, req.Host)
+	r.conns = append(r.conns, client, up)
+	r.mu.Unlock()
+
+	_, _ = io.WriteString(client, "HTTP/1.1 200 Connection established\r\n\r\n")
+	go func() { _, _ = io.Copy(up, client); _ = up.Close() }()
+	go func() { _, _ = io.Copy(client, up); _ = client.Close() }()
+}
+
+// Authorities returns every CONNECT authority the relay accepted.
+func (r *connectRelay) Authorities() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.authorities...)
+}
+
 // posternProc is one running `postern server` subprocess.
 type posternProc struct {
 	cfgPath  string
@@ -298,8 +368,9 @@ type posternProc struct {
 
 // startPostern launches the compiled binary as a subprocess with a fully
 // isolated environment (temp HOME, bundled SSL_CERT_FILE, no inherited proxy
-// vars), waits for its listener, and registers shutdown cleanup.
-func startPostern(t *testing.T, e *env, cfg []byte) *posternProc {
+// vars; extraEnv adds explicit ones), waits for its listener, and registers
+// shutdown cleanup.
+func startPostern(t *testing.T, e *env, cfg []byte, extraEnv ...string) *posternProc {
 	t.Helper()
 
 	cfgPath := filepath.Join(e.home, "config.yaml")
@@ -308,12 +379,12 @@ func startPostern(t *testing.T, e *env, cfg []byte) *posternProc {
 	logs := &syncBuffer{}
 	cmd := exec.Command(posternBin, "server", "--config", cfgPath, "--log-level", "debug")
 	cmd.Dir = e.home
-	cmd.Env = []string{
+	cmd.Env = append([]string{
 		"HOME=" + e.home,
 		"PATH=" + os.Getenv("PATH"),
 		"SSL_CERT_FILE=" + filepath.Join(e.home, "trust-bundle.pem"),
 		clientSecretEnv + "=e2e-client-secret",
-	}
+	}, extraEnv...)
 	cmd.Stdout = logs
 	cmd.Stderr = logs
 
