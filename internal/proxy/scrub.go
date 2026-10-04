@@ -350,15 +350,20 @@ func hostOf(req *http.Request) string {
 // contentCodings returns every coding the response names in Content-Encoding,
 // lowercased and stripped of parameters.
 //
-// Every header value is read, not just the first: http.Header.Get returns one
-// of them, so an upstream sending `identity` and `br` as separate header fields
-// would hide the coding behind the single value the gate used to inspect.
+// Two separate ways to hide a coding have to be unwound here. Header values:
+// http.Header.Get returns only the first, so an upstream sending `identity`
+// and `br` as separate fields hides the second. And within one value: a field
+// may carry a comma-separated list whose elements each carry parameters, so
+// `identity; q=1, br` names two codings — cutting at the semicolon first would
+// keep `identity` and discard `br` behind it.
 func contentCodings(h http.Header) []string {
 	var codings []string
 	for _, v := range h.Values("Content-Encoding") {
-		coding, _, _ := strings.Cut(v, ";")
-		if coding = strings.ToLower(strings.TrimSpace(coding)); coding != "" {
-			codings = append(codings, coding)
+		for _, list := range strings.Split(v, ",") {
+			coding, _, _ := strings.Cut(list, ";")
+			if coding = strings.ToLower(strings.TrimSpace(coding)); coding != "" {
+				codings = append(codings, coding)
+			}
 		}
 	}
 	return codings

@@ -202,10 +202,13 @@ func TestScrubber_RawCredentialIsMatchedCaseSensitively(t *testing.T) {
 // the upstream never announced it installs a brand-new map at end of stream:
 // copyTrailers does `if *t == nil { *t = make(http.Header) }`. HTTP/2 allows
 // unannounced trailers where HTTP/1.1 does not, so a real h2 server can
-// produce this shape; Go's own test server announces every trailer and so
-// cannot, which is why the assignment is reproduced here directly. A scrubber
-// that captured resp.Trailer by value would still hold the nil map it saw when
-// the body was wrapped, and the credential would reach the agent intact.
+// produce this shape. Go's own server cannot: it announces every trailer from
+// the Trailer header, and setting the key with http.TrailerPrefix after the
+// body does not produce one either — an attempt at that leaves resp.Trailer
+// allocated but empty. So the assignment is reproduced here directly, which is
+// what actually needs pinning. A scrubber that captured resp.Trailer by value
+// would still hold the nil map it saw when the body was wrapped, and the
+// credential would reach the agent intact.
 func TestScrubResponse_ScrubsTrailerMapInstalledAfterTheBodyWasWrapped(t *testing.T) {
 	t.Parallel()
 
@@ -686,11 +689,13 @@ func TestCredentialNeedles_KeepsExactAndFoldedCopiesOfOnePattern(t *testing.T) {
 		"a second credential's escaped, lowercased form was not scrubbed")
 }
 
-// The refusal must inspect every Content-Encoding value. http.Header.Get
-// returns only the first, so an upstream sending `identity` and a compression
-// coding as separate header fields hides the coding behind the one the gate
-// reads — and the credential rides out inside the compressed body, where the
-// byte scrubber cannot reach it.
+// The refusal must unwrap every Content-Encoding coding, in two ways.
+// http.Header.Get returns only the first header value, so an upstream sending
+// `identity` and `br` as separate fields hides the coding. And one value can
+// carry a comma-separated list whose elements carry parameters, so
+// `identity; q=1, br` names two codings and cutting at the semicolon first
+// keeps only the first. Either way the credential rides out inside the
+// compressed body, where the byte scrubber cannot reach it.
 func TestScrubResponse_FailsClosedOnALaterContentEncodingValue(t *testing.T) {
 	t.Parallel()
 
@@ -703,6 +708,9 @@ func TestScrubResponse_FailsClosedOnALaterContentEncodingValue(t *testing.T) {
 		{name: "brotli first, identity second", values: []string{"br", "identity"}, wantRef: true},
 		{name: "identity alone", values: []string{"identity"}, wantRef: false},
 		{name: "identity repeated", values: []string{"identity", "identity"}, wantRef: false},
+		{name: "identity with a parameter, brotli behind it", values: []string{"identity; q=1, br"}, wantRef: true},
+		{name: "brotli first in a combined value", values: []string{"br, identity"}, wantRef: true},
+		{name: "identity carrying only a parameter", values: []string{"identity; q=1"}, wantRef: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -728,4 +736,26 @@ func TestScrubResponse_FailsClosedOnALaterContentEncodingValue(t *testing.T) {
 			require.Equal(t, http.StatusOK, got.StatusCode)
 		})
 	}
+}
+
+// A brokered 101 cannot be scrubbed — goproxy hijacks the connection and
+// relays raw frames — but it must not pass in silence either, or a host that
+// upgrades reads as one postern inspected end to end. The body must also come
+// back untouched: wrapping it is what breaks the tunnel.
+func TestScrubResponse_LogsABrokeredProtocolUpgrade(t *testing.T) {
+	t.Parallel()
+
+	logger, logs := captureLogger()
+	resp := &http.Response{
+		StatusCode: http.StatusSwitchingProtocols,
+		Request:    requestWithCredential(http.MethodGet, testCredential),
+		Header:     http.Header{"Upgrade": []string{"websocket"}},
+		Body:       rwCloser{},
+	}
+
+	got := scrubResponse(resp, logger) //nolint:bodyclose // a hijacked tunnel body must not be closed by the filter; that is the behaviour under test
+
+	require.Equal(t, rwCloser{}, got.Body, "the upgrade body was wrapped; that breaks the tunnel")
+	require.Contains(t, logs.String(), "upgraded to a protocol tunnel")
+	require.NotContains(t, logs.String(), testCredential, "the credential reached the log")
 }
