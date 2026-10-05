@@ -19,6 +19,7 @@
   ],
 
   "containerEnv": {
+    "POSTERN_IN_CONTAINER": "1",
     "GOPATH": "/home/dev/go",
     "GOMODCACHE": "/home/dev/go/pkg/mod",
     "GOCACHE": "/home/dev/.cache/go-build",
