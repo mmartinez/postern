@@ -42,6 +42,12 @@ make ci    # lint + test (race) + vulncheck + license check
   `type(scope): subject`, e.g. `fix(broker): fail closed on resolver error`.
   Allowed types: `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `build`,
   `ci`, `perf`. A commit-msg hook enforces the format.
+- **No AI attribution.** This applies to human and agent contributors alike:
+  commit messages must not carry a `Co-Authored-By:` trailer naming Claude or
+  any other AI assistant, and PR descriptions must not include
+  `🤖 Generated with [Claude Code](...)` or any equivalent "generated with/by
+  <tool>" branding. The committed `.claude/settings.json` disables Claude
+  Code's built-in attribution; other tools must be configured likewise.
 - Keep changes surgical: each changed line should trace to the change you are
   making. Don't reformat or refactor unrelated code in the same commit.
 

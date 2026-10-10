@@ -24,7 +24,8 @@ vendor/
 .DS_Store
 .idea/
 .vscode/
-.claude/
+.claude/*
+!.claude/settings.json
 *.swp
 *.swo
 
