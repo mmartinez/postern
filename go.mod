@@ -1,6 +1,6 @@
 module github.com/mmartinez/postern
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/1password/onepassword-sdk-go v0.4.1
@@ -32,9 +32,9 @@ require (
 	github.com/tetratelabs/wazero v1.11.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/term v0.44.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/term v0.46.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
