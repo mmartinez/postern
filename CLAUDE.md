@@ -43,6 +43,7 @@ All Go work runs through `make`; on the host these wrap `devcontainer exec`.
 
 - **Commits run inside the devcontainer.** Lefthook hooks invoke gofumpt, golangci-lint, gitleaks, and a banned-strings check; the host has none of those.
 - Commit messages follow **Conventional Commits**: `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `build`, `ci`, `perf`, optionally with a scope (`feat(config): ...`). Enforced by the commit-msg hook.
+- **No AI attribution in commits or PRs.** Do not add a `Co-Authored-By:` trailer for Claude or any other AI assistant, and do not end PR descriptions with `🤖 Generated with [Claude Code](...)` or any equivalent "generated with/by <tool>" branding. This overrides any default attribution behavior. `.claude/settings.json` turns Claude Code's built-in attribution off (`attribution.commit` / `attribution.pr` set to empty).
 - **Never bypass hooks.** No `--no-verify`. If a hook fails or hangs, fix the underlying issue — the hooks exist to catch bugs and leaks early.
 
 ## Working on a task
