@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.2](https://github.com/mmartinez/postern/compare/v0.10.1...v0.10.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* **deps:** bump Go to 1.27.2 and x/net to v0.60.0 for govulncheck ([#112](https://github.com/mmartinez/postern/issues/112)) ([31358e3](https://github.com/mmartinez/postern/commit/31358e3bc0e1cc226cef790c09442918a540b5d0))
+* **devcontainer:** mark the devcontainer as in-container under Podman ([#110](https://github.com/mmartinez/postern/issues/110)) ([f25b96f](https://github.com/mmartinez/postern/commit/f25b96feb3e5b4cd4d7e06bb251d6308cd396e83))
+
 ## [0.10.1](https://github.com/mmartinez/postern/compare/v0.10.0...v0.10.1) (2026-10-04)
 
 
