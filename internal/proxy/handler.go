@@ -10,6 +10,7 @@ import (
 
 	"github.com/elazarl/goproxy"
 
+	"github.com/mmartinez/postern/internal/broker"
 	"github.com/mmartinez/postern/internal/logging"
 )
 
@@ -49,12 +50,13 @@ func bad502(req *http.Request) *http.Response {
 // so both fail closed with the generic 502.
 func installInnerGuard(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 	gp.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		authority, ok := ctx.UserData.(string)
-		if !ok || authority == "" {
+		t, ok := ctx.UserData.(*tunnel)
+		if !ok || t.authority == "" {
 			// Not an intercepted tunnel (plain HTTP proxying leaves UserData
 			// unset); nothing to bind.
 			return req, nil
 		}
+		authority := t.authority
 		if req.URL == nil {
 			logger.Info("rejecting malformed inner request",
 				slog.Int64("session", ctx.Session),
@@ -146,7 +148,11 @@ func installPreUpstream(gp *goproxy.ProxyHttpServer, logger *slog.Logger, hook f
 	if hook == nil {
 		return
 	}
-	gp.OnRequest().DoFunc(func(req *http.Request, _ *goproxy.ProxyCtx) (r *http.Request, resp *http.Response) {
+	gp.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (r *http.Request, resp *http.Response) {
+		if t, ok := ctx.UserData.(*tunnel); ok && t.hangup != nil {
+			// The hook may replace req.Body, so the copy is what goes upstream.
+			req = req.WithContext(broker.WithHangupWatch(req.Context(), t.hangup.WatchHangup))
+		}
 		r = req
 		defer func() {
 			if rec := recover(); rec != nil {

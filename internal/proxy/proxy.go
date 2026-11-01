@@ -156,8 +156,11 @@ func New(cfg Config) (*Proxy, error) {
 			// guard compares it against req.URL.Host. The port must be kept,
 			// or an inner request for api.example:8443 inside an
 			// api.example:443 tunnel would pass the guard and receive the
-			// brokered credential.
-			ctx.UserData = strings.ToLower(host)
+			// brokered credential. The tunnel also carries the client conn's
+			// hangup watch to the pre-upstream hook.
+			t := &tunnel{authority: strings.ToLower(host)}
+			t.hangup, _ = ctx.Req.Context().Value(connKey{}).(hangupWatcher)
+			ctx.UserData = t
 			return &goproxy.ConnectAction{
 				Action:    goproxy.ConnectMitm,
 				TLSConfig: tlsConfig,
