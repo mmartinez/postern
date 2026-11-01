@@ -218,6 +218,71 @@ rules:
 	}
 }
 
+// TestCheckApproval_MethodsThroughAliasOrMerge proves approval.methods is
+// checked, with the line of the offending value, when it reaches the rule
+// through an alias or a merge key.
+func TestCheckApproval_MethodsThroughAliasOrMerge(t *testing.T) {
+	t.Parallel()
+
+	const anchored = `
+credstores:
+  - name: default
+    provider: op
+rules:
+  - host: a.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+    methods: [GET, POST]
+    paths: &empty []
+    approval: &block
+      methods: &post [POST]
+  - host: b.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+    methods: [GET]
+`
+	const notInRule = `"POST" is not in the rule's methods`
+	cases := []struct {
+		name     string
+		approval string
+		wantPath string
+		wantMsg  string
+		wantLine int
+	}{
+		{name: "aliased block", approval: "    approval: *block", wantPath: "rules[1].approval.methods[0]", wantMsg: notInRule, wantLine: 15},
+		{name: "merged block", approval: "    approval:\n      <<: *block", wantPath: "rules[1].approval.methods[0]", wantMsg: notInRule, wantLine: 15},
+		{name: "aliased list", approval: "    approval:\n      methods: *post", wantPath: "rules[1].approval.methods[0]", wantMsg: notInRule, wantLine: 15},
+		{
+			name:     "aliased empty list",
+			approval: "    approval:\n      methods: *empty",
+			wantPath: "rules[1].approval.methods",
+			wantMsg:  "methods is empty",
+			wantLine: 24,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, root, err := Load(strings.NewReader(anchored + tc.approval + "\n"))
+			require.NoError(t, err)
+			v := newValidator(root)
+			v.goos = "linux"
+			v.checkApproval("rules[1]", cfg.Rules[1])
+			require.Len(t, v.out, 1, "got %v", v.out)
+			require.Equal(t, tc.wantPath, v.out[0].Path)
+			require.Contains(t, v.out[0].Message, tc.wantMsg)
+			require.Equal(t, tc.wantLine, v.out[0].Line)
+		})
+	}
+}
+
 // TestValidate_ApprovalRunsForEveryRuleShape proves the approval check is
 // reached for routing rules too, which return early from checkRule.
 func TestValidate_ApprovalRunsForEveryRuleShape(t *testing.T) {

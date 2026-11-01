@@ -47,7 +47,7 @@ func (v *validator) checkMethods(path string, methods []string, omitted string) 
 // different sources), so presence is confirmed against the AST.
 func (v *validator) checkScopingList(path string, entries []string, valid func(string) bool, requirement, omitted string) {
 	if len(entries) == 0 {
-		if node := v.nodeAt(path); node != nil && node.Kind == yaml.SequenceNode {
+		if node := dealias(v.nodeAt(path)); node != nil && node.Kind == yaml.SequenceNode {
 			key := path[strings.LastIndex(path, ".")+1:]
 			v.add(path, fmt.Sprintf("%s is empty; declare at least one entry or omit the key entirely (an omitted %s %s)", key, key, omitted), SeverityError)
 		}
