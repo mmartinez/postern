@@ -81,13 +81,16 @@ func TestHealthTracker_KilledTokenObservable(t *testing.T) {
 	_, err := buildCredStoreResolvers(context.Background(), reg, stores, seededStore(t), discardLogger(), health)
 	require.NoError(t, err)
 
+	// The service-account token is revoked out from under the running proxy.
+	// Revoke before the first scrape: that scrape launches the revalidation
+	// probe, and a probe that finished before the revocation would start the
+	// 30s cooldown and hide the failure from every later scrape in this test.
+	prov.kill()
+
 	first := health.Report()
 	require.Equal(t, "ok", first.Status)
 	require.Len(t, first.CredStores, 1)
-	require.True(t, first.CredStores[0].OK, "boot ping passed; health must start ok")
-
-	// The service-account token is revoked out from under the running proxy.
-	prov.kill()
+	require.True(t, first.CredStores[0].OK, "boot ping passed; the first scrape reports last-known state")
 
 	require.Eventually(t, func() bool {
 		report := health.Report()
