@@ -246,23 +246,23 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 
 // needsApproval reports whether req must pass the gate: the rule has an
 // approval block, and the block covers req's method. Some upstreams take the
-// method from an override header, so a request carrying one always needs it.
+// method from an override header, so a request carrying one, even empty,
+// always needs it.
 func (r Rule) needsApproval(req *http.Request) bool {
 	if r.Approval == nil {
 		return false
 	}
-	return len(r.Approval.Methods) == 0 || methodIn(req.Method, r.Approval.Methods) || methodOverride(req) != ""
+	return len(r.Approval.Methods) == 0 || methodIn(req.Method, r.Approval.Methods) || len(methodOverrides(req)) > 0
 }
 
-// methodOverride returns the method req asks the upstream to use in place of
-// its own through an override header, or "" when it carries none.
-func methodOverride(req *http.Request) string {
+// methodOverrides returns every value of the headers some upstreams honour
+// in place of the request method, empty values included.
+func methodOverrides(req *http.Request) []string {
+	var vs []string
 	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
-		if m := req.Header.Get(h); m != "" {
-			return m
-		}
+		vs = append(vs, req.Header.Values(h)...)
 	}
-	return ""
+	return vs
 }
 
 // joinLocked adds a waiter to the flight that decides key's grant, starting
@@ -494,8 +494,8 @@ func grantReason(req *http.Request, rule Rule, route, secretRef string) string {
 // from the client, so it is reduced to printable ASCII and capped.
 func requestLine(req *http.Request) string {
 	method := req.Method
-	if o := methodOverride(req); o != "" {
-		method += " as " + o
+	if o := methodOverrides(req); len(o) > 0 {
+		method += " as " + strings.Join(o, ",")
 	}
 	line := []byte(method + " " + canonicalHost(stripPort(req.URL.Host)) + req.URL.EscapedPath())
 	for i, b := range line {

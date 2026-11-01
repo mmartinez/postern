@@ -17,12 +17,12 @@ func TestApprovalReason(t *testing.T) {
 
 	long := "/" + strings.Repeat("a", 200)
 	cases := []struct {
-		name     string
-		method   string
-		override string
-		url      string
-		route    string
-		want     string
+		name      string
+		method    string
+		overrides []string
+		url       string
+		route     string
+		want      string
 	}{
 		{
 			name:   "any client, query and port dropped",
@@ -56,11 +56,18 @@ func TestApprovalReason(t *testing.T) {
 			want:   "send op://V/I/f to GET api.example.com/" + strings.Repeat("a", 119-len("GET api.example.com/")) + "… for any client",
 		},
 		{
-			name:     "method override shown",
-			method:   http.MethodGet,
-			override: "DELETE",
-			url:      "https://api.example.com/v1/x",
-			want:     "send op://V/I/f to GET as DELETE api.example.com/v1/x for any client",
+			name:      "method override shown",
+			method:    http.MethodGet,
+			overrides: []string{"DELETE"},
+			url:       "https://api.example.com/v1/x",
+			want:      "send op://V/I/f to GET as DELETE api.example.com/v1/x for any client",
+		},
+		{
+			name:      "every override value shown",
+			method:    http.MethodGet,
+			overrides: []string{"", "DELETE"},
+			url:       "https://api.example.com/v1/x",
+			want:      "send op://V/I/f to GET as ,DELETE api.example.com/v1/x for any client",
 		},
 	}
 	for _, tc := range cases {
@@ -69,8 +76,8 @@ func TestApprovalReason(t *testing.T) {
 			u, err := url.Parse(tc.url)
 			require.NoError(t, err)
 			req := &http.Request{Method: tc.method, URL: u, Header: http.Header{}}
-			if tc.override != "" {
-				req.Header.Set("X-HTTP-Method-Override", tc.override)
+			for _, o := range tc.overrides {
+				req.Header.Add("X-HTTP-Method-Override", o)
 			}
 			require.Equal(t, tc.want, approvalReason(req, "op://V/I/f", tc.route))
 		})
