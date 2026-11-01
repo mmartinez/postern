@@ -260,25 +260,49 @@ func TestGate_ReloadClearsGrant(t *testing.T) {
 
 // TestGate_GrantRequestAlreadyGoneNeverPrompts sends grant requests whose
 // client left before they reached the gate, with the dialog free. None of
-// them may open a dialog.
+// them may open a dialog, whether the request context is already done or
+// the hangup watch reports the departure as it is armed.
 func TestGate_GrantRequestAlreadyGoneNeverPrompts(t *testing.T) {
 	t.Parallel()
 
-	f := newGateFixture(t, nil, grantRule())
-	for range 50 {
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		f.send(newRequest(t).WithContext(ctx)).requireFailClosed(t)
+	cases := []struct {
+		name string
+		send func(f *gateFixture) *inflight
+	}{
+		{
+			name: "context done",
+			send: func(f *gateFixture) *inflight {
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				return f.send(newRequest(t).WithContext(ctx))
+			},
+		},
+		{
+			name: "hangup seen when the watch is armed",
+			send: func(f *gateFixture) *inflight {
+				return f.sendWatched(newRequest(t), &fakeWatch{armed: f.armed, hangupOnArm: true})
+			},
+		},
 	}
-	live := newRequest(t)
-	live.URL.Path = "/v1/live"
-	in := f.send(live)
-	p := f.approver.next(t)
-	require.Contains(t, p.reason, "/v1/live", "the first dialog came from a request that was already gone")
-	p.answer <- broker.OutcomeDenied
-	in.requireFailClosed(t)
-	require.Equal(t, int64(1), f.approver.calls.Load())
-	require.Zero(t, f.res.calls.Load())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newGateFixture(t, nil, grantRule())
+			for range 50 {
+				tc.send(f).requireFailClosed(t)
+			}
+			live := newRequest(t)
+			live.URL.Path = "/v1/live"
+			in := f.send(live)
+			p := f.approver.next(t)
+			require.Contains(t, p.reason, "/v1/live", "the first dialog came from a request that was already gone")
+			p.answer <- broker.OutcomeDenied
+			in.requireFailClosed(t)
+			require.Equal(t, int64(1), f.approver.calls.Load())
+			require.Zero(t, f.res.calls.Load())
+		})
+	}
 }
 
 // TestGate_ShutdownVoidsGrants covers a request on a tunnel that outlives the

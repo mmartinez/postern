@@ -190,13 +190,6 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 		log(OutcomeUnavailable, err)
 		return false
 	}
-	// A flight can open its dialog as soon as it is joined, so a request
-	// whose client already left must not join one.
-	if err := req.Context().Err(); err != nil {
-		g.mu.Unlock()
-		log(outcomeCanceled, err)
-		return false
-	}
 	if g.liveLocked(g.grants, key) {
 		g.mu.Unlock()
 		return true
@@ -212,8 +205,18 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 		return false
 	}
 	g.waiting++
+	ctx, cancel := context.WithCancel(req.Context())
+	stopWatch := func() {}
+	if w := HangupWatchFrom(ctx); w != nil {
+		stopWatch = sync.OnceFunc(w(cancel))
+	}
+	// A flight can open its dialog as soon as it is joined, so the watch is
+	// armed first and a request whose client already left never joins one.
+	// Joining under the lock that checked the grant means a request either
+	// sees the grant or waits on the flight that records it.
+	ttl := rule.Approval.TTL
 	var fl *flight
-	if ttl := rule.Approval.TTL; ttl > 0 {
+	if ttl > 0 && ctx.Err() == nil {
 		fl = g.joinLocked(key, ttl, grantReason(req, rule, route, secretRef), log)
 	}
 	g.mu.Unlock()
@@ -222,20 +225,17 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 		g.waiting--
 		g.mu.Unlock()
 	}()
-
-	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
-	stopWatch := func() {}
-	if w := HangupWatchFrom(ctx); w != nil {
-		stopWatch = sync.OnceFunc(w(cancel))
-	}
 	defer stopWatch()
 
 	var outcome Outcome
 	var err error
-	if fl != nil {
+	switch {
+	case fl != nil:
 		outcome, err = g.await(ctx, key, fl)
-	} else {
+	case ttl > 0:
+		outcome, err = outcomeCanceled, ctx.Err()
+	default:
 		outcome, err = g.decide(ctx, key, 0, approvalReason(req, secretRef, route), nil)
 	}
 	if err != nil || outcome != OutcomeApproved {

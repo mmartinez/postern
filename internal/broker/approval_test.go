@@ -125,6 +125,9 @@ type fakeWatch struct {
 	// hangupOnStop reports a hangup from inside stop, the way the real
 	// watch delivers a disconnect it read just before being stopped.
 	hangupOnStop bool
+	// hangupOnArm reports a hangup as soon as the watch is armed, the way
+	// the real watch reports a client that left before the gate saw it.
+	hangupOnArm bool
 }
 
 func (w *fakeWatch) watch(onHangup func()) func() {
@@ -132,6 +135,9 @@ func (w *fakeWatch) watch(onHangup func()) func() {
 	w.onHangup = onHangup
 	w.mu.Unlock()
 	w.armed <- struct{}{}
+	if w.hangupOnArm {
+		onHangup()
+	}
 	return func() {
 		w.stops.Add(1)
 		if w.hangupOnStop {
