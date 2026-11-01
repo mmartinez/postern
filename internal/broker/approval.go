@@ -43,13 +43,22 @@ type Outcome string
 
 // Outcomes an Approver returns, plus the ones the gate decides itself.
 const (
-	OutcomeApproved    Outcome = "approved"
-	OutcomeDenied      Outcome = "denied"
-	OutcomeDismissed   Outcome = "dismissed"
-	OutcomeTimeout     Outcome = "timeout"
-	OutcomeCooldown    Outcome = "cooldown"
+	// OutcomeApproved means the user authenticated and allowed the request.
+	OutcomeApproved Outcome = "approved"
+	// OutcomeDenied means the OS refused authorization.
+	OutcomeDenied Outcome = "denied"
+	// OutcomeDismissed means the user closed the dialog without answering.
+	OutcomeDismissed Outcome = "dismissed"
+	// OutcomeTimeout means the dialog got no answer within promptTimeout.
+	OutcomeTimeout Outcome = "timeout"
+	// OutcomeCooldown means the gate refused without a dialog: the key is
+	// cooling down after a refusal, or the refusal budget is spent.
+	OutcomeCooldown Outcome = "cooldown"
+	// OutcomeUnavailable means no answer could be obtained: no dialog
+	// backend, a backend error, a full queue, or shutdown.
 	OutcomeUnavailable Outcome = "unavailable"
-	outcomeCanceled    Outcome = "canceled"
+	// outcomeCanceled means the client left before its request was approved.
+	outcomeCanceled Outcome = "canceled"
 )
 
 // Approver shows reason in an OS authentication dialog and blocks until the
