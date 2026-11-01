@@ -29,10 +29,11 @@ rather than resolved from an arbitrary store.
 
 Approval prompts fail closed the same way. For a rule with an `approval`
 block, a denial, a dismissed dialog, a timeout, a cooldown refusal, an
-unavailable dialog (no backend, no authentication agent, missing policy, or
-too many waiting requests), and an approval for a client that has already
-disconnected all return the same `502`. The resolver and the upstream are
-never called; tests assert both counters stay at zero.
+unavailable dialog (no backend, which includes a macOS build without cgo; no
+polkit authentication agent or policy on Linux; no usable authentication
+method on macOS; or too many waiting requests), and an approval for a client
+that has already disconnected all return the same `502`. The resolver and the
+upstream are never called; tests assert both counters stay at zero.
 
 An approval with a positive `ttl` is a grant, and a grant is scoped by the
 rule, not by the request the dialog showed first. Until it expires it covers

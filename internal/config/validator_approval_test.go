@@ -35,6 +35,7 @@ func TestCheckApproval(t *testing.T) {
 		wantLine int    // 0 means the approval line, 12
 	}{
 		{name: "empty mapping on linux", approval: "    approval: {}", goos: "linux"},
+		{name: "empty mapping on darwin", approval: "    approval: {}", goos: "darwin"},
 		{name: "absent block", approval: "", goos: "darwin"},
 		{name: "positive ttl", approval: "    approval:\n      ttl: 10m", goos: "linux"},
 		{name: "zero ttl", approval: "    approval:\n      ttl: 0s", goos: "linux"},

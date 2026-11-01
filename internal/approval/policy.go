@@ -1,5 +1,6 @@
 // Package approval implements the broker's Approver with the operating
-// system's authentication dialog, and renders the policy that dialog needs.
+// system's authentication dialog: polkit on Linux and LocalAuthentication on
+// macOS. It also renders the polkit policy the Linux dialog needs.
 package approval
 
 import (

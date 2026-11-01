@@ -199,7 +199,7 @@ rules:
 | `injects` | no | Several header injections fed by the rule's one `secret_ref`, for a host that authenticates the same credential through two different headers. Mutually exclusive with `inject`, `routes`, and `template`; see below. |
 | `routes` | no | Placeholder-routing entries: per-token secret selection for a shared host. Mutually exclusive with `secret_ref`/`inject.name`; see below. |
 | `template` | no | Name of a built-in preset (see below) that fills in `host` and `inject` defaults. |
-| `approval` | no | Ask the user to approve injections, per request or for a time window, in an OS authentication dialog (Linux only); see [Approval](#approval). |
+| `approval` | no | Ask the user to approve injections, per request or for a time window, in an OS authentication dialog (Linux and macOS); see [Approval](#approval). |
 
 \* When `template` is set, `host` and `inject` may be omitted and are filled
 from the preset. Any field you do set on the rule overrides the preset.
@@ -473,16 +473,23 @@ rules:
 | `methods` | no | every method the rule brokers | Methods that need approval, compared case-insensitively. Requests with other methods inject without a prompt and log no approval line, unless they carry a method-override header (see [security.md](security.md)). |
 
 `approval: {}` prompts for every request. Write `ttl` with a unit (`0s`,
-`10m`); a bare `0` is not a duration. Approval is supported on Linux only,
-through polkit. Install the action file once, as the user who runs postern
-(the command refuses to run as root, because the file names its owner and
-only the owner may set the dialog text):
+`10m`); a bare `0` is not a duration. Approval is supported on Linux, through
+polkit, and on macOS, through LocalAuthentication.
+
+On Linux, install the action file once, as the user who runs postern (the
+command refuses to run as root, because the file names its owner and only the
+owner may set the dialog text):
 
 ```sh
 postern approval policy | sudo tee /usr/share/polkit-1/actions/dev.postern.policy
 ```
 
 A polkit authentication agent must be running in the desktop session.
+
+On macOS there is no setup step. The dialog accepts Touch ID, an Apple Watch,
+or the account password. Postern must run in your login session, for example
+as a LaunchAgent, not a LaunchDaemon. A macOS build without cgo has no
+approval backend, so every approval rule fails closed.
 
 - **Prompt text.** With `ttl: 0s` the dialog reads `postern is trying to send
   <secret_ref> to <METHOD host/path> for agent <route>.`, or `for any client.`
@@ -493,10 +500,11 @@ A polkit authentication agent must be running in the desktop session.
   followed by `or method-override`, else the rule's `methods`, else `all`;
   `<host>` is the rule's host pattern; `<paths>` reads `paths starting with`
   followed by the rule's `paths`, or `any path`; `<ttl>` reads like `10m` or
-  `1h30m`. In both forms a request with a method-override header shows its
-  method as `GET as DELETE`, the query string is dropped, the path is shown
-  escaped, bytes outside printable ASCII are shown as `?`, and the request
-  line is cut at 120 characters. `oauth1` rules show the `token_ref`.
+  `1h30m`. macOS quotes the name: `"postern" is trying to ...`. In both forms
+  a request with a method-override header shows its method as `GET as
+  DELETE`, the query string is dropped, the path is shown escaped, bytes
+  outside printable ASCII are shown as `?`, and the request line is cut at 120
+  characters. `oauth1` rules show the `token_ref`.
 - **Grants.** An approved grant covers its key until `ttl` after the user
   answers. A request under a live grant injects at once, without waiting in
   the queue. Concurrent requests that need the same grant share one prompt,
@@ -539,9 +547,10 @@ A polkit authentication agent must be running in the desktop session.
   Frequent prompts train the user to approve without reading.
 - **Validation.** A null `approval:` (no `{}`), written directly or reached
   through an alias or a merge key, is an error, because it would silently skip
-  the prompt. An `approval` block on a platform other than Linux is an error,
-  and so is a negative `ttl`. `approval.methods` entries follow the `methods`
-  rules, and when the rule declares `methods`, each entry must be one of them.
+  the prompt. An `approval` block on a platform other than Linux or macOS is an
+  error, and so is a negative `ttl`. `approval.methods` entries follow the
+  `methods` rules, and when the rule declares `methods`, each entry must be one
+  of them.
 
 ### Built-in templates
 

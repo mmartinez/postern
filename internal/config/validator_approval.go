@@ -19,7 +19,7 @@ func (v *validator) checkApproval(base string, r Rule) {
 		}
 		return
 	}
-	if v.goos != "linux" {
+	if v.goos != "linux" && v.goos != "darwin" {
 		v.add(path, fmt.Sprintf("approval is not supported on %s", v.goos), SeverityError)
 	}
 	if r.Approval.TTL < 0 {
