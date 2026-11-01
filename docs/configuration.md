@@ -493,15 +493,18 @@ A polkit authentication agent must be running in the desktop session.
 - **Client gone.** A queued request whose client disconnects leaves the queue
   without a prompt. An open dialog stays open when its client leaves, but the
   request fails closed even if the user approves.
+- **Request bodies.** A request to an approval rule is read in full before
+  the prompt, up to `max_body_bytes`, so a client that leaves during an upload
+  is noticed. A larger body gets `413` without a prompt.
 - **Fail closed.** Every outcome other than an approval returns the uniform
   `502`, and the resolver and the upstream are never called.
 - **Use it sparingly.** Every request to the rule prompts. Put approval on
   rules that write or hold high-impact secrets, narrowed with `paths` and
   `methods`, so read traffic does not train the user to approve without
   reading.
-- **Validation.** A null `approval:` (no `{}`) is an error, because it would
-  silently skip the prompt. An `approval` block on a platform other than Linux
-  is an error.
+- **Validation.** A null `approval:` (no `{}`), written directly or through an
+  alias, is an error, because it would silently skip the prompt. An
+  `approval` block on a platform other than Linux is an error.
 
 ### Built-in templates
 

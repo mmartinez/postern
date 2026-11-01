@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -159,9 +160,11 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
+	stopWatch := func() {}
 	if w := HangupWatchFrom(ctx); w != nil {
-		defer w(cancel)()
+		stopWatch = sync.OnceFunc(w(cancel))
 	}
+	defer stopWatch()
 
 	if err := g.dialog.Acquire(ctx, 1); err != nil {
 		log(outcomeCanceled, err)
@@ -201,6 +204,9 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 		log(outcome, err)
 		return false
 	}
+	// Stopping the watch first delivers a hangup it has already read, so
+	// the check below sees every disconnect that happened before the answer.
+	stopWatch()
 	if err := ctx.Err(); err != nil {
 		log(outcomeCanceled, err)
 		return false
@@ -221,6 +227,11 @@ func (g *Gate) ask(reason string) (Outcome, error) {
 	}
 	done := make(chan result, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{OutcomeUnavailable, fmt.Errorf("approver panicked: %v", r)}
+			}
+		}()
 		o, err := g.approver.Approve(dctx, reason)
 		done <- result{o, err}
 	}()

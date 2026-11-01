@@ -91,6 +91,22 @@ func TestPolkit_PassesSubjectAndMessage(t *testing.T) {
 	}, got[4:])
 }
 
+// TestPolkit_MessageNeverExpands covers polkit's $(key) expansion of the
+// message. An unterminated "$(" makes polkit drop the rest of the text, so a
+// request path could hide which agent is asking. No "$(" may reach polkit.
+func TestPolkit_MessageNeverExpands(t *testing.T) {
+	path, args := fakePkcheck(t, "exit 0")
+	_, err := newPolkit(path).Approve(t.Context(), "send op://V/I/f to GET api.example.com/a$(polkit.message)/b$( for agent max")
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(args)
+	require.NoError(t, err)
+	got := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	msg := got[len(got)-1]
+	require.NotContains(t, msg, "$(")
+	require.True(t, strings.HasSuffix(msg, " for agent max."), "the agent must still close the message: %q", msg)
+}
+
 func TestPolkit_CancelKillsPkcheck(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "started")

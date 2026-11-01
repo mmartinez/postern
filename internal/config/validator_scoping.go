@@ -55,6 +55,9 @@ func (v *validator) checkScopingList(path string, entries []string, valid func(s
 
 // nodeAt walks the AST to the dotted path (same grammar locate consumes)
 // and returns the terminal node, or nil when the document has no such node.
+// A terminal alias is resolved to the node it names, because that node is
+// what the decoder used. Intermediate aliases are not followed: they name a
+// node that is validated at its own path.
 func (v *validator) nodeAt(path string) *yaml.Node {
 	if v.root == nil {
 		return nil
@@ -69,6 +72,9 @@ func (v *validator) nodeAt(path string) *yaml.Node {
 		if node == nil {
 			return nil
 		}
+	}
+	for node.Kind == yaml.AliasNode && node.Alias != nil {
+		node = node.Alias
 	}
 	return node
 }

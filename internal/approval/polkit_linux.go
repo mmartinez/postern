@@ -73,11 +73,15 @@ func (p *Polkit) Approve(ctx context.Context, reason string) (broker.Outcome, er
 		return broker.OutcomeUnavailable, p.err
 	}
 	var stderr headBuffer
-	cmd := exec.CommandContext(ctx, p.path, //nolint:gosec // path comes from LookPath; reason is one argv entry, never shell-parsed
+	// polkit expands $(key) in the message, and an unterminated "$(" drops
+	// the rest of it, so a request path could hide which agent is asking.
+	// "%28" is how the path would percent-encode the parenthesis anyway.
+	message := "postern is trying to " + strings.ReplaceAll(reason, "$(", "$%28") + "."
+	cmd := exec.CommandContext(ctx, p.path, //nolint:gosec // path comes from LookPath; message is one argv entry, never shell-parsed
 		"--action-id", ActionID,
 		"--process", p.subject,
 		"--allow-user-interaction",
-		"--detail", "polkit.message", "postern is trying to "+reason+".",
+		"--detail", "polkit.message", message,
 	)
 	cmd.Stderr = &stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }

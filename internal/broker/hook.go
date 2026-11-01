@@ -150,7 +150,10 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 		// the injector will skip (compressed or multipart) is never rewritten,
 		// so it must stream through uncapped — buffering it would 413 an
 		// oversized body the proxy is supposed to forward unchanged.
-		if rule.usesBodySurface() && !bodySkippable(req) {
+		// An approval rule buffers any body before the prompt: the client
+		// hangup watch can only see a disconnect once the unread upload in
+		// front of it is drained.
+		if (rule.usesBodySurface() && !bodySkippable(req)) || (rule.Approval != nil && req.Body != http.NoBody) {
 			bodyCap := effectiveBodyCap(maxBodyBytes, rule.Injection.MaxBodyBytes)
 			limited := http.MaxBytesReader(nil, req.Body, int64(bodyCap))
 			buf, rerr := io.ReadAll(limited)

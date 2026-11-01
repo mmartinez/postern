@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -120,6 +121,9 @@ type fakeWatch struct {
 	mu       sync.Mutex
 	onHangup func()
 	stops    atomic.Int64
+	// hangupOnStop reports a hangup from inside stop, the way the real
+	// watch delivers a disconnect it read just before being stopped.
+	hangupOnStop bool
 }
 
 func (w *fakeWatch) watch(onHangup func()) func() {
@@ -127,7 +131,12 @@ func (w *fakeWatch) watch(onHangup func()) func() {
 	w.onHangup = onHangup
 	w.mu.Unlock()
 	w.armed <- struct{}{}
-	return func() { w.stops.Add(1) }
+	return func() {
+		w.stops.Add(1)
+		if w.hangupOnStop {
+			onHangup()
+		}
+	}
 }
 
 func (w *fakeWatch) hangup() {
@@ -176,7 +185,11 @@ type inflight struct {
 
 // send runs req through the hook in the background with a fresh hangup watch.
 func (f *gateFixture) send(req *http.Request) *inflight {
-	w := &fakeWatch{armed: f.armed}
+	return f.sendWatched(req, &fakeWatch{armed: f.armed})
+}
+
+// sendWatched is send with a caller-built watch.
+func (f *gateFixture) sendWatched(req *http.Request, w *fakeWatch) *inflight {
 	in := &inflight{
 		req:   req.WithContext(broker.WithHangupWatch(req.Context(), w.watch)),
 		watch: w,
@@ -558,6 +571,75 @@ func TestGate_WaitingCap(t *testing.T) {
 	}
 	require.Equal(t, int64(1), f.approver.calls.Load())
 	require.Zero(t, f.res.calls.Load())
+}
+
+func TestGate_OversizedBodyFailsBeforePrompt(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, approvalRule())
+	body := strings.NewReader(strings.Repeat("a", config.DefaultMaxBodyBytes+1))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://api.example.com/v1/upload", body)
+	require.NoError(t, err)
+
+	resp := f.send(req).result(t)
+	require.NotNil(t, resp)
+	defer closeIfNonNil(t, resp)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	require.Zero(t, f.approver.calls.Load(), "an oversized body must not prompt")
+	require.Zero(t, f.res.calls.Load())
+}
+
+// TestGate_HangupSeenWhileStoppingFailsClosed covers a disconnect the watch
+// has read but not yet reported when the approval arrives. Stopping the
+// watch delivers it, and the request must still fail closed.
+func TestGate_HangupSeenWhileStoppingFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, approvalRule())
+	in := f.sendWatched(newRequest(t), &fakeWatch{armed: f.armed, hangupOnStop: true})
+	f.waitArmed(t, 1)
+	f.approver.next(t).answer <- broker.OutcomeApproved
+
+	in.requireFailClosed(t)
+	require.Zero(t, f.res.calls.Load())
+}
+
+func TestGate_ShutdownClosesDialogAndFailsQueued(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, approvalRule())
+	base, shutdown := context.WithCancel(t.Context())
+	gate := broker.NewGate(base, broker.GateConfig{Approver: f.approver, Now: f.clock.Now, After: f.clock.After})
+	f.hook = broker.Hook(f.engine, f.res, config.OnNoMatchPassthrough, 0, true, nil, gate) //nolint:bodyclose // closure
+
+	open := f.send(newRequest(t))
+	queued := f.send(newRequest(t))
+	f.waitArmed(t, 2)
+	p := f.approver.next(t)
+	shutdown()
+	select {
+	case <-p.ctx.Done():
+	case <-time.After(waitLimit):
+		t.Fatal("shutdown left the dialog open")
+	}
+
+	open.requireFailClosed(t)
+	queued.requireFailClosed(t)
+	require.Equal(t, int64(1), f.approver.calls.Load(), "a queued request must not prompt after shutdown")
+	require.Zero(t, f.res.calls.Load())
+}
+
+func TestGate_ApproverPanicFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	res := &fakeResolver{value: "sk-secret"}
+	gate := broker.NewGate(t.Context(), broker.GateConfig{
+		Approver: approverFunc(func(context.Context, string) (broker.Outcome, error) { panic("backend bug") }),
+	})
+	hook := broker.Hook(broker.NewEngine([]broker.Rule{approvalRule()}), res, config.OnNoMatchPassthrough, 0, true, nil, gate) //nolint:bodyclose // requireFailClosed closes it
+
+	requireFailClosed(t, hook(newRequest(t))) //nolint:bodyclose // requireFailClosed closes it
+	require.Zero(t, res.calls.Load())
 }
 
 func TestGate_MissingApproverFailsClosed(t *testing.T) {

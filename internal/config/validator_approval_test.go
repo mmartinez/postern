@@ -77,6 +77,27 @@ func TestCheckApproval(t *testing.T) {
 	}
 }
 
+// TestCheckApproval_NullThroughAlias covers an approval value that is an
+// alias of a null node elsewhere in the document. It decodes to nil like a
+// literal null, so it must be rejected the same way.
+func TestCheckApproval_NullThroughAlias(t *testing.T) {
+	t.Parallel()
+
+	cfg, root, err := Load(strings.NewReader(approvalRuleConfig("    paths: &off null\n    approval: *off")))
+	require.NoError(t, err)
+	require.Nil(t, cfg.Rules[0].Approval)
+
+	lints := Validate(cfg, root)
+	var found bool
+	for _, l := range lints {
+		if l.Path == "rules[0].approval" && l.Severity == SeverityError {
+			require.Equal(t, 13, l.Line, "lint must point at the alias")
+			found = true
+		}
+	}
+	require.True(t, found, "an aliased null approval must be an error; got %v", lints)
+}
+
 // TestValidate_ApprovalRunsForEveryRuleShape proves the approval check is
 // reached for routing rules too, which return early from checkRule.
 func TestValidate_ApprovalRunsForEveryRuleShape(t *testing.T) {
