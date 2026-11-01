@@ -46,6 +46,33 @@ func TestCheckApproval(t *testing.T) {
 			wantLine: 13,
 		},
 		{
+			name:     "approval methods a case-variant subset of the rule's",
+			approval: "    methods: [GET, POST]\n    approval:\n      methods: [post]",
+			goos:     "linux",
+		},
+		{name: "approval methods without rule methods", approval: "    approval:\n      methods: [POST]", goos: "linux"},
+		{
+			name:     "approval method outside the rule's",
+			approval: "    methods: [GET, POST]\n    approval:\n      methods:\n        - POST\n        - DELETE",
+			goos:     "linux",
+			wantMsg:  `"DELETE" is not in the rule's methods`,
+			wantLine: 16,
+		},
+		{
+			name:     "approval method not a token",
+			approval: "    approval:\n      methods: [P0ST]",
+			goos:     "linux",
+			wantMsg:  `"P0ST" must be a non-empty alphabetic HTTP method token (e.g. POST)`,
+			wantLine: 13,
+		},
+		{
+			name:     "empty approval methods",
+			approval: "    approval:\n      methods: []",
+			goos:     "linux",
+			wantMsg:  "methods is empty; declare at least one entry or omit the key entirely (an omitted methods requires approval for every method)",
+			wantLine: 13,
+		},
+		{
 			name:     "null block",
 			approval: "    approval:",
 			goos:     "linux",

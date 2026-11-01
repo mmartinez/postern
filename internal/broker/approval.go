@@ -153,12 +153,13 @@ func NewGate(ctx context.Context, cfg GateConfig) *Gate {
 }
 
 // allow reports whether req may have secretRef injected. Rules without an
-// approval block, and requests under a live grant, pass at once. Every other
-// path that does not end in an approval by a client that is still connected
-// returns false, and the caller fails closed. A gate without an approver
-// refuses every approval rule.
+// approval block, requests whose method the block does not cover, and
+// requests under a live grant pass at once. Every other path that does not
+// end in an approval by a client that is still connected returns false, and
+// the caller fails closed. A gate without an approver refuses every request
+// that needs approval.
 func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool {
-	if rule.Approval == nil {
+	if !rule.needsApproval(req) {
 		return true
 	}
 	log := func(o Outcome, err error) {
@@ -241,6 +242,12 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 	}
 	log(OutcomeApproved, nil)
 	return true
+}
+
+// needsApproval reports whether req must pass the gate: the rule has an
+// approval block, and the block covers req's method.
+func (r Rule) needsApproval(req *http.Request) bool {
+	return r.Approval != nil && (len(r.Approval.Methods) == 0 || methodIn(req.Method, r.Approval.Methods))
 }
 
 // joinLocked adds a waiter to the flight that decides key's grant, starting
@@ -446,7 +453,10 @@ func approvalReason(req *http.Request, secretRef, route string) string {
 // asked first.
 func grantReason(req *http.Request, rule Rule, route, secretRef string) string {
 	methods := "all"
-	if len(rule.Methods) > 0 {
+	switch {
+	case len(rule.Approval.Methods) > 0:
+		methods = strings.Join(rule.Approval.Methods, "/")
+	case len(rule.Methods) > 0:
 		methods = strings.Join(rule.Methods, "/")
 	}
 	paths := "any path"

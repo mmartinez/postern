@@ -39,22 +39,23 @@ func (r Rule) scopeAllows(req *http.Request) bool {
 			return false
 		}
 	}
-	if len(r.Methods) > 0 {
-		methodAllowed := false
-		for _, m := range r.Methods {
-			// Method comparison is case-insensitive: RFC 9110 methods are
-			// case-sensitive on the wire, but configs conventionally declare
-			// uppercase tokens while nothing forbids "post" in YAML, and a
-			// case mismatch silently 502ing every request would be a config
-			// trap rather than a security property.
-			if strings.EqualFold(req.Method, m) {
-				methodAllowed = true
-				break
-			}
-		}
-		if !methodAllowed {
-			return false
-		}
+	if len(r.Methods) > 0 && !methodIn(req.Method, r.Methods) {
+		return false
 	}
 	return true
+}
+
+// methodIn reports whether method matches one of methods.
+//
+// Method comparison is case-insensitive: RFC 9110 methods are case-sensitive
+// on the wire, but configs conventionally declare uppercase tokens while
+// nothing forbids "post" in YAML, and a case mismatch silently 502ing every
+// request would be a config trap rather than a security property.
+func methodIn(method string, methods []string) bool {
+	for _, m := range methods {
+		if strings.EqualFold(method, m) {
+			return true
+		}
+	}
+	return false
 }

@@ -90,6 +90,15 @@ func TestGrantReason(t *testing.T) {
 			want:  "let agent max use op://V/I/f for GET/POST requests to api.example.com on paths starting with /v1/cards, /v1/users for 10m (first request: POST api.example.com/v1/cards)",
 		},
 		{
+			name: "approval methods narrow the rule's",
+			rule: Rule{
+				Host:     "api.example.com",
+				Methods:  []string{http.MethodGet, http.MethodPost},
+				Approval: &config.Approval{TTL: 10 * time.Minute, Methods: []string{http.MethodPost}},
+			},
+			want: "let any client use op://V/I/f for POST requests to api.example.com on any path for 10m (first request: POST api.example.com/v1/cards)",
+		},
+		{
 			name: "bare rule",
 			rule: bare(90 * time.Minute),
 			want: "let any client use op://V/I/f for all requests to *.example.com on any path for 1h30m (first request: POST api.example.com/v1/cards)",

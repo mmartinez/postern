@@ -42,6 +42,10 @@ window can use the credential for anything the rule's `host`, `paths`, and
 `methods` allow, without another prompt. Grants live in memory only; a
 restart or a hot reload clears them.
 
+`approval.methods` narrows which requests prompt at all. A request whose
+method it does not list injects without a prompt, exactly as on a rule with
+no `approval` block, so list every method that can change state.
+
 ## Credential caching and revocation window
 
 Resolved credentials are cached in memory and refreshed in the background so the
