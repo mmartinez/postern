@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/mmartinez/postern/internal/config"
 )
 
 // Rule is the runtime representation of a single host-broker entry. It is
@@ -52,6 +54,11 @@ type Rule struct {
 	// fails closed before the resolver is called. Empty means the rule
 	// brokers every method.
 	Methods []string
+
+	// Approval, when non-nil, makes the hook ask the Gate before each
+	// injection. The pointer also identifies the rule within one loaded
+	// ruleset, so it must be unique per rule per load (see FromConfigRules).
+	Approval *config.Approval
 }
 
 // Route is one entry of a placeholder-routing rule: presenting Token selects

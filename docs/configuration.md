@@ -199,6 +199,7 @@ rules:
 | `injects` | no | Several header injections fed by the rule's one `secret_ref`, for a host that authenticates the same credential through two different headers. Mutually exclusive with `inject`, `routes`, and `template`; see below. |
 | `routes` | no | Placeholder-routing entries: per-token secret selection for a shared host. Mutually exclusive with `secret_ref`/`inject.name`; see below. |
 | `template` | no | Name of a built-in preset (see below) that fills in `host` and `inject` defaults. |
+| `approval` | no | Ask the user to approve each injection in an OS authentication dialog (Linux only); see [Approval](#approval). |
 
 \* When `template` is set, `host` and `inject` may be omitted and are filled
 from the preset. Any field you do set on the rule overrides the preset.
@@ -446,6 +447,62 @@ rules:
   opposite), as is a `paths` entry not starting with `/` or a `methods` entry
   that is not a non-empty alphabetic token.
 
+### Approval
+
+`approval: {}` makes the rule wait for the user to approve every injection in
+an OS authentication dialog. Nothing is resolved and nothing reaches the
+upstream until the user approves.
+
+```yaml
+rules:
+  - host: payments.example.com
+    secret_ref: op://Agents/Payments/secret_key
+    methods: [POST, DELETE]
+    approval: {}
+    inject:
+      type: header
+      name: Authorization
+      template: "Bearer {{ CREDENTIAL }}"
+```
+
+The block has no fields yet; its presence turns prompting on. Approval is
+supported on Linux only, through polkit. Install the action file once, as the
+user who runs postern (the command refuses to run as root, because the file
+names its owner and only the owner may set the dialog text):
+
+```sh
+postern approval policy | sudo tee /usr/share/polkit-1/actions/dev.postern.policy
+```
+
+A polkit authentication agent must be running in the desktop session.
+
+- **Prompt text.** The dialog reads `postern is trying to send <secret_ref> to
+  <METHOD host/path> for agent <route>.`, or `for any client.` for a rule
+  without `routes`. The query string is dropped, the path is shown escaped,
+  bytes outside printable ASCII are shown as `?`, and the request line is cut
+  at 120 characters. `oauth1` rules show the `token_ref`.
+- **One dialog at a time.** Requests waiting for approval queue in arrival
+  order, and each gets its own prompt. At most 64 requests wait at once; a
+  request over that cap fails closed without a prompt.
+- **Per-rule keys.** Decisions are kept per rule and route. A rule without
+  `routes` has a single key, so every client calling it shares one cooldown.
+- **Timeout and cooldown.** A dialog left unanswered closes after 60 seconds.
+  A denial, a dismissed dialog, or a timeout starts a 30-second cooldown for
+  that key: requests in the cooldown, including ones already queued, fail
+  closed without a prompt. A hot reload starts every key fresh.
+- **Client gone.** A queued request whose client disconnects leaves the queue
+  without a prompt. An open dialog stays open when its client leaves, but the
+  request fails closed even if the user approves.
+- **Fail closed.** Every outcome other than an approval returns the uniform
+  `502`, and the resolver and the upstream are never called.
+- **Use it sparingly.** Every request to the rule prompts. Put approval on
+  rules that write or hold high-impact secrets, narrowed with `paths` and
+  `methods`, so read traffic does not train the user to approve without
+  reading.
+- **Validation.** A null `approval:` (no `{}`) is an error, because it would
+  silently skip the prompt. An `approval` block on a platform other than Linux
+  is an error.
+
 ### Built-in templates
 
 Naming a `template` lets a rule skip restating the host pattern, header name,
@@ -490,6 +547,8 @@ Errors block startup. Common errors:
   carries `in`/`max_body_bytes`; duplicate header names within one rule.
 - An explicitly empty `paths` or `methods` list; a `paths` entry not starting
   with `/`; a `methods` entry that is not a non-empty alphabetic token.
+- A null `approval:` block (write `approval: {}`); an `approval` block on a
+  platform without approval support.
 
 Errors (each blocks startup):
 

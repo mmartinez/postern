@@ -44,13 +44,16 @@ type Resolver interface {
 //     scheme is not https (i.e. plain http forwarded through the proxy, not
 //     MITM-terminated TLS) fails closed before any resolve, so a credential
 //     is never injected onto a cleartext hop.
-//  4. Resolve the matched rule's secret reference. The vaultID is always
-//     empty today; future multi-vault routing will populate it.
-//  5. For a rule that rewrites the request body, buffer the body up to
+//  4. For a rule that rewrites the request body, buffer the body up to
 //     maxBodyBytes (per-rule override wins) before resolving — an oversized
 //     body returns 413 and the resolver is never called, so a flood of large
 //     bodies cannot hammer the credential vendor.
-//  6. Inject the resolved credential per the rule's InjectSpec.
+//  5. For a rule with an approval block, ask the gate. Any answer other than
+//     an approval by a client that is still connected fails closed, so
+//     neither the resolver nor the upstream is reached.
+//  6. Resolve the matched rule's secret reference. The vaultID is always
+//     empty today; future multi-vault routing will populate it.
+//  7. Inject the resolved credential per the rule's InjectSpec.
 //
 // On any resolve or inject error the hook returns a synthesized 502 — fail
 // closed: the proxy must never let an unauthenticated request out to the
@@ -66,9 +69,16 @@ type Resolver interface {
 // response scrubber cannot see plaintext inside a deflate stream. When it is
 // off the hook must not touch the encoding at all, so the opt-out really is a
 // no-op rather than a silent downgrade of what the client asked for.
-func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBodyBytes int, scrubResponses bool, logger *slog.Logger) func(*http.Request) *http.Response {
+//
+// gate is optional. Without one, every rule that declares an approval block
+// fails closed.
+func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBodyBytes int, scrubResponses bool, logger *slog.Logger, gate ...*Gate) func(*http.Request) *http.Response {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	g := NewGate(context.Background(), GateConfig{Logger: logger})
+	if len(gate) > 0 && gate[0] != nil {
+		g = gate[0]
 	}
 	return func(req *http.Request) *http.Response {
 		host := canonicalHost(stripPort(req.URL.Host))
@@ -182,6 +192,9 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 				)
 				return failClosed(req)
 			}
+			if !g.allow(req, rule, route.Name, route.SecretRef) {
+				return failClosed(req)
+			}
 			cred, err := resolver.Resolve(req.Context(), "", route.SecretRef)
 			if err != nil {
 				logger.Warn("broker resolve failed",
@@ -222,6 +235,9 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 		// request in place. There is no rule-level secret_ref or template; the
 		// Authorization header is computed from the request itself.
 		if rule.Injection.Type == InjectOAuth1 {
+			if !g.allow(req, rule, "", rule.Injection.OAuth1.TokenRef) {
+				return failClosed(req)
+			}
 			creds, err := resolveOAuth1Creds(req.Context(), resolver, rule.Injection.OAuth1)
 			if err != nil {
 				logger.Warn("broker resolve failed",
@@ -249,6 +265,9 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 			return nil
 		}
 
+		if !g.allow(req, rule, "", rule.SecretRef) {
+			return failClosed(req)
+		}
 		cred, err := resolver.Resolve(req.Context(), "", rule.SecretRef)
 		if err != nil {
 			logger.Warn("broker resolve failed",

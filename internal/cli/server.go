@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/mmartinez/postern/internal/approval"
 	"github.com/mmartinez/postern/internal/broker"
 	"github.com/mmartinez/postern/internal/ca"
 	"github.com/mmartinez/postern/internal/config"
@@ -88,7 +89,17 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 				cfgPath = config.DefaultPath()
 			}
 
-			bundle, err := buildBrokerHook(cmd.Context(), reg, cfgPath, cfgRequired, store, logger) //nolint:bodyclose // hook is a closure; broker owns the synthetic body
+			// The signal context bounds the approval gate too, so shutdown
+			// closes any open approval dialog.
+			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+
+			if cmd.Context() == nil {
+				ctx, stop = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+				defer stop()
+			}
+
+			bundle, err := buildBrokerHook(ctx, reg, cfgPath, cfgRequired, store, logger) //nolint:bodyclose // hook is a closure; broker owns the synthetic body
 			if err != nil {
 				return err
 			}
@@ -108,14 +119,6 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 			})
 			if err != nil {
 				return fmt.Errorf("init runtime: %w", err)
-			}
-
-			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
-			defer stop()
-
-			if cmd.Context() == nil {
-				ctx, stop = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-				defer stop()
 			}
 
 			// Hot-reload: wire the watcher only when a broker is actually
@@ -219,6 +222,9 @@ func resolveListenAddr(flagChanged bool, flagAddr, cfgListen string) string {
 // Required=true forces the config file to exist; the caller passes true
 // when the user supplied --config explicitly so a typo doesn't silently
 // downgrade the proxy to passthrough.
+//
+// ctx also bounds the approval gate: cancelling it closes any open approval
+// dialog, so the caller passes the process's signal context.
 func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath string, required bool, store token.Store, logger *slog.Logger) (brokerBundle, error) {
 	cfg, err := config.LoadForCLI(cfgPath, required)
 	if err != nil {
@@ -308,8 +314,9 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		slog.Duration("cache_refresh_ahead", cacheSettings.RefreshAhead),
 		slog.Duration("cache_max_stale", cacheSettings.MaxStale),
 	)
+	gate := broker.NewGate(ctx, broker.GateConfig{Approver: approval.New(), Logger: logger})
 	return brokerBundle{
-		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
+		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger, gate), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
 		engine:  engine,
 		cfgPath: cfgPath,
 		listen:  cfg.Proxy.Listen,

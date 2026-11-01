@@ -27,6 +27,13 @@ Config ambiguity fails closed too: an unqualified secret reference whose
 scheme two credstores could serve is rejected at `postern config validate`
 rather than resolved from an arbitrary store.
 
+Approval prompts fail closed the same way. For a rule with an `approval`
+block, a denial, a dismissed dialog, a timeout, a cooldown refusal, an
+unavailable dialog (no backend, no authentication agent, missing policy, or
+too many waiting requests), and an approval for a client that has already
+disconnected all return the same `502`. The resolver and the upstream are
+never called; tests assert both counters stay at zero.
+
 ## Credential caching and revocation window
 
 Resolved credentials are cached in memory and refreshed in the background so the
@@ -47,6 +54,10 @@ window. Revocation-sensitive deployments should lower it; setting
 as soon as a value is past `ttl` and a refresh has failed). One-time-password
 references are never cached, regardless of these settings.
 
+The cache does not bypass approval. The approval check runs before the
+resolver, so a warm cache still prompts on every request to a rule with an
+`approval` block.
+
 ## What is logged, and what is never logged
 
 Logging is structured (`log/slog`, text or JSON). Postern emits a per-request
@@ -64,6 +75,11 @@ Never written to any log, stdout, stderr, file, or test fixture:
 
 When a token must be referenced in human-facing output, it is masked to a
 `first4…last4` form via a dedicated helper, never shown in full.
+
+Each approval decision logs one `broker approval` line with `outcome`
+(`approved`, `denied`, `dismissed`, `timeout`, `cooldown`, `unavailable`, or
+`canceled`), `host`, `rule`, `route`, and `method`. The line never carries the
+credential, a fingerprint of it, or a route token.
 
 ## Threat model
 
@@ -112,6 +128,14 @@ When a token must be referenced in human-facing output, it is masked to a
   `on_no_match: block` policy denies proxied requests that match no rule, but it
   governs only traffic routed through the proxy. See the note on `on_no_match`
   below.
+- *Other processes running as the same user.* Approval prompts are a check
+  on what the agent asks postern to do, not a boundary against code running as
+  your user: such code can read postern's memory or drive the dialog itself.
+  Keep the agent under a separate uid.
+- *Prompt fatigue.* A prompt on every request trains the user to approve
+  without reading. Put `approval` on rules that write or hold high-impact
+  secrets, and narrow them with `paths` and `methods`, rather than on read
+  traffic.
 
 ## Key and token handling
 

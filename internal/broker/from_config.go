@@ -31,7 +31,7 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 			if err != nil {
 				return nil, fmt.Errorf("rules[%d] (%s): %w", i, src.Host, err)
 			}
-			out[i] = Rule{Host: canonicalHost(src.Host), SecretRef: src.SecretRef, Paths: src.Paths, Methods: src.Methods, Injections: specs}
+			out[i] = Rule{Host: canonicalHost(src.Host), SecretRef: src.SecretRef, Paths: src.Paths, Methods: src.Methods, Injections: specs, Approval: copyApproval(src.Approval)}
 			continue
 		}
 		t, err := injectTypeFromConfig(src.Inject.Type)
@@ -66,7 +66,8 @@ func FromConfigRules(in []config.Rule) ([]Rule, error) {
 					TokenSecretRef:    src.Inject.TokenSecretRef,
 				},
 			},
-			Routes: routesFromConfig(src.Routes),
+			Routes:   routesFromConfig(src.Routes),
+			Approval: copyApproval(src.Approval),
 		}
 	}
 	return out, nil
@@ -133,6 +134,17 @@ func derefBodyCap(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// copyApproval returns a fresh approval block, or nil when the rule has none.
+// The gate keys its state on this pointer, so every rule of every load needs
+// its own; templates can share one decoded block between rules.
+func copyApproval(src *config.Approval) *config.Approval {
+	if src == nil {
+		return nil
+	}
+	a := *src
+	return &a
 }
 
 func injectTypeFromConfig(t config.InjectType) (InjectType, error) {

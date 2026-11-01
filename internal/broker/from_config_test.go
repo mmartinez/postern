@@ -224,3 +224,36 @@ func TestFromConfigRules_EmptyInputReturnsEmpty(t *testing.T) {
 		t.Fatalf("FromConfigRules(nil) = %d rules, want 0", len(got))
 	}
 }
+
+// TestFromConfigRules_CopiesApprovalPerRule pins the approval key: every rule
+// of every load gets its own approval block, even when the decoded config
+// shares one, so state recorded against an old ruleset never matches a new one.
+func TestFromConfigRules_CopiesApprovalPerRule(t *testing.T) {
+	t.Parallel()
+
+	shared := &config.Approval{}
+	header := config.Inject{Type: config.InjectTypeHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"}
+	in := []config.Rule{
+		{Host: "a.example.com", SecretRef: "op://V/I/f", Inject: header, Approval: shared},
+		{Host: "b.example.com", SecretRef: "op://V/I/f", Injects: []config.Inject{header}, Approval: shared},
+		{Host: "c.example.com", SecretRef: "op://V/I/f", Inject: header},
+	}
+	first, err := broker.FromConfigRules(in)
+	if err != nil {
+		t.Fatalf("FromConfigRules: %v", err)
+	}
+	second, err := broker.FromConfigRules(in)
+	if err != nil {
+		t.Fatalf("FromConfigRules: %v", err)
+	}
+	if first[2].Approval != nil {
+		t.Fatal("a rule without approval must stay unprompted")
+	}
+	seen := map[*config.Approval]bool{shared: true}
+	for _, a := range []*config.Approval{first[0].Approval, first[1].Approval, second[0].Approval, second[1].Approval} {
+		if a == nil || seen[a] {
+			t.Fatalf("approval block missing or shared: %p", a)
+		}
+		seen[a] = true
+	}
+}
