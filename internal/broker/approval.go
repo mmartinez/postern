@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,10 @@ import (
 	"github.com/mmartinez/postern/internal/config"
 )
 
+// errRefusalBudget explains a request refused because the refusal budget is
+// spent.
+var errRefusalBudget = errors.New("dialogs paused: 2 ended without an approval within 15m")
+
 const (
 	// promptTimeout bounds how long a dialog stays open. It starts when the
 	// dialog opens, not when the request starts waiting.
@@ -23,6 +28,12 @@ const (
 	// maxWaiting caps requests waiting on approval. Each holds a buffered
 	// body, so requests over the cap fail closed as unavailable.
 	maxWaiting = 64
+	// refusalBudget is how many dialogs may end without an approval within
+	// refusalWindow before the gate stops prompting. pam_faillock counts each
+	// such dialog as a failed login and, by default, locks the account after
+	// three in 15 minutes.
+	refusalBudget = 2
+	refusalWindow = 15 * time.Minute
 	// maxRequestLine caps the request line shown in a dialog.
 	maxRequestLine = 120
 )
@@ -73,6 +84,9 @@ type Gate struct {
 
 	mu       sync.Mutex
 	cooldown map[gateKey]time.Time
+	// refusals holds when recent dialogs ended without an approval, oldest
+	// first. It spans every key, as the login failures it mirrors do.
+	refusals []time.Time
 	waiting  int
 }
 
@@ -172,10 +186,14 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 	}
 	defer g.dialog.Release(1)
 	g.mu.Lock()
-	cooling := g.coolingLocked(key)
+	cooling, spent := g.coolingLocked(key), g.refusalsSpentLocked()
 	g.mu.Unlock()
 	if cooling {
 		log(OutcomeCooldown, nil)
+		return false
+	}
+	if spent {
+		log(OutcomeCooldown, errRefusalBudget)
 		return false
 	}
 	if err := g.base.Err(); err != nil {
@@ -195,6 +213,13 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 			}
 		}
 		g.cooldown[key] = now.Add(denyCooldown)
+		g.refusals = append(g.refusals, now)
+		g.mu.Unlock()
+	}
+	if outcome == OutcomeApproved && err == nil {
+		// A successful authentication clears pam_faillock's count too.
+		g.mu.Lock()
+		g.refusals = nil
 		g.mu.Unlock()
 	}
 	if err != nil || outcome != OutcomeApproved {
@@ -257,6 +282,16 @@ func (g *Gate) coolingLocked(key gateKey) bool {
 	}
 	delete(g.cooldown, key)
 	return false
+}
+
+// refusalsSpentLocked reports whether refusalBudget dialogs ended without an
+// approval inside refusalWindow, dropping older ones. g.mu must be held.
+func (g *Gate) refusalsSpentLocked() bool {
+	cutoff := g.now().Add(-refusalWindow)
+	for len(g.refusals) > 0 && !g.refusals[0].After(cutoff) {
+		g.refusals = g.refusals[1:]
+	}
+	return len(g.refusals) >= refusalBudget
 }
 
 // approvalReason renders what the dialog asks the user to allow. The request

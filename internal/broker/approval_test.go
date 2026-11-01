@@ -511,6 +511,51 @@ func TestGate_TimeoutStartsWhenDialogOpens(t *testing.T) {
 	queued.requireForwarded(t)
 }
 
+// TestGate_RefusalBudget covers dialogs that end without an approval, which
+// pam_faillock counts as failed logins: after two within 15 minutes, on any
+// keys, the gate stops prompting until the older one leaves the window, and
+// an approval clears the count.
+func TestGate_RefusalBudget(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, approvalRoutedRule())
+	maxReq := func() *http.Request { return newRequest(t, "X-Token", "tg_max_8Kq2Lp9wZ") }
+	johnReq := func() *http.Request { return newRequest(t, "X-Token", "tg_john_3Rt7Yx1mQ") }
+	refuse := func(req *http.Request, answer broker.Outcome) {
+		t.Helper()
+		in := f.send(req)
+		f.approver.next(t).answer <- answer
+		in.requireFailClosed(t)
+	}
+
+	refuse(maxReq(), broker.OutcomeDismissed)
+	f.clock.Advance(5 * time.Minute)
+	refuse(johnReq(), broker.OutcomeDenied)
+	f.clock.Advance(5 * time.Minute)
+	f.send(maxReq()).requireFailClosed(t)
+	f.send(johnReq()).requireFailClosed(t)
+	require.Equal(t, int64(2), f.approver.calls.Load(), "two refusals in 15 minutes stop every dialog")
+
+	f.clock.Advance(5*time.Minute - time.Nanosecond)
+	f.send(maxReq()).requireFailClosed(t)
+	require.Equal(t, int64(2), f.approver.calls.Load())
+
+	f.clock.Advance(time.Nanosecond)
+	in := f.send(maxReq())
+	f.approver.next(t).answer <- broker.OutcomeApproved
+	in.requireForwarded(t)
+
+	// The approval clears the count, so one more refusal still leaves room.
+	f.clock.Advance(time.Minute)
+	refuse(maxReq(), broker.OutcomeDismissed)
+	f.clock.Advance(time.Minute)
+	in = f.send(maxReq())
+	f.approver.next(t).answer <- broker.OutcomeApproved
+	in.requireForwarded(t)
+	require.Equal(t, int64(5), f.approver.calls.Load())
+	require.Equal(t, int64(2), f.res.calls.Load())
+}
+
 func TestGate_ReloadClearsCooldown(t *testing.T) {
 	t.Parallel()
 

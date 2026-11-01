@@ -142,6 +142,14 @@ credential, a fingerprint of it, or a route token.
   without a dialog. Check `pkcheck --action-id dev.postern.authorize-secret
   --process $$` from a terminal: exit code 2 (interaction needed) means the
   dialog will show.
+- *Login lockout.* Where `pam_faillock` is in the PAM stack, every polkit
+  dialog that ends without an approval, by Cancel or by timeout, counts as a
+  failed login. Three within 15 minutes lock the account for 10 minutes by
+  default, for `sudo` and the login screen too. An agent that keeps triggering
+  prompts could cause that, so postern stops opening dialogs after two such
+  dialogs within 15 minutes (see the refusal budget in
+  [configuration.md](configuration.md)). Failures from other sources, such as
+  a mistyped `sudo` password, share the same count.
 
 ## Key and token handling
 
