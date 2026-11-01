@@ -201,7 +201,7 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 		stopWatch = sync.OnceFunc(w(cancel))
 	}
 	// A flight can open its dialog as soon as it is joined, so the watch is
-	// armed first and a request whose client already left never joins one.
+	// armed first: a request whose departure it has already seen never joins.
 	// Joining under the lock that checked the grant means a request either
 	// sees the grant or waits on the flight that records it.
 	ttl := rule.Approval.TTL
@@ -316,10 +316,15 @@ func (g *Gate) decide(ctx context.Context, key gateKey, rule string, ttl time.Du
 	if err := g.base.Err(); err != nil {
 		return OutcomeUnavailable, err
 	}
+	// The last waiter cancels ctx under g.mu, so checking it here keeps a
+	// flight every request left while it queued from opening a dialog.
 	g.mu.Lock()
+	left := ctx.Err()
 	cooling, granted, spent := g.liveLocked(g.cooldown, key), g.liveLocked(g.grants, key), g.refusalsSpentLocked()
 	g.mu.Unlock()
 	switch {
+	case left != nil:
+		return outcomeCanceled, left
 	case cooling:
 		return OutcomeCooldown, nil
 	case granted:

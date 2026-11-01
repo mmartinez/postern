@@ -517,10 +517,11 @@ A polkit authentication agent must be running in the desktop session.
   three in 15 minutes. The count lives in memory: a hot reload keeps it, a
   restart clears it.
 - **Client gone.** A queued request whose client disconnects leaves the queue
-  without a prompt. A grant prompt opens only while at least one client still
-  waits for it. An open dialog stays open when its client leaves, but the
-  request fails closed even if the user approves; an approved grant still
-  covers later requests.
+  without a prompt, and a queued grant prompt that every client has left never
+  opens. A disconnect is noticed shortly after it happens, so a client that
+  leaves just before its turn can still get a dialog. An open dialog stays open
+  when its client leaves, but the request fails closed even if the user
+  approves; an approved grant still covers later requests.
 - **Request bodies.** A request to an approval rule is read in full before
   the prompt, up to `max_body_bytes`, so a client that leaves during an upload
   is noticed. A larger body gets `413` without a prompt. This also applies to
