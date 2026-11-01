@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/mmartinez/postern/compare/v0.10.2...v0.10.3) (2026-11-01)
+
+
+### Bug Fixes
+
+* **deps:** bump Go to 1.27.3 and update module dependencies ([#116](https://github.com/mmartinez/postern/issues/116)) ([6d13486](https://github.com/mmartinez/postern/commit/6d1348687fd57bec8debb585edd1f2914e09fc18))
+
 ## [0.10.2](https://github.com/mmartinez/postern/compare/v0.10.1...v0.10.2) (2026-10-10)
 
 
