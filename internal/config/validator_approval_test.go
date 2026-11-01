@@ -148,6 +148,49 @@ rules:
 	}
 }
 
+// TestCheckApproval_FieldLineThroughAliasOrMerge proves an approval field
+// error points at the line the value was read from when the block reaches
+// the rule through an alias or a merge key.
+func TestCheckApproval_FieldLineThroughAliasOrMerge(t *testing.T) {
+	t.Parallel()
+
+	const anchored = `
+credstores:
+  - name: default
+    provider: op
+    settings: &gate
+      ttl: -1m
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+`
+	cases := []struct {
+		name     string
+		approval string
+	}{
+		{name: "alias", approval: "    approval: *gate"},
+		{name: "merge key", approval: "    approval:\n      <<: *gate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, root, err := Load(strings.NewReader(anchored + tc.approval + "\n"))
+			require.NoError(t, err)
+			v := newValidator(root)
+			v.goos = "linux"
+			v.checkApproval("rules[0]", cfg.Rules[0])
+			require.Len(t, v.out, 1)
+			require.Equal(t, "rules[0].approval.ttl", v.out[0].Path)
+			require.Equal(t, 6, v.out[0].Line)
+		})
+	}
+}
+
 // TestValidate_ApprovalRunsForEveryRuleShape proves the approval check is
 // reached for routing rules too, which return early from checkRule.
 func TestValidate_ApprovalRunsForEveryRuleShape(t *testing.T) {
