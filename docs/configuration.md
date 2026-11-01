@@ -470,7 +470,7 @@ rules:
 | Field | Required | Default | Meaning |
 |---|---|---|---|
 | `ttl` | no | `0s` | `0s` prompts for every request, and each approval releases only the request its dialog shows. A positive duration turns an approval into a grant: for that long, the route's agent (every client, for a rule without `routes`) may use the rule's secret on any request the rule and `approval.methods` allow, without another prompt. |
-| `methods` | no | every method the rule brokers | Methods that need approval, compared case-insensitively. Requests with other methods inject without a prompt and log no approval line. |
+| `methods` | no | every method the rule brokers | Methods that need approval, compared case-insensitively. Requests with other methods inject without a prompt and log no approval line, unless they carry a method-override header (see [security.md](security.md)). |
 
 `approval: {}` prompts for every request. Write `ttl` with a unit (`0s`,
 `10m`); a bare `0` is not a duration. Approval is supported on Linux only,

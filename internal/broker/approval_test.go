@@ -696,6 +696,28 @@ func TestGate_MethodOutsideApprovalMethodsSkipsPrompt(t *testing.T) {
 	require.Equal(t, int64(2), f.res.calls.Load(), "a refused POST must never resolve")
 }
 
+// TestGate_MethodOverrideHeaderPrompts covers a request whose method is
+// outside approval.methods but which names another method in a header some
+// upstreams honour. It must prompt rather than inject.
+func TestGate_MethodOverrideHeaderPrompts(t *testing.T) {
+	t.Parallel()
+
+	for _, header := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+		t.Run(header, func(t *testing.T) {
+			t.Parallel()
+
+			rule := approvalRule()
+			rule.Approval = &config.Approval{Methods: []string{"DELETE"}}
+			f := newGateFixture(t, nil, rule)
+
+			in := f.send(newRequest(t, header, "DELETE"))
+			f.approver.next(t).answer <- broker.OutcomeDenied
+			in.requireFailClosed(t)
+			require.Zero(t, f.res.calls.Load())
+		})
+	}
+}
+
 func TestGate_WaitingCap(t *testing.T) {
 	t.Parallel()
 

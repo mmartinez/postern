@@ -44,7 +44,12 @@ restart or a hot reload clears them.
 
 `approval.methods` narrows which requests prompt at all. A request whose
 method it does not list injects without a prompt, exactly as on a rule with
-no `approval` block, so list every method that can change state.
+no `approval` block, so list every method that can change state. A request
+carrying `X-HTTP-Method-Override`, `X-HTTP-Method`, or `X-Method-Override`
+always prompts, since some upstreams honour those headers in place of the
+method. An upstream that takes the method from a query or form parameter,
+such as `_method`, can still be driven past the list; leave
+`approval.methods` unset on rules for such upstreams.
 
 ## Credential caching and revocation window
 

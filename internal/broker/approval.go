@@ -245,9 +245,16 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 }
 
 // needsApproval reports whether req must pass the gate: the rule has an
-// approval block, and the block covers req's method.
+// approval block, and the block covers req's method. Some upstreams take the
+// method from an override header, so a request carrying one always needs it.
 func (r Rule) needsApproval(req *http.Request) bool {
-	return r.Approval != nil && (len(r.Approval.Methods) == 0 || methodIn(req.Method, r.Approval.Methods))
+	if r.Approval == nil {
+		return false
+	}
+	return len(r.Approval.Methods) == 0 || methodIn(req.Method, r.Approval.Methods) ||
+		req.Header.Get("X-HTTP-Method-Override") != "" ||
+		req.Header.Get("X-HTTP-Method") != "" ||
+		req.Header.Get("X-Method-Override") != ""
 }
 
 // joinLocked adds a waiter to the flight that decides key's grant, starting
