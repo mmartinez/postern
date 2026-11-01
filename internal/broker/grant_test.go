@@ -230,6 +230,30 @@ func TestGate_GrantIsPerRoute(t *testing.T) {
 	require.Equal(t, int64(2), f.res.calls.Load(), "only the granted route may resolve")
 }
 
+// TestGate_GrantOutlivesRefusalBudget covers a live grant while the refusal
+// budget is spent by another route: the grant needs no dialog, so it still
+// injects, while a dialog for the other route stays closed.
+func TestGate_GrantOutlivesRefusalBudget(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, grantRoutedRule())
+	in := f.send(maxRequest(t))
+	f.approver.next(t).answer <- broker.OutcomeApproved
+	in.requireForwarded(t)
+
+	for range 2 {
+		john := f.send(johnRequest(t, "/v1/x"))
+		f.approver.next(t).answer <- broker.OutcomeDismissed
+		john.requireFailClosed(t)
+		f.clock.Advance(31 * time.Second)
+	}
+	f.send(johnRequest(t, "/v1/x")).requireFailClosed(t)
+	require.Equal(t, int64(3), f.approver.calls.Load(), "the spent budget must keep john's dialog closed")
+
+	f.send(maxRequest(t)).requireForwarded(t)
+	require.Equal(t, int64(2), f.res.calls.Load())
+}
+
 func TestGate_ReloadClearsGrant(t *testing.T) {
 	t.Parallel()
 
