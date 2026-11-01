@@ -311,7 +311,7 @@ changes:
         set -euo pipefail
         go=true site=true
         if [ "$EVENT" = "pull_request" ]; then
-          changed=$(git diff --name-only HEAD^1 HEAD)
+          changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
           if [ -n "$changed" ]; then
             go=false site=false
             while IFS= read -r f; do
@@ -329,6 +329,9 @@ changes:
 
 - On a `pull_request`, the checkout is GitHub's merge commit, so
   `git diff HEAD^1 HEAD` is exactly what merging would change.
+- `--no-renames` lists both sides of a move. With rename detection on, a file
+  moved from the root into `web/site/` would show only its new path and skip
+  the Go jobs, and a file moved out of `web/site/` would skip the site build.
 - Go jobs are skipped only when **every** changed file is under `web/site/`.
   Everything else, including other paths under `web/`, runs them.
 - A `push` to `main` or a `workflow_dispatch` runs everything, so `main` stays
