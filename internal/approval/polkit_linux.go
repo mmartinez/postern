@@ -30,7 +30,7 @@ type Polkit struct {
 
 // New returns the polkit approver for this process. A setup failure is kept
 // and returned by every Approve call, so approval rules fail closed.
-func New() broker.Approver {
+func New() *Polkit {
 	path, err := exec.LookPath("pkcheck")
 	if err != nil {
 		return &Polkit{err: fmt.Errorf("find pkcheck: %w", err)}

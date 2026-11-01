@@ -2,11 +2,25 @@
 
 package approval
 
-import "github.com/mmartinez/postern/internal/broker"
+import (
+	"context"
+	"fmt"
+	"runtime"
 
-// New returns nil: this platform has no approval backend, so the broker
-// fails every approval rule closed. The config validator rejects approval
-// blocks here before that can happen.
-func New() broker.Approver {
-	return nil
+	"github.com/mmartinez/postern/internal/broker"
+)
+
+// Unsupported is the approver on platforms without an approval backend.
+// Every approval is unavailable, so approval rules fail closed. The config
+// validator rejects approval blocks here before that can happen.
+type Unsupported struct{}
+
+// New returns the unsupported-platform approver.
+func New() Unsupported {
+	return Unsupported{}
+}
+
+// Approve reports the approval as unavailable.
+func (Unsupported) Approve(context.Context, string) (broker.Outcome, error) {
+	return broker.OutcomeUnavailable, fmt.Errorf("approval is not supported on %s", runtime.GOOS)
 }

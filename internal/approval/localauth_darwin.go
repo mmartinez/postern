@@ -76,10 +76,8 @@ const (
 // ID, an Apple Watch, or the account password.
 type LocalAuth struct{}
 
-// New returns the LocalAuthentication approver. Every platform's New shares
-// this signature, and builds without a backend return a nil interface, which
-// the gate treats as unavailable. A typed nil struct pointer would not be.
-func New() broker.Approver {
+// New returns the LocalAuthentication approver.
+func New() LocalAuth {
 	return LocalAuth{}
 }
 
