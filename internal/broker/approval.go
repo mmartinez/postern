@@ -185,6 +185,18 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 
 	key := gateKey{approval: rule.Approval, route: route}
 	g.mu.Lock()
+	if err := g.base.Err(); err != nil {
+		g.mu.Unlock()
+		log(OutcomeUnavailable, err)
+		return false
+	}
+	// A flight can open its dialog as soon as it is joined, so a request
+	// whose client already left must not join one.
+	if err := req.Context().Err(); err != nil {
+		g.mu.Unlock()
+		log(outcomeCanceled, err)
+		return false
+	}
 	if g.liveLocked(g.grants, key) {
 		g.mu.Unlock()
 		return true
@@ -202,7 +214,7 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 	g.waiting++
 	var fl *flight
 	if ttl := rule.Approval.TTL; ttl > 0 {
-		fl = g.joinLocked(key, ttl, grantReason(req, rule, route, secretRef))
+		fl = g.joinLocked(key, ttl, grantReason(req, rule, route, secretRef), log)
 	}
 	g.mu.Unlock()
 	defer func() {
@@ -242,8 +254,10 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 }
 
 // joinLocked adds a waiter to the flight that decides key's grant, starting
-// one when no request is waiting on it yet. g.mu must be held.
-func (g *Gate) joinLocked(key gateKey, ttl time.Duration, reason string) *flight {
+// one when no request is waiting on it yet. The flight logs its answer with
+// log, the first request's logger, when every waiter left while its dialog
+// was open. g.mu must be held.
+func (g *Gate) joinLocked(key gateKey, ttl time.Duration, reason string, log func(Outcome, error)) *flight {
 	fl := g.flights[key]
 	if fl == nil {
 		fctx, cancel := context.WithCancel(g.base)
@@ -255,7 +269,11 @@ func (g *Gate) joinLocked(key gateKey, ttl time.Duration, reason string) *flight
 			if g.flights[key] == fl {
 				delete(g.flights, key)
 			}
+			orphaned := fl.waiters == 0
 			g.mu.Unlock()
+			if orphaned && fl.outcome != outcomeCanceled {
+				log(fl.outcome, fl.err)
+			}
 			cancel()
 			close(fl.done)
 		}()
@@ -307,6 +325,9 @@ func (g *Gate) decide(ctx context.Context, key gateKey, ttl time.Duration, reaso
 	if turn != nil {
 		close(turn)
 	}
+	if err := g.base.Err(); err != nil {
+		return OutcomeUnavailable, err
+	}
 	g.mu.Lock()
 	cooling, granted, spent := g.liveLocked(g.cooldown, key), g.liveLocked(g.grants, key), g.refusalsSpentLocked()
 	g.mu.Unlock()
@@ -317,9 +338,6 @@ func (g *Gate) decide(ctx context.Context, key gateKey, ttl time.Duration, reaso
 		return OutcomeApproved, nil
 	case spent:
 		return OutcomeCooldown, errRefusalBudget
-	}
-	if err := g.base.Err(); err != nil {
-		return OutcomeUnavailable, err
 	}
 
 	outcome, err := g.ask(reason)
@@ -426,7 +444,7 @@ func grantReason(req *http.Request, rule Rule, route, secretRef string) string {
 	}
 	paths := "any path"
 	if len(rule.Paths) > 0 {
-		paths = "paths " + strings.Join(rule.Paths, ", ")
+		paths = "paths starting with " + strings.Join(rule.Paths, ", ")
 	}
 	// Duration.String spells out zero units ("1h0m0s"); the dialog drops them.
 	ttl := rule.Approval.TTL.String()

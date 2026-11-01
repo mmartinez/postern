@@ -488,11 +488,11 @@ A polkit authentication agent must be running in the desktop session.
   `postern is trying to let agent <route> use <secret_ref> for <methods>
   requests to <host> on <paths> for <ttl> (first request: <METHOD
   host/path>).` Here `<methods>` is the rule's `methods` joined with `/`, or
-  `all`; `<host>` is the rule's host pattern; `<paths>` lists the rule's
-  `paths`, or reads `any path`; `<ttl>` reads like `10m` or `1h30m`. In both
-  forms the query string is dropped, the path is shown escaped, bytes outside
-  printable ASCII are shown as `?`, and the request line is cut at 120
-  characters. `oauth1` rules show the `token_ref`.
+  `all`; `<host>` is the rule's host pattern; `<paths>` reads `paths starting
+  with` followed by the rule's `paths`, or `any path`; `<ttl>` reads like `10m`
+  or `1h30m`. In both forms the query string is dropped, the path is shown
+  escaped, bytes outside printable ASCII are shown as `?`, and the request line
+  is cut at 120 characters. `oauth1` rules show the `token_ref`.
 - **Grants.** An approved grant covers its key until `ttl` after the user
   answers. A request under a live grant injects at once, without waiting in
   the queue. Concurrent requests that need the same grant share one prompt,

@@ -3,6 +3,7 @@ package broker_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -255,4 +256,88 @@ func TestGate_ReloadClearsGrant(t *testing.T) {
 	in.requireFailClosed(t)
 	require.Equal(t, int64(2), f.approver.calls.Load(), "a reload must clear the grant")
 	require.Equal(t, int64(2), f.res.calls.Load())
+}
+
+// TestGate_GrantRequestAlreadyGoneNeverPrompts sends grant requests whose
+// client left before they reached the gate, with the dialog free. None of
+// them may open a dialog.
+func TestGate_GrantRequestAlreadyGoneNeverPrompts(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, grantRule())
+	for range 50 {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		f.send(newRequest(t).WithContext(ctx)).requireFailClosed(t)
+	}
+	live := newRequest(t)
+	live.URL.Path = "/v1/live"
+	in := f.send(live)
+	p := f.approver.next(t)
+	require.Contains(t, p.reason, "/v1/live", "the first dialog came from a request that was already gone")
+	p.answer <- broker.OutcomeDenied
+	in.requireFailClosed(t)
+	require.Equal(t, int64(1), f.approver.calls.Load())
+	require.Zero(t, f.res.calls.Load())
+}
+
+// TestGate_ShutdownVoidsGrants covers a request on a tunnel that outlives the
+// gate's context during shutdown: a grant recorded earlier no longer applies.
+func TestGate_ShutdownVoidsGrants(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, grantRule())
+	base, shutdown := context.WithCancel(t.Context())
+	gate := broker.NewGate(base, broker.GateConfig{Approver: f.approver, Now: f.clock.Now, After: f.clock.After})
+	f.hook = broker.Hook(f.engine, f.res, config.OnNoMatchPassthrough, 0, true, nil, gate) //nolint:bodyclose // closure
+
+	in := f.send(newRequest(t))
+	f.approver.next(t).answer <- broker.OutcomeApproved
+	in.requireForwarded(t)
+
+	shutdown()
+	f.send(newRequest(t)).requireFailClosed(t)
+	require.Equal(t, int64(1), f.approver.calls.Load())
+	require.Equal(t, int64(1), f.res.calls.Load(), "a grant must not inject after the gate is cancelled")
+}
+
+// logLines hands each log line to the test as it is written.
+type logLines chan string
+
+func (l logLines) Write(p []byte) (int, error) {
+	l <- string(p)
+	return len(p), nil
+}
+
+// TestGate_GrantNobodyWaitsForStillLogs covers a grant dialog whose only
+// request left while it was open. The answer it records must still leave
+// an audit line.
+func TestGate_GrantNobodyWaitsForStillLogs(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, grantRule())
+	lines := make(logLines, 16)
+	gate := broker.NewGate(t.Context(), broker.GateConfig{
+		Approver: f.approver, Now: f.clock.Now, After: f.clock.After,
+		Logger: slog.New(slog.NewTextHandler(lines, nil)),
+	})
+	f.hook = broker.Hook(f.engine, f.res, config.OnNoMatchPassthrough, 0, true, nil, gate) //nolint:bodyclose // closure
+
+	in := f.send(newRequest(t))
+	p := f.approver.next(t)
+	f.waitArmed(t, 1)
+	in.watch.hangup()
+	in.requireFailClosed(t)
+	require.Contains(t, <-lines, "outcome=canceled")
+
+	p.answer <- broker.OutcomeApproved
+	select {
+	case line := <-lines:
+		require.Contains(t, line, "outcome=approved")
+		require.Contains(t, line, "rule=api.example.com")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the grant nobody waited for was recorded without a log line")
+	}
+	f.send(newRequest(t)).requireForwarded(t)
+	require.Equal(t, int64(1), f.approver.calls.Load())
 }

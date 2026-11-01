@@ -87,7 +87,7 @@ func TestGrantReason(t *testing.T) {
 				Approval: &config.Approval{TTL: 10 * time.Minute},
 			},
 			route: "max",
-			want:  "let agent max use op://V/I/f for GET/POST requests to api.example.com on paths /v1/cards, /v1/users for 10m (first request: POST api.example.com/v1/cards)",
+			want:  "let agent max use op://V/I/f for GET/POST requests to api.example.com on paths starting with /v1/cards, /v1/users for 10m (first request: POST api.example.com/v1/cards)",
 		},
 		{
 			name: "bare rule",
