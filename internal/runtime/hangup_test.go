@@ -202,6 +202,9 @@ func TestHangupConnStickyErrorAfterDrain(t *testing.T) {
 	waitClosed(t, again, "onHangup when arming a conn that is already gone")
 }
 
+// TestHangupConnCapsReadAhead covers a client that sends more than the watch
+// buffers. The pump stops at the cap and reports a hangup, because one queued
+// behind the unread bytes could not be seen; no byte is lost.
 func TestHangupConnCapsReadAhead(t *testing.T) {
 	t.Parallel()
 	server, client := tcpPair(t)
@@ -209,32 +212,18 @@ func TestHangupConnCapsReadAhead(t *testing.T) {
 	h := newHangupConn(rc)
 	want := bytes.Repeat([]byte("0123456789abcdef"), 4*maxHangupBuf/16)
 
-	stop := h.WatchHangup(func() { t.Error("connected client signalled") })
+	full := make(chan struct{})
+	stop := h.WatchHangup(func() { close(full) })
 	written := make(chan error, 1)
 	go func() {
 		_, err := client.Write(want)
 		written <- err
 	}()
-	rc.waitFor(t, maxHangupBuf)
+	waitClosed(t, full, "onHangup once the read-ahead buffer is full")
 	stop()
 	require.Less(t, rc.total.Load(), int64(maxHangupBuf+hangupReadChunk), "the pump must stop reading at the read-ahead cap")
 
 	got := readFull(t, h, len(want))
 	require.NoError(t, <-written)
 	require.Equal(t, want, got)
-}
-
-func TestHangupConnSignalsLocalCloseWithFullBuffer(t *testing.T) {
-	t.Parallel()
-	server, client := tcpPair(t)
-	rc := newReadCounter(server)
-	h := newHangupConn(rc)
-	gone := make(chan struct{})
-	stop := h.WatchHangup(func() { close(gone) })
-	defer stop()
-	go func() { _, _ = client.Write(bytes.Repeat([]byte("x"), 2*maxHangupBuf)) }()
-	rc.waitFor(t, maxHangupBuf)
-
-	require.NoError(t, h.Close())
-	waitClosed(t, gone, "onHangup after a local close while the read-ahead buffer is full")
 }

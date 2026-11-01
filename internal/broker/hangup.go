@@ -3,9 +3,10 @@ package broker
 import "context"
 
 // HangupWatch arms a watch on the client connection behind a request. It
-// calls onHangup at most once if the client disconnects while the watch is
-// armed. stop disarms the watch and returns once the watcher has exited, so
-// the connection is safe to read again.
+// calls onHangup at most once if, while the watch is armed, the client
+// disconnects or the watch can no longer tell whether it has. stop disarms
+// the watch and returns once the watcher has exited, so the connection is
+// safe to read again.
 type HangupWatch func(onHangup func()) (stop func())
 
 type hangupWatchKey struct{}
