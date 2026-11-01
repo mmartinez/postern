@@ -19,9 +19,6 @@ const (
 	hangupReadChunk = 4 << 10
 )
 
-// pastDeadline unblocks a pending Read immediately.
-var pastDeadline = time.Unix(1, 0)
-
 // hangupConn lets the broker notice a client hanging up while it holds a
 // request and nothing reads the conn. While a watch is armed a pump
 // goroutine is the only reader of the underlying conn; Read serves the
@@ -35,6 +32,7 @@ type hangupConn struct {
 	err      error // read error the pump saw; returned once buf drains
 	watching bool
 	stopping bool
+	closed   bool
 }
 
 func newHangupConn(c net.Conn) *hangupConn {
@@ -66,6 +64,16 @@ func (c *hangupConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
+// Close closes the conn and wakes a pump parked on a full read-ahead buffer,
+// so its next read fails and reports the hangup.
+func (c *hangupConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.cond.Broadcast()
+	c.mu.Unlock()
+	return c.Conn.Close()
+}
+
 // WatchHangup calls onHangup once if the client closes the conn, or the conn
 // is closed locally, before stop is called. stop must be called exactly once;
 // it returns after the pump has exited, with the read deadline cleared.
@@ -85,7 +93,7 @@ func (c *hangupConn) WatchHangup(onHangup func()) (stop func()) {
 		c.stopping = true
 		c.cond.Broadcast()
 		c.mu.Unlock()
-		_ = c.SetReadDeadline(pastDeadline)
+		_ = c.SetReadDeadline(time.Unix(1, 0)) // a past deadline unblocks the pump's Read
 		<-done
 		// net/http clears every deadline at Hijack and nothing on the MITM
 		// path sets one, so zero is the state to restore.
@@ -102,7 +110,7 @@ func (c *hangupConn) pump(onHangup func(), done chan<- struct{}) {
 	var chunk [hangupReadChunk]byte
 	for {
 		c.mu.Lock()
-		for len(c.buf) >= maxHangupBuf && !c.stopping {
+		for len(c.buf) >= maxHangupBuf && !c.stopping && !c.closed {
 			c.cond.Wait()
 		}
 		stopping := c.stopping

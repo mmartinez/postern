@@ -223,3 +223,18 @@ func TestHangupConnCapsReadAhead(t *testing.T) {
 	require.NoError(t, <-written)
 	require.Equal(t, want, got)
 }
+
+func TestHangupConnSignalsLocalCloseWithFullBuffer(t *testing.T) {
+	t.Parallel()
+	server, client := tcpPair(t)
+	rc := newReadCounter(server)
+	h := newHangupConn(rc)
+	gone := make(chan struct{})
+	stop := h.WatchHangup(func() { close(gone) })
+	defer stop()
+	go func() { _, _ = client.Write(bytes.Repeat([]byte("x"), 2*maxHangupBuf)) }()
+	rc.waitFor(t, maxHangupBuf)
+
+	require.NoError(t, h.Close())
+	waitClosed(t, gone, "onHangup after a local close while the read-ahead buffer is full")
+}
