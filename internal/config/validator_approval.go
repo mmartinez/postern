@@ -37,6 +37,9 @@ func (v *validator) checkApproval(base string, r Rule) {
 	if v.goos != "linux" {
 		v.add(path, fmt.Sprintf("approval is not supported on %s", v.goos), SeverityError)
 	}
+	if r.Approval.TTL < 0 {
+		v.add(path+".ttl", "ttl must be zero or positive", SeverityError)
+	}
 }
 
 // decodedApproval returns the raw approval value the decoder saw for the rule

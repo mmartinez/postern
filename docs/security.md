@@ -34,6 +34,14 @@ too many waiting requests), and an approval for a client that has already
 disconnected all return the same `502`. The resolver and the upstream are
 never called; tests assert both counters stay at zero.
 
+An approval with a positive `ttl` is a grant, and a grant is scoped by the
+rule, not by the request the dialog showed first. Until it expires it covers
+every request the rule allows for that key: the route's agent, or every
+client of a rule without `routes`. An agent that turns hostile inside the
+window can use the credential for anything the rule's `host`, `paths`, and
+`methods` allow, without another prompt. Grants live in memory only; a
+restart or a hot reload clears them.
+
 ## Credential caching and revocation window
 
 Resolved credentials are cached in memory and refreshed in the background so the
@@ -55,8 +63,8 @@ as soon as a value is past `ttl` and a refresh has failed). One-time-password
 references are never cached, regardless of these settings.
 
 The cache does not bypass approval. The approval check runs before the
-resolver, so a warm cache still prompts on every request to a rule with an
-`approval` block.
+resolver, so a warm cache still prompts for every request to a rule with an
+`approval` block that no live grant covers.
 
 ## What is logged, and what is never logged
 
@@ -78,8 +86,10 @@ When a token must be referenced in human-facing output, it is masked to a
 
 Each approval decision logs one `broker approval` line with `outcome`
 (`approved`, `denied`, `dismissed`, `timeout`, `cooldown`, `unavailable`, or
-`canceled`), `host`, `rule`, `route`, and `method`. The line never carries the
-credential, a fingerprint of it, or a route token.
+`canceled`), `host`, `rule`, `route`, and `method`. Each request waiting on a
+shared grant prompt logs its own line; a request that passes under a live
+grant logs none. The line never carries the credential, a fingerprint of it,
+or a route token.
 
 ## Threat model
 
@@ -134,8 +144,8 @@ credential, a fingerprint of it, or a route token.
   Keep the agent under a separate uid.
 - *Prompt fatigue.* A prompt on every request trains the user to approve
   without reading. Put `approval` on rules that write or hold high-impact
-  secrets, and narrow them with `paths` and `methods`, rather than on read
-  traffic.
+  secrets, narrow them with `paths` and `methods`, and give them a short
+  non-zero `ttl`, rather than putting approval on read traffic.
 - *Local polkit rules.* polkit rules files (`/etc/polkit-1/rules.d`) are
   evaluated before the action's defaults. A rule that returns `YES` for
   `dev.postern.authorize-secret`, or for every action, approves each request

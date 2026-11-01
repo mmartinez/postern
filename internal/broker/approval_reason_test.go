@@ -5,8 +5,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/mmartinez/postern/internal/config"
 )
 
 func TestApprovalReason(t *testing.T) {
@@ -59,6 +62,56 @@ func TestApprovalReason(t *testing.T) {
 			require.NoError(t, err)
 			req := &http.Request{Method: tc.method, URL: u}
 			require.Equal(t, tc.want, approvalReason(req, "op://V/I/f", tc.route))
+		})
+	}
+}
+
+func TestGrantReason(t *testing.T) {
+	t.Parallel()
+
+	bare := func(ttl time.Duration) Rule {
+		return Rule{Host: "*.example.com", Approval: &config.Approval{TTL: ttl}}
+	}
+	cases := []struct {
+		name  string
+		rule  Rule
+		route string
+		want  string
+	}{
+		{
+			name: "routed rule with methods and paths",
+			rule: Rule{
+				Host:     "api.example.com",
+				Methods:  []string{http.MethodGet, http.MethodPost},
+				Paths:    []string{"/v1/cards", "/v1/users"},
+				Approval: &config.Approval{TTL: 10 * time.Minute},
+			},
+			route: "max",
+			want:  "let agent max use op://V/I/f for GET/POST requests to api.example.com on paths /v1/cards, /v1/users for 10m (first request: POST api.example.com/v1/cards)",
+		},
+		{
+			name: "bare rule",
+			rule: bare(90 * time.Minute),
+			want: "let any client use op://V/I/f for all requests to *.example.com on any path for 1h30m (first request: POST api.example.com/v1/cards)",
+		},
+		{
+			name: "seconds only",
+			rule: bare(45 * time.Second),
+			want: "let any client use op://V/I/f for all requests to *.example.com on any path for 45s (first request: POST api.example.com/v1/cards)",
+		},
+		{
+			name: "whole hours",
+			rule: bare(time.Hour),
+			want: "let any client use op://V/I/f for all requests to *.example.com on any path for 1h (first request: POST api.example.com/v1/cards)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			u, err := url.Parse("https://api.example.com:443/v1/cards?token=secret")
+			require.NoError(t, err)
+			req := &http.Request{Method: http.MethodPost, URL: u}
+			require.Equal(t, tc.want, grantReason(req, tc.rule, tc.route, "op://V/I/f"))
 		})
 	}
 }

@@ -316,19 +316,20 @@ type Rule struct {
 	// resolver is called. Empty means the rule brokers every method.
 	Methods []string `yaml:"methods,omitempty"`
 
-	// Approval, when present, makes every credential injection for this rule
-	// wait for the user to approve it in an OS authentication dialog.
-	// `approval: {}` turns it on; an absent block leaves the rule unprompted.
+	// Approval, when present, makes credential injection for this rule wait
+	// for the user to approve it in an OS authentication dialog, per request
+	// or per grant (see Approval.TTL). `approval: {}` prompts for every
+	// request; an absent block leaves the rule unprompted.
 	Approval *Approval `yaml:"approval,omitempty"`
 }
 
-// Approval is a rule's approval block. It has no fields yet: its presence
-// alone requires a prompt before each injection.
+// Approval is a rule's approval block. Its presence requires the user to
+// approve the rule's credential injections in an OS authentication dialog.
 type Approval struct {
-	// _ keeps the type non-zero-sized. Go may give every zero-sized
-	// allocation the same address, and the broker keys approval state on
-	// the address of each rule's copy.
-	_ byte
+	// TTL turns an approval into a grant: for this long after the user
+	// approves, the rule injects for the same client without a prompt.
+	// Zero prompts for every request.
+	TTL time.Duration `yaml:"ttl,omitempty"`
 }
 
 // Route is one entry of a placeholder-routing rule. Token is the placeholder an

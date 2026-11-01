@@ -665,24 +665,30 @@ func TestGate_WarmCacheStillPrompts(t *testing.T) {
 func TestGate_WaitingCap(t *testing.T) {
 	t.Parallel()
 
-	f := newGateFixture(t, nil, approvalRule())
-	waiting := make([]*inflight, 0, 64)
-	for range 64 {
-		waiting = append(waiting, f.send(newRequest(t)))
-	}
-	f.waitArmed(t, 64)
-	p := f.approver.next(t)
+	// Requests sharing one grant prompt still count one each.
+	for name, rule := range map[string]broker.Rule{"per request": approvalRule(), "grant": grantRule()} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newGateFixture(t, nil, rule)
+			waiting := make([]*inflight, 0, 64)
+			for range 64 {
+				waiting = append(waiting, f.send(newRequest(t)))
+			}
+			f.waitArmed(t, 64)
+			p := f.approver.next(t)
 
-	over := f.send(newRequest(t))
-	over.requireFailClosed(t)
-	require.Zero(t, over.watch.stops.Load(), "a request over the cap must not wait")
+			over := f.send(newRequest(t))
+			over.requireFailClosed(t)
+			require.Zero(t, over.watch.stops.Load(), "a request over the cap must not wait")
 
-	p.answer <- broker.OutcomeDenied
-	for _, in := range waiting {
-		in.requireFailClosed(t)
+			p.answer <- broker.OutcomeDenied
+			for _, in := range waiting {
+				in.requireFailClosed(t)
+			}
+			require.Equal(t, int64(1), f.approver.calls.Load())
+			require.Zero(t, f.res.calls.Load())
+		})
 	}
-	require.Equal(t, int64(1), f.approver.calls.Load())
-	require.Zero(t, f.res.calls.Load())
 }
 
 func TestGate_OversizedBodyFailsBeforePrompt(t *testing.T) {
@@ -707,13 +713,18 @@ func TestGate_OversizedBodyFailsBeforePrompt(t *testing.T) {
 func TestGate_HangupSeenWhileStoppingFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	f := newGateFixture(t, nil, approvalRule())
-	in := f.sendWatched(newRequest(t), &fakeWatch{armed: f.armed, hangupOnStop: true})
-	f.waitArmed(t, 1)
-	f.approver.next(t).answer <- broker.OutcomeApproved
+	for name, rule := range map[string]broker.Rule{"per request": approvalRule(), "grant": grantRule()} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newGateFixture(t, nil, rule)
+			in := f.sendWatched(newRequest(t), &fakeWatch{armed: f.armed, hangupOnStop: true})
+			f.waitArmed(t, 1)
+			f.approver.next(t).answer <- broker.OutcomeApproved
 
-	in.requireFailClosed(t)
-	require.Zero(t, f.res.calls.Load())
+			in.requireFailClosed(t)
+			require.Zero(t, f.res.calls.Load())
+		})
+	}
 }
 
 func TestGate_ShutdownClosesDialogAndFailsQueued(t *testing.T) {

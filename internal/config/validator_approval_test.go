@@ -32,9 +32,19 @@ func TestCheckApproval(t *testing.T) {
 		approval string
 		goos     string
 		wantMsg  string // empty means no approval lint
+		wantLine int    // 0 means the approval line, 12
 	}{
 		{name: "empty mapping on linux", approval: "    approval: {}", goos: "linux"},
 		{name: "absent block", approval: "", goos: "darwin"},
+		{name: "positive ttl", approval: "    approval:\n      ttl: 10m", goos: "linux"},
+		{name: "zero ttl", approval: "    approval:\n      ttl: 0s", goos: "linux"},
+		{
+			name:     "negative ttl",
+			approval: "    approval:\n      ttl: -1m",
+			goos:     "linux",
+			wantMsg:  "ttl must be zero or positive",
+			wantLine: 13,
+		},
 		{
 			name:     "null block",
 			approval: "    approval:",
@@ -72,7 +82,11 @@ func TestCheckApproval(t *testing.T) {
 			got := v.out[0]
 			require.Equal(t, tc.wantMsg, got.Message)
 			require.Equal(t, SeverityError, got.Severity)
-			require.Equal(t, 12, got.Line, "lint must point at the approval line")
+			wantLine := 12
+			if tc.wantLine != 0 {
+				wantLine = tc.wantLine
+			}
+			require.Equal(t, wantLine, got.Line, "lint must point at the offending line")
 		})
 	}
 }
@@ -169,6 +183,6 @@ rules:
 func TestLoad_ApprovalRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := Load(strings.NewReader(approvalRuleConfig("    approval: {ttl: 5m}")))
-	require.ErrorContains(t, err, "field ttl not found")
+	_, _, err := Load(strings.NewReader(approvalRuleConfig("    approval: {timeout: 5m}")))
+	require.ErrorContains(t, err, "field timeout not found")
 }
