@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -333,35 +335,94 @@ func (l logLines) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// TestGate_GrantNobodyWaitsForStillLogs covers a grant dialog whose only
-// request left while it was open. The answer it records must still leave
-// an audit line.
-func TestGate_GrantNobodyWaitsForStillLogs(t *testing.T) {
-	t.Parallel()
+// next returns the next line that contains every string in want, skipping
+// the lines before it.
+func (l logLines) next(t *testing.T, want ...string) string {
+	t.Helper()
+	for {
+		select {
+		case line := <-l:
+			if !slices.ContainsFunc(want, func(w string) bool { return !strings.Contains(line, w) }) {
+				return line
+			}
+		case <-time.After(waitLimit):
+			t.Fatalf("no log line with %q", want)
+		}
+	}
+}
 
-	f := newGateFixture(t, nil, grantRule())
-	lines := make(logLines, 16)
-	gate := broker.NewGate(t.Context(), broker.GateConfig{
+// logGate replaces f's gate with one on base that logs to the returned lines.
+func (f *gateFixture) logGate(base context.Context) logLines {
+	lines := make(logLines, 64)
+	gate := broker.NewGate(base, broker.GateConfig{
 		Approver: f.approver, Now: f.clock.Now, After: f.clock.After,
 		Logger: slog.New(slog.NewTextHandler(lines, nil)),
 	})
 	f.hook = broker.Hook(f.engine, f.res, config.OnNoMatchPassthrough, 0, true, nil, gate) //nolint:bodyclose // closure
+	return lines
+}
 
-	in := f.send(newRequest(t))
-	p := f.approver.next(t)
-	f.waitArmed(t, 1)
-	in.watch.hangup()
-	in.requireFailClosed(t)
-	require.Contains(t, <-lines, "outcome=canceled")
+// TestGate_EveryDialogLogsItsAnswer covers dialogs whose answer no request
+// can report: the request left while the dialog was open, or its departure
+// surfaced only after the answer. A grant recorded either way must still
+// leave an audit line.
+func TestGate_EveryDialogLogsItsAnswer(t *testing.T) {
+	t.Parallel()
 
-	p.answer <- broker.OutcomeApproved
-	select {
-	case line := <-lines:
-		require.Contains(t, line, "outcome=approved")
-		require.Contains(t, line, "rule=api.example.com")
-	case <-time.After(5 * time.Second):
-		t.Fatal("the grant nobody waited for was recorded without a log line")
+	cases := []struct {
+		name         string
+		hangupOnStop bool
+	}{
+		{name: "request left while the dialog was open"},
+		{name: "departure seen when the watch stops", hangupOnStop: true},
 	}
-	f.send(newRequest(t)).requireForwarded(t)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newGateFixture(t, nil, grantRule())
+			lines := f.logGate(t.Context())
+			w := &fakeWatch{armed: f.armed, hangupOnStop: tc.hangupOnStop}
+			in := f.sendWatched(newRequest(t), w)
+			p := f.approver.next(t)
+			f.waitArmed(t, 1)
+			canceled := []string{`msg="broker approval"`, "outcome=canceled"}
+			if !tc.hangupOnStop {
+				w.hangup()
+				in.requireFailClosed(t)
+				lines.next(t, canceled...)
+			}
+			p.answer <- broker.OutcomeApproved
+			lines.next(t, `msg="broker approval dialog"`, "outcome=approved", "rule=api.example.com")
+			if tc.hangupOnStop {
+				in.requireFailClosed(t)
+				lines.next(t, canceled...)
+			}
+			f.send(newRequest(t)).requireForwarded(t)
+			require.Equal(t, int64(1), f.approver.calls.Load())
+		})
+	}
+}
+
+// TestGate_ShutdownFailsQueuedGrantUnavailable covers a grant request queued
+// behind another dialog when the gate shuts down: it fails closed and logs
+// unavailable, since its client never left.
+func TestGate_ShutdownFailsQueuedGrantUnavailable(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, grantRoutedRule())
+	base, shutdown := context.WithCancel(t.Context())
+	lines := f.logGate(base)
+	holder := f.send(maxRequest(t))
+	f.approver.next(t)
+	f.waitArmed(t, 1)
+	queued := f.send(johnRequest(t, "/v1/x"))
+	f.waitArmed(t, 1)
+
+	shutdown()
+	holder.requireFailClosed(t)
+	queued.requireFailClosed(t)
+	lines.next(t, `msg="broker approval"`, "route=john", "outcome=unavailable")
 	require.Equal(t, int64(1), f.approver.calls.Load())
+	require.Zero(t, f.res.calls.Load())
 }

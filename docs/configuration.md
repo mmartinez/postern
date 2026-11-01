@@ -523,7 +523,8 @@ A polkit authentication agent must be running in the desktop session.
   covers later requests.
 - **Request bodies.** A request to an approval rule is read in full before
   the prompt, up to `max_body_bytes`, so a client that leaves during an upload
-  is noticed. A larger body gets `413` without a prompt.
+  is noticed. A larger body gets `413` without a prompt. This also applies to
+  requests a live grant covers.
 - **Fail closed.** Every outcome other than an approval returns the uniform
   `502`, and the resolver and the upstream are never called.
 - **Use it sparingly.** With `ttl: 0s` every request to the rule prompts.

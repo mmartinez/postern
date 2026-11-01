@@ -162,21 +162,11 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 		return true
 	}
 	log := func(o Outcome, err error) {
-		level := slog.LevelWarn
-		if o == OutcomeApproved {
-			level = slog.LevelInfo
-		}
-		attrs := []slog.Attr{
-			slog.String("outcome", string(o)),
+		g.logOutcome("broker approval", o, err,
 			slog.String("host", canonicalHost(stripPort(req.URL.Host))),
 			slog.String("rule", rule.Host),
 			slog.String("route", route),
-			slog.String("method", req.Method),
-		}
-		if err != nil {
-			attrs = append(attrs, slog.Any("err", err))
-		}
-		g.logger.LogAttrs(context.Background(), level, "broker approval", attrs...)
+			slog.String("method", req.Method))
 	}
 	if g.approver == nil {
 		log(OutcomeUnavailable, nil)
@@ -217,7 +207,7 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 	ttl := rule.Approval.TTL
 	var fl *flight
 	if ttl > 0 && ctx.Err() == nil {
-		fl = g.joinLocked(key, ttl, grantReason(req, rule, route, secretRef), log)
+		fl = g.joinLocked(key, rule.Host, ttl, grantReason(req, rule, route, secretRef))
 	}
 	g.mu.Unlock()
 	defer func() {
@@ -236,7 +226,7 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 	case ttl > 0:
 		outcome, err = outcomeCanceled, ctx.Err()
 	default:
-		outcome, err = g.decide(ctx, key, 0, approvalReason(req, secretRef, route), nil)
+		outcome, err = g.decide(ctx, key, rule.Host, 0, approvalReason(req, secretRef, route), nil)
 	}
 	if err != nil || outcome != OutcomeApproved {
 		log(outcome, err)
@@ -254,26 +244,20 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 }
 
 // joinLocked adds a waiter to the flight that decides key's grant, starting
-// one when no request is waiting on it yet. The flight logs its answer with
-// log, the first request's logger, when every waiter left while its dialog
-// was open. g.mu must be held.
-func (g *Gate) joinLocked(key gateKey, ttl time.Duration, reason string, log func(Outcome, error)) *flight {
+// one when no request is waiting on it yet. g.mu must be held.
+func (g *Gate) joinLocked(key gateKey, rule string, ttl time.Duration, reason string) *flight {
 	fl := g.flights[key]
 	if fl == nil {
 		fctx, cancel := context.WithCancel(g.base)
 		fl = &flight{turn: make(chan struct{}), done: make(chan struct{}), cancel: cancel}
 		g.flights[key] = fl
 		go func() {
-			fl.outcome, fl.err = g.decide(fctx, key, ttl, reason, fl.turn)
+			fl.outcome, fl.err = g.decide(fctx, key, rule, ttl, reason, fl.turn)
 			g.mu.Lock()
 			if g.flights[key] == fl {
 				delete(g.flights, key)
 			}
-			orphaned := fl.waiters == 0
 			g.mu.Unlock()
-			if orphaned && fl.outcome != outcomeCanceled {
-				log(fl.outcome, fl.err)
-			}
 			cancel()
 			close(fl.done)
 		}()
@@ -315,10 +299,14 @@ func (g *Gate) await(ctx context.Context, key gateKey, fl *flight) (Outcome, err
 
 // decide waits its turn for the dialog until ctx is done, closes turn when
 // it is not nil, then asks about key unless a cooldown or a grant recorded
-// meanwhile already answers it. An answer is recorded for later requests: a
-// grant of ttl when ttl is positive, a cooldown after a refusal.
-func (g *Gate) decide(ctx context.Context, key gateKey, ttl time.Duration, reason string, turn chan<- struct{}) (Outcome, error) {
+// meanwhile already answers it. An answer is logged, since no request may be
+// left waiting for it, and recorded for later requests: a grant of ttl when
+// ttl is positive, a cooldown after a refusal.
+func (g *Gate) decide(ctx context.Context, key gateKey, rule string, ttl time.Duration, reason string, turn chan<- struct{}) (Outcome, error) {
 	if err := g.dialog.Acquire(ctx, 1); err != nil {
+		if g.base.Err() != nil {
+			return OutcomeUnavailable, err
+		}
 		return outcomeCanceled, err
 	}
 	defer g.dialog.Release(1)
@@ -341,6 +329,7 @@ func (g *Gate) decide(ctx context.Context, key gateKey, ttl time.Duration, reaso
 	}
 
 	outcome, err := g.ask(reason)
+	g.logOutcome("broker approval dialog", outcome, err, slog.String("rule", rule), slog.String("route", key.route))
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
@@ -369,6 +358,19 @@ func (g *Gate) decide(ctx context.Context, key gateKey, ttl time.Duration, reaso
 	}
 	m[key] = now.Add(d)
 	return outcome, err
+}
+
+// logOutcome writes one approval line: at info for an approval, else at warn.
+func (g *Gate) logOutcome(msg string, o Outcome, err error, attrs ...slog.Attr) {
+	level := slog.LevelWarn
+	if o == OutcomeApproved {
+		level = slog.LevelInfo
+	}
+	attrs = append([]slog.Attr{slog.String("outcome", string(o))}, attrs...)
+	if err != nil {
+		attrs = append(attrs, slog.Any("err", err))
+	}
+	g.logger.LogAttrs(context.Background(), level, msg, attrs...)
 }
 
 // ask shows one dialog. The dialog's context derives from the gate, not the

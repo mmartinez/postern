@@ -88,9 +88,10 @@ Each approval decision logs one `broker approval` line with `outcome`
 (`approved`, `denied`, `dismissed`, `timeout`, `cooldown`, `unavailable`, or
 `canceled`), `host`, `rule`, `route`, and `method`. Each request waiting on a
 shared grant prompt logs its own line; a request that passes under a live
-grant logs none. A grant prompt that every waiting request left while it was
-open logs its answer once, with the first request's `host` and `method`. The
-line never carries the credential, a fingerprint of it, or a route token.
+grant logs none. Each dialog also logs one `broker approval dialog` line with
+the user's answer as `outcome`, `rule`, and `route`, so a grant is on record
+even when no request was left waiting for it. Neither line carries the
+credential, a fingerprint of it, or a route token.
 
 ## Threat model
 
