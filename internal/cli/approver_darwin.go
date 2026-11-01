@@ -2,12 +2,9 @@
 
 package cli
 
-import (
-	"github.com/mmartinez/postern/internal/approval"
-	"github.com/mmartinez/postern/internal/broker"
-)
+import "github.com/mmartinez/postern/internal/approval"
 
 // newApprover returns this platform's approval backend.
-func newApprover() broker.Approver {
+func newApprover() approval.LocalAuth {
 	return approval.NewLocalAuth()
 }
