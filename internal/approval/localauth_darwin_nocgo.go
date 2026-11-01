@@ -16,8 +16,8 @@ var errNoCgo = errors.New("this build has no cgo, so it cannot use LocalAuthenti
 // cgo. Every approval is unavailable, so approval rules fail closed.
 type LocalAuth struct{}
 
-// New returns the stand-in approver.
-func New() LocalAuth {
+// NewLocalAuth returns the stand-in approver.
+func NewLocalAuth() LocalAuth {
 	return LocalAuth{}
 }
 

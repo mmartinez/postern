@@ -76,8 +76,8 @@ const (
 // ID, an Apple Watch, or the account password.
 type LocalAuth struct{}
 
-// New returns the LocalAuthentication approver.
-func New() LocalAuth {
+// NewLocalAuth returns the LocalAuthentication approver.
+func NewLocalAuth() LocalAuth {
 	return LocalAuth{}
 }
 

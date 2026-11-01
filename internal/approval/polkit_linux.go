@@ -28,17 +28,17 @@ type Polkit struct {
 	err     error
 }
 
-// New returns the polkit approver for this process. A setup failure is kept
-// and returned by every Approve call, so approval rules fail closed.
-func New() *Polkit {
+// NewPolkit returns the polkit approver for this process. A setup failure is
+// kept and returned by every Approve call, so approval rules fail closed.
+func NewPolkit() *Polkit {
 	path, err := exec.LookPath("pkcheck")
 	if err != nil {
 		return &Polkit{err: fmt.Errorf("find pkcheck: %w", err)}
 	}
-	return newPolkit(path)
+	return polkitAt(path)
 }
 
-func newPolkit(path string) *Polkit {
+func polkitAt(path string) *Polkit {
 	subject, err := processSubject()
 	return &Polkit{path: path, subject: subject, err: err}
 }

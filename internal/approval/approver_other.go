@@ -15,8 +15,8 @@ import (
 // validator rejects approval blocks here before that can happen.
 type Unsupported struct{}
 
-// New returns the unsupported-platform approver.
-func New() Unsupported {
+// NewUnsupported returns the unsupported-platform approver.
+func NewUnsupported() Unsupported {
 	return Unsupported{}
 }
 

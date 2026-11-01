@@ -15,7 +15,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mmartinez/postern/internal/approval"
 	"github.com/mmartinez/postern/internal/broker"
 	"github.com/mmartinez/postern/internal/ca"
 	"github.com/mmartinez/postern/internal/config"
@@ -314,7 +313,7 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		slog.Duration("cache_refresh_ahead", cacheSettings.RefreshAhead),
 		slog.Duration("cache_max_stale", cacheSettings.MaxStale),
 	)
-	gate := broker.NewGate(ctx, broker.GateConfig{Approver: approval.New(), Logger: logger})
+	gate := broker.NewGate(ctx, broker.GateConfig{Approver: newApprover(), Logger: logger})
 	return brokerBundle{
 		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger, gate), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
 		engine:  engine,

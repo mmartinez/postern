@@ -57,7 +57,7 @@ func TestPolkit_ExitCodes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path, _ := fakePkcheck(t, tc.body)
 
-			got, err := newPolkit(path).Approve(t.Context(), "send op://V/I/f to GET api.example.com/v1 for any client")
+			got, err := polkitAt(path).Approve(t.Context(), "send op://V/I/f to GET api.example.com/v1 for any client")
 
 			require.Equal(t, tc.want, got)
 			switch {
@@ -75,7 +75,7 @@ func TestPolkit_ExitCodes(t *testing.T) {
 
 func TestPolkit_PassesSubjectAndMessage(t *testing.T) {
 	path, args := fakePkcheck(t, "exit 0")
-	_, err := newPolkit(path).Approve(t.Context(), "send op://V/I/f to GET api.example.com/v1 for any client")
+	_, err := polkitAt(path).Approve(t.Context(), "send op://V/I/f to GET api.example.com/v1 for any client")
 	require.NoError(t, err)
 
 	raw, err := os.ReadFile(args)
@@ -96,7 +96,7 @@ func TestPolkit_PassesSubjectAndMessage(t *testing.T) {
 // request path could hide which agent is asking. No "$(" may reach polkit.
 func TestPolkit_MessageNeverExpands(t *testing.T) {
 	path, args := fakePkcheck(t, "exit 0")
-	_, err := newPolkit(path).Approve(t.Context(), "send op://V/I/f to GET api.example.com/a$(polkit.message)/b$( for agent max")
+	_, err := polkitAt(path).Approve(t.Context(), "send op://V/I/f to GET api.example.com/a$(polkit.message)/b$( for agent max")
 	require.NoError(t, err)
 
 	raw, err := os.ReadFile(args)
@@ -120,7 +120,7 @@ func TestPolkit_CancelKillsPkcheck(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		o, err := newPolkit(path).Approve(ctx, "reason")
+		o, err := polkitAt(path).Approve(ctx, "reason")
 		done <- result{o, err}
 	}()
 
@@ -142,7 +142,7 @@ func TestPolkit_CancelKillsPkcheck(t *testing.T) {
 func TestPolkit_MissingBinaryIsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	got, err := newPolkit(filepath.Join(t.TempDir(), "pkcheck")).Approve(t.Context(), "reason")
+	got, err := polkitAt(filepath.Join(t.TempDir(), "pkcheck")).Approve(t.Context(), "reason")
 	require.Equal(t, broker.OutcomeUnavailable, got)
 	require.Error(t, err)
 }
