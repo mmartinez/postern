@@ -2,6 +2,7 @@ package broker_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -487,6 +488,29 @@ func TestGate_PromptTimesOut(t *testing.T) {
 	require.Equal(t, int64(1), f.approver.calls.Load(), "a timeout starts the cooldown")
 }
 
+// TestGate_TimeoutStartsWhenDialogOpens holds a request in the queue for most
+// of a timeout behind another route's dialog. Its own dialog still gets the
+// full 60 seconds.
+func TestGate_TimeoutStartsWhenDialogOpens(t *testing.T) {
+	t.Parallel()
+
+	f := newGateFixture(t, nil, approvalRoutedRule())
+	first := f.send(newRequest(t, "X-Token", "tg_max_8Kq2Lp9wZ"))
+	p := f.approver.next(t)
+	queued := f.send(newRequest(t, "X-Token", "tg_john_3Rt7Yx1mQ"))
+	f.waitArmed(t, 2)
+
+	f.clock.Advance(59 * time.Second)
+	p.answer <- broker.OutcomeApproved
+	first.requireForwarded(t)
+
+	q := f.approver.next(t)
+	f.clock.Advance(59 * time.Second)
+	require.NoError(t, q.ctx.Err(), "the queued request's dialog gets its own 60 seconds")
+	q.answer <- broker.OutcomeApproved
+	queued.requireForwarded(t)
+}
+
 func TestGate_ReloadClearsCooldown(t *testing.T) {
 	t.Parallel()
 
@@ -629,17 +653,31 @@ func TestGate_ShutdownClosesDialogAndFailsQueued(t *testing.T) {
 	require.Zero(t, f.res.calls.Load())
 }
 
-func TestGate_ApproverPanicFailsClosed(t *testing.T) {
+// TestGate_BrokenApproverFailsClosed covers backends that break the Approver
+// contract: a panic, and an approval that comes with an error.
+func TestGate_BrokenApproverFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	res := &fakeResolver{value: "sk-secret"}
-	gate := broker.NewGate(t.Context(), broker.GateConfig{
-		Approver: approverFunc(func(context.Context, string) (broker.Outcome, error) { panic("backend bug") }),
-	})
-	hook := broker.Hook(broker.NewEngine([]broker.Rule{approvalRule()}), res, config.OnNoMatchPassthrough, 0, true, nil, gate) //nolint:bodyclose // requireFailClosed closes it
+	cases := []struct {
+		name    string
+		approve approverFunc
+	}{
+		{"panic", func(context.Context, string) (broker.Outcome, error) { panic("backend bug") }},
+		{"approved with error", func(context.Context, string) (broker.Outcome, error) {
+			return broker.OutcomeApproved, errors.New("backend failed")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res := &fakeResolver{value: "sk-secret"}
+			gate := broker.NewGate(t.Context(), broker.GateConfig{Approver: tc.approve})
+			hook := broker.Hook(broker.NewEngine([]broker.Rule{approvalRule()}), res, config.OnNoMatchPassthrough, 0, true, nil, gate) //nolint:bodyclose // requireFailClosed closes it
 
-	requireFailClosed(t, hook(newRequest(t))) //nolint:bodyclose // requireFailClosed closes it
-	require.Zero(t, res.calls.Load())
+			requireFailClosed(t, hook(newRequest(t))) //nolint:bodyclose // requireFailClosed closes it
+			require.Zero(t, res.calls.Load())
+		})
+	}
 }
 
 func TestGate_MissingApproverFailsClosed(t *testing.T) {

@@ -109,6 +109,8 @@ type validator struct {
 	out  []LintError
 	// goos selects the platform the approval check validates against.
 	goos string
+	// approvals caches decodedApproval's view of the document.
+	approvals map[string]*yaml.Node
 }
 
 func newValidator(root *yaml.Node) *validator {

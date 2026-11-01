@@ -502,9 +502,9 @@ A polkit authentication agent must be running in the desktop session.
   rules that write or hold high-impact secrets, narrowed with `paths` and
   `methods`, so read traffic does not train the user to approve without
   reading.
-- **Validation.** A null `approval:` (no `{}`), written directly or through an
-  alias, is an error, because it would silently skip the prompt. An
-  `approval` block on a platform other than Linux is an error.
+- **Validation.** A null `approval:` (no `{}`), written directly or reached
+  through an alias or a merge key, is an error, because it would silently skip
+  the prompt. An `approval` block on a platform other than Linux is an error.
 
 ### Built-in templates
 

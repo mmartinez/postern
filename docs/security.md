@@ -136,6 +136,12 @@ credential, a fingerprint of it, or a route token.
   without reading. Put `approval` on rules that write or hold high-impact
   secrets, and narrow them with `paths` and `methods`, rather than on read
   traffic.
+- *Local polkit rules.* polkit rules files (`/etc/polkit-1/rules.d`) are
+  evaluated before the action's defaults. A rule that returns `YES` for
+  `dev.postern.authorize-secret`, or for every action, approves each request
+  without a dialog. Check `pkcheck --action-id dev.postern.authorize-secret
+  --process $$` from a terminal: exit code 2 (interaction needed) means the
+  dialog will show.
 
 ## Key and token handling
 

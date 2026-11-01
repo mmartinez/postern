@@ -138,7 +138,7 @@ func derefBodyCap(p *int) int {
 
 // copyApproval returns a fresh approval block, or nil when the rule has none.
 // The gate keys its state on this pointer, so every rule of every load needs
-// its own; templates can share one decoded block between rules.
+// its own, even when a caller converts the same config twice.
 func copyApproval(src *config.Approval) *config.Approval {
 	if src == nil {
 		return nil

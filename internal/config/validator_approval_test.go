@@ -77,25 +77,61 @@ func TestCheckApproval(t *testing.T) {
 	}
 }
 
-// TestCheckApproval_NullThroughAlias covers an approval value that is an
-// alias of a null node elsewhere in the document. It decodes to nil like a
+// TestCheckApproval_NullThroughAliasOrMerge covers an approval value that
+// reaches the rule through an alias or a merge key. It decodes to nil like a
 // literal null, so it must be rejected the same way.
-func TestCheckApproval_NullThroughAlias(t *testing.T) {
+func TestCheckApproval_NullThroughAliasOrMerge(t *testing.T) {
 	t.Parallel()
 
-	cfg, root, err := Load(strings.NewReader(approvalRuleConfig("    paths: &off null\n    approval: *off")))
-	require.NoError(t, err)
-	require.Nil(t, cfg.Rules[0].Approval)
-
-	lints := Validate(cfg, root)
-	var found bool
-	for _, l := range lints {
-		if l.Path == "rules[0].approval" && l.Severity == SeverityError {
-			require.Equal(t, 13, l.Line, "lint must point at the alias")
-			found = true
-		}
+	cases := []struct {
+		name     string
+		doc      string
+		wantLine int
+	}{
+		{
+			name:     "alias",
+			doc:      approvalRuleConfig("    paths: &off null\n    approval: *off"),
+			wantLine: 13,
+		},
+		{
+			name: "merge key",
+			doc: `
+credstores:
+  - name: default
+    provider: op
+    settings: &extra
+      approval: null
+rules:
+  - <<: *extra
+    host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+`,
+			wantLine: 6,
+		},
 	}
-	require.True(t, found, "an aliased null approval must be an error; got %v", lints)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, root, err := Load(strings.NewReader(tc.doc))
+			require.NoError(t, err)
+			require.Nil(t, cfg.Rules[0].Approval)
+
+			lints := Validate(cfg, root)
+			var found bool
+			for _, l := range lints {
+				if l.Path == "rules[0].approval" && l.Severity == SeverityError {
+					require.Equal(t, tc.wantLine, l.Line)
+					found = true
+				}
+			}
+			require.True(t, found, "a null approval must be an error; got %v", lints)
+		})
+	}
 }
 
 // TestValidate_ApprovalRunsForEveryRuleShape proves the approval check is

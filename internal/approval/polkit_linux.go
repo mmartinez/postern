@@ -10,8 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/mmartinez/postern/internal/broker"
 )
@@ -84,8 +82,6 @@ func (p *Polkit) Approve(ctx context.Context, reason string) (broker.Outcome, er
 		"--detail", "polkit.message", message,
 	)
 	cmd.Stderr = &stderr
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return broker.OutcomeUnavailable, fmt.Errorf("pkcheck: %w", ctxErr)
