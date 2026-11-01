@@ -17,11 +17,12 @@ func TestApprovalReason(t *testing.T) {
 
 	long := "/" + strings.Repeat("a", 200)
 	cases := []struct {
-		name   string
-		method string
-		url    string
-		route  string
-		want   string
+		name     string
+		method   string
+		override string
+		url      string
+		route    string
+		want     string
 	}{
 		{
 			name:   "any client, query and port dropped",
@@ -54,13 +55,23 @@ func TestApprovalReason(t *testing.T) {
 			url:    "https://api.example.com" + long,
 			want:   "send op://V/I/f to GET api.example.com/" + strings.Repeat("a", 119-len("GET api.example.com/")) + "… for any client",
 		},
+		{
+			name:     "method override shown",
+			method:   http.MethodGet,
+			override: "DELETE",
+			url:      "https://api.example.com/v1/x",
+			want:     "send op://V/I/f to GET as DELETE api.example.com/v1/x for any client",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			u, err := url.Parse(tc.url)
 			require.NoError(t, err)
-			req := &http.Request{Method: tc.method, URL: u}
+			req := &http.Request{Method: tc.method, URL: u, Header: http.Header{}}
+			if tc.override != "" {
+				req.Header.Set("X-HTTP-Method-Override", tc.override)
+			}
 			require.Equal(t, tc.want, approvalReason(req, "op://V/I/f", tc.route))
 		})
 	}
@@ -96,7 +107,7 @@ func TestGrantReason(t *testing.T) {
 				Methods:  []string{http.MethodGet, http.MethodPost},
 				Approval: &config.Approval{TTL: 10 * time.Minute, Methods: []string{http.MethodPost}},
 			},
-			want: "let any client use op://V/I/f for POST requests to api.example.com on any path for 10m (first request: POST api.example.com/v1/cards)",
+			want: "let any client use op://V/I/f for POST or method-override requests to api.example.com on any path for 10m (first request: POST api.example.com/v1/cards)",
 		},
 		{
 			name: "bare rule",

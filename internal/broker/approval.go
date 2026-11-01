@@ -251,10 +251,18 @@ func (r Rule) needsApproval(req *http.Request) bool {
 	if r.Approval == nil {
 		return false
 	}
-	return len(r.Approval.Methods) == 0 || methodIn(req.Method, r.Approval.Methods) ||
-		req.Header.Get("X-HTTP-Method-Override") != "" ||
-		req.Header.Get("X-HTTP-Method") != "" ||
-		req.Header.Get("X-Method-Override") != ""
+	return len(r.Approval.Methods) == 0 || methodIn(req.Method, r.Approval.Methods) || methodOverride(req) != ""
+}
+
+// methodOverride returns the method req asks the upstream to use in place of
+// its own through an override header, or "" when it carries none.
+func methodOverride(req *http.Request) string {
+	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+		if m := req.Header.Get(h); m != "" {
+			return m
+		}
+	}
+	return ""
 }
 
 // joinLocked adds a waiter to the flight that decides key's grant, starting
@@ -462,7 +470,7 @@ func grantReason(req *http.Request, rule Rule, route, secretRef string) string {
 	methods := "all"
 	switch {
 	case len(rule.Approval.Methods) > 0:
-		methods = strings.Join(rule.Approval.Methods, "/")
+		methods = strings.Join(rule.Approval.Methods, "/") + " or method-override"
 	case len(rule.Methods) > 0:
 		methods = strings.Join(rule.Methods, "/")
 	}
@@ -482,10 +490,14 @@ func grantReason(req *http.Request, rule Rule, route, secretRef string) string {
 		" on " + paths + " for " + ttl + " (first request: " + requestLine(req) + ")"
 }
 
-// requestLine renders req for a dialog. It comes from the client, so it is
-// reduced to printable ASCII and capped.
+// requestLine renders req for a dialog, naming any method override. It comes
+// from the client, so it is reduced to printable ASCII and capped.
 func requestLine(req *http.Request) string {
-	line := []byte(req.Method + " " + canonicalHost(stripPort(req.URL.Host)) + req.URL.EscapedPath())
+	method := req.Method
+	if o := methodOverride(req); o != "" {
+		method += " as " + o
+	}
+	line := []byte(method + " " + canonicalHost(stripPort(req.URL.Host)) + req.URL.EscapedPath())
 	for i, b := range line {
 		if b < 0x20 || b > 0x7e {
 			line[i] = '?'
