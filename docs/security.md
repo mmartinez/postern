@@ -148,8 +148,10 @@ credential, a fingerprint of it, or a route token.
   default, for `sudo` and the login screen too. An agent that keeps triggering
   prompts could cause that, so postern stops opening dialogs after two such
   dialogs within 15 minutes (see the refusal budget in
-  [configuration.md](configuration.md)). Failures from other sources, such as
-  a mistyped `sudo` password, share the same count.
+  [configuration.md](configuration.md)). The budget cannot see every failure
+  in that count: a mistyped `sudo` password, a mistyped password retried
+  inside one dialog, which some polkit agents allow, and dialogs from before
+  a postern restart all count too.
 
 ## Key and token handling
 

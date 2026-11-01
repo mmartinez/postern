@@ -72,7 +72,7 @@ type Approver interface {
 type GateConfig struct {
 	// Approver shows the dialogs. Nil makes every approval rule fail closed.
 	Approver Approver
-	// Now defaults to time.Now when nil.
+	// Now defaults to the wall clock when nil.
 	Now func() time.Time
 	// After defaults to time.After when nil.
 	After func(time.Duration) <-chan time.Time
@@ -120,7 +120,9 @@ func NewGate(ctx context.Context, cfg GateConfig) *Gate {
 		cooldown: make(map[gateKey]time.Time),
 	}
 	if g.now == nil {
-		g.now = time.Now
+		// Windows must keep running while the machine sleeps, and the
+		// monotonic reading stops then on Linux.
+		g.now = func() time.Time { return time.Now().Round(0) }
 	}
 	if g.after == nil {
 		g.after = time.After

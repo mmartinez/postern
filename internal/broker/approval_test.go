@@ -556,6 +556,49 @@ func TestGate_RefusalBudget(t *testing.T) {
 	require.Equal(t, int64(2), f.res.calls.Load())
 }
 
+// TestGate_RefusalBudgetSpansRulesQueueAndReload refuses on two rules. A
+// request that queued behind the second dialog, before the budget was spent,
+// still gets no dialog, and a hot reload does not clear the count.
+func TestGate_RefusalBudgetSpansRulesQueueAndReload(t *testing.T) {
+	t.Parallel()
+
+	cfgRule := func(host string) config.Rule {
+		return config.Rule{
+			Host:      host,
+			SecretRef: "op://V/I/f",
+			Inject:    config.Inject{Type: config.InjectTypeHeader, Name: "x-api-key", Template: "{{ CREDENTIAL }}"},
+			Approval:  &config.Approval{},
+		}
+	}
+	cfgRules := []config.Rule{cfgRule("api.example.com"), cfgRule("other.example.com")}
+	rules, err := broker.FromConfigRules(cfgRules)
+	require.NoError(t, err)
+	f := newGateFixture(t, nil, rules...)
+	otherReq := newRequest(t)
+	otherReq.URL.Host = "other.example.com"
+
+	in := f.send(newRequest(t))
+	f.approver.next(t).answer <- broker.OutcomeDismissed
+	in.requireFailClosed(t)
+	f.clock.Advance(time.Minute)
+
+	in = f.send(otherReq)
+	p := f.approver.next(t)
+	queued := f.send(newRequest(t))
+	f.waitArmed(t, 3)
+	p.answer <- broker.OutcomeDenied
+	in.requireFailClosed(t)
+	queued.requireFailClosed(t)
+	require.Equal(t, int64(2), f.approver.calls.Load(), "a request queued before the budget was spent must not prompt")
+
+	reloaded, err := broker.FromConfigRules(cfgRules)
+	require.NoError(t, err)
+	f.engine.Swap(reloaded)
+	f.send(newRequest(t)).requireFailClosed(t)
+	require.Equal(t, int64(2), f.approver.calls.Load(), "a reload must not clear the count")
+	require.Zero(t, f.res.calls.Load())
+}
+
 func TestGate_ReloadClearsCooldown(t *testing.T) {
 	t.Parallel()
 

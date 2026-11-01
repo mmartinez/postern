@@ -491,12 +491,12 @@ A polkit authentication agent must be running in the desktop session.
   that key: requests in the cooldown, including ones already queued, fail
   closed without a prompt. A hot reload starts every key fresh.
 - **Refusal budget.** After two dialogs end without an approval within 15
-  minutes, on any rule or route, every approval rule fails closed without a
-  dialog until the older one is 15 minutes old. An approval clears the count.
-  Linux counts each such dialog as a failed login where `pam_faillock` is in
-  the PAM stack, and its default locks the account after three in 15 minutes;
-  the budget keeps postern from causing that lock on its own. A hot reload
-  does not clear the count.
+  minutes, on any rule or route, every request that would open a dialog fails
+  closed without one until the older refusal is 15 minutes old. An approval
+  clears the count. Linux counts each such dialog as a failed login where
+  `pam_faillock` is in the PAM stack, and its default locks the account after
+  three in 15 minutes. The count lives in memory: a hot reload keeps it, a
+  restart clears it.
 - **Client gone.** A queued request whose client disconnects leaves the queue
   without a prompt. An open dialog stays open when its client leaves, but the
   request fails closed even if the user approves.
