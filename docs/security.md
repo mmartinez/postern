@@ -142,6 +142,25 @@ programs and OpenSSL-linked CLIs (such as `curl`), but GUI apps and browsers
 ignore it: an agent that is a browser or other GUI client needs the keychain
 trust installed by `postern ca install` instead.
 
+**Node-based agents.** By default Node ignores both variables `postern
+bootstrap` prints. Its built-in `fetch`, `http`, and `https` honor
+`HTTPS_PROXY` only when `NODE_USE_ENV_PROXY=1` is set (or `--use-env-proxy` is
+passed), which needs Node 22.21.0 or 24.5.0 and later; on older Node the client
+must configure a proxy agent itself. Node reads `SSL_CERT_FILE` only with
+`--use-openssl-ca` (or `--use-system-ca` outside macOS and Windows), so point
+`NODE_EXTRA_CA_CERTS` at the CA instead:
+
+```sh
+export NODE_USE_ENV_PROXY=1
+export NODE_EXTRA_CA_CERTS="$HOME/.postern/ca.pem"
+```
+
+A client that passes its own agent or `ca` option ignores these variables, and
+some agent CLIs read a proxy setting of their own. Check that each client
+reaches postern: every brokered request logs `broker injected host=<host>`. A
+client that skips the proxy calls the upstream directly with whatever key it
+holds, so the call fails instead of being brokered.
+
 **Service-account token.** Postern obtains the credential vendor's
 service-account token through a resolution chain. With `source: auto` it tries,
 in order: a token file, an environment variable, then the OS keychain. The
