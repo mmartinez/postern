@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0](https://github.com/mmartinez/postern/compare/v0.10.3...v0.11.0) (2026-11-02)
+
+
+### Features
+
+* **approval:** approval dialogs on macOS through LocalAuthentication (Touch ID, Apple Watch, or password); not yet run on Mac hardware ([#121](https://github.com/mmartinez/postern/issues/121)) ([3a1a2e7](https://github.com/mmartinez/postern/commit/3a1a2e7e85b667c48637d8c35ba935020debd04e))
+* **broker:** `approval.methods` limits approval to selected methods; requests with a method-override header always require approval, which a live grant satisfies ([#123](https://github.com/mmartinez/postern/issues/123)) ([ca8dd8b](https://github.com/mmartinez/postern/commit/ca8dd8b305a283ecec84afae4b6de0d1e200cbbf))
+* **broker:** `approval.ttl` turns one approval into a time-limited grant for the rule and route ([#122](https://github.com/mmartinez/postern/issues/122)) ([b51bf04](https://github.com/mmartinez/postern/commit/b51bf045fe79aa49dd1d2014bb1cecbbd34bad3d))
+* **broker:** an `approval` block makes a rule wait for an OS authentication dialog (polkit on Linux) before its credential is resolved or injected; any other answer returns 502 ([#120](https://github.com/mmartinez/postern/issues/120)) ([67f4e95](https://github.com/mmartinez/postern/commit/67f4e95180393094a3a1ecb63642a512bb17b60c))
+* **broker:** stop opening approval dialogs after two refusals in 15 minutes, which lowers the risk of a pam_faillock account lock ([#120](https://github.com/mmartinez/postern/issues/120)) ([67f4e95](https://github.com/mmartinez/postern/commit/67f4e95180393094a3a1ecb63642a512bb17b60c))
+
+
+### Bug Fixes
+
+* **ca:** stop claiming the CA is trusted after a Linux ca install ([#128](https://github.com/mmartinez/postern/issues/128)) ([8a0a9c7](https://github.com/mmartinez/postern/commit/8a0a9c7df7c13ced78cddcac52eea9c8b0ed0554))
+
 ## [0.10.3](https://github.com/mmartinez/postern/compare/v0.10.2...v0.10.3) (2026-11-01)
 
 
