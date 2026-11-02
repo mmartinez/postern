@@ -72,9 +72,10 @@ var _ halfClosable = (*trackedConn)(nil)
 // timestamps are updated by Read/Write; the reaper and the shutdown drain
 // close stale entries through Close, which unblocks whatever goroutine
 // (goproxy's copyAndClose/copyOrWarn relays, the MITM read loop) is parked
-// inside the conn.
+// inside the conn. The embedded hangupConn lets the broker watch for the
+// client hanging up while it holds a request.
 type trackedConn struct {
-	net.Conn
+	*hangupConn
 
 	reg *connRegistry
 
@@ -86,7 +87,7 @@ type trackedConn struct {
 }
 
 func (c *trackedConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
+	n, err := c.hangupConn.Read(p)
 	if n > 0 {
 		c.progress.Add(int64(n))
 		c.markActive()
@@ -95,7 +96,7 @@ func (c *trackedConn) Read(p []byte) (int, error) {
 }
 
 func (c *trackedConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
+	n, err := c.hangupConn.Write(p)
 	if n > 0 {
 		c.progress.Add(int64(n))
 		c.markActive()
@@ -109,7 +110,7 @@ func (c *trackedConn) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
 		c.reg.remove(c)
-		err = c.Conn.Close()
+		err = c.hangupConn.Close()
 	})
 	return err
 }
@@ -155,9 +156,9 @@ func newConnRegistry() *connRegistry {
 
 func (r *connRegistry) track(c net.Conn) *trackedConn {
 	t := &trackedConn{
-		Conn:     c,
-		reg:      r,
-		accepted: time.Now(),
+		hangupConn: newHangupConn(c),
+		reg:        r,
+		accepted:   time.Now(),
 	}
 	t.lastActivity.Store(t.accepted.UnixNano())
 	if hc, ok := c.(halfClosable); ok {

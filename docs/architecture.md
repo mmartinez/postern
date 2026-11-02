@@ -85,6 +85,8 @@ Tunnel lifetime: hijacked tunnels are activity-tracked, not deadline-bound.
 The reaper scans every 30s, so closure lands within the stated bound plus one scan.
 A connection that has moved fewer than 128 bytes of total progress is closed roughly 30-60s after acceptance regardless of any intervening activity, while an established tunnel is closed after roughly 10m without two-way traffic (activity resets that longer timer, so live SSE streams are not cut).
 Shutdown drains open tunnels within the remaining budget before force-closing whatever is still alive.
+While the broker holds an intercepted request, it can watch the client connection and abandon the request as soon as the client hangs up.
+The watch reads ahead at most 64 KiB; a client that sends more while it is armed counts as gone, because a hangup behind those bytes could not be seen.
 
 If resolution or injection fails at step 3 or 4, postern **fails closed**: it
 returns a generic `502` to the agent and never contacts the upstream. See

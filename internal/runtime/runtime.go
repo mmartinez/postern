@@ -187,6 +187,7 @@ func New(opts Options) (*Runtime, error) {
 			Handler:           p.Handler(),
 			ReadHeaderTimeout: 30 * time.Second,
 			IdleTimeout:       idle,
+			ConnContext:       proxy.ConnContext,
 		},
 
 		stalledConnTimeout: stalledConnTimeout,
