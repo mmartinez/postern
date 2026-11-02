@@ -187,11 +187,14 @@ the system store yourself:
 
 | Distribution | Add | Remove |
 |---|---|---|
-| Debian, Ubuntu | `sudo cp ~/.postern/ca.pem /usr/local/share/ca-certificates/postern.crt && sudo update-ca-certificates` | `sudo rm /usr/local/share/ca-certificates/postern.crt && sudo update-ca-certificates --fresh` |
-| Fedora, RHEL | `sudo cp ~/.postern/ca.pem /etc/pki/ca-trust/source/anchors/postern.pem && sudo update-ca-trust extract` | `sudo rm /etc/pki/ca-trust/source/anchors/postern.pem && sudo update-ca-trust extract` |
+| Debian, Ubuntu | `sudo install -m 0644 ~/.postern/ca.pem /usr/local/share/ca-certificates/postern.crt && sudo update-ca-certificates` | `sudo rm /usr/local/share/ca-certificates/postern.crt && sudo update-ca-certificates --fresh` |
+| Fedora, RHEL | `sudo install -m 0644 ~/.postern/ca.pem /etc/pki/ca-trust/source/anchors/postern.pem && sudo update-ca-trust extract` | `sudo rm /etc/pki/ca-trust/source/anchors/postern.pem && sudo update-ca-trust extract` |
 | Arch | `sudo trust anchor --store ~/.postern/ca.pem` | `sudo trust anchor --remove ~/.postern/ca.pem` |
 
-`postern ca uninstall` does not undo these steps. The system store makes every
+`ca.pem` is `0600`, so `install -m 0644` gives the system copy the mode other
+users need to read it. `postern ca uninstall` does not undo these steps, and
+the Arch removal reads `~/.postern/ca.pem`: remove the system copy before
+`postern ca uninstall --purge` deletes that file. The system store makes every
 program on the machine trust the CA, so a leaked `ca.key` could impersonate
 any site to all of them; `SSL_CERT_FILE` limits that trust to the agent's
 shell.
