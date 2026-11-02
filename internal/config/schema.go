@@ -315,6 +315,20 @@ type Rule struct {
 	// A matched request whose method is not listed fails closed before the
 	// resolver is called. Empty means the rule brokers every method.
 	Methods []string `yaml:"methods,omitempty"`
+
+	// Approval, when present, makes every credential injection for this rule
+	// wait for the user to approve it in an OS authentication dialog.
+	// `approval: {}` turns it on; an absent block leaves the rule unprompted.
+	Approval *Approval `yaml:"approval,omitempty"`
+}
+
+// Approval is a rule's approval block. It has no fields yet: its presence
+// alone requires a prompt before each injection.
+type Approval struct {
+	// _ keeps the type non-zero-sized. Go may give every zero-sized
+	// allocation the same address, and the broker keys approval state on
+	// the address of each rule's copy.
+	_ byte
 }
 
 // Route is one entry of a placeholder-routing rule. Token is the placeholder an

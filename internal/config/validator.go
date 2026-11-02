@@ -5,6 +5,7 @@ import (
 	"math"
 	"net"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -106,10 +107,14 @@ func validateSkipping(cfg *Config, root *yaml.Node, skipRule map[int]struct{}) [
 type validator struct {
 	root *yaml.Node
 	out  []LintError
+	// goos selects the platform the approval check validates against.
+	goos string
+	// approvals caches decodedApproval's view of the document.
+	approvals map[string]*yaml.Node
 }
 
 func newValidator(root *yaml.Node) *validator {
-	return &validator{root: root}
+	return &validator{root: root, goos: runtime.GOOS}
 }
 
 func (v *validator) add(path, msg string, sev Severity) {
@@ -259,6 +264,7 @@ func (v *validator) checkRule(base string, r Rule) {
 	}
 
 	v.checkScoping(base, r)
+	v.checkApproval(base, r)
 
 	if r.Injects != nil {
 		v.checkInjects(base, r)

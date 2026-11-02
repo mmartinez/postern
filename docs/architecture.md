@@ -119,7 +119,8 @@ any other private key.
 |---|---|
 | `internal/proxy` | goproxy front end: CONNECT handling, MITM, panic recovery, response streaming. |
 | `internal/ca` | Local CA generation, per-host leaf minting, and system trust-store install. |
-| `internal/broker` | Host matching (`Engine`), per-rule request scoping (`paths`/`methods`), credential injection (`Inject`), and the proxy hook that wires match → scope → resolve → inject. |
+| `internal/broker` | Host matching (`Engine`), per-rule request scoping (`paths`/`methods`), the approval gate (`Gate`) that serializes OS approval prompts and keeps refusal cooldowns, credential injection (`Inject`), and the proxy hook that wires match → scope → approve → resolve → inject. |
+| `internal/approval` | Approval backend: asks polkit through `pkcheck` on Linux, and renders the polkit action file. Other platforms have no backend. |
 | `internal/credstore` | Provider registry keyed by URI scheme, the name-keyed `NameRouter` that dispatches a `secret_ref` (scheme plus optional `<scheme>+<name>://` qualifier) to one configured credstore instance, and the shared background-refreshing resolver cache (`cache.go`) every provider reuses. |
 | `internal/credstore/onepassword` | Provider for 1Password Service Accounts (`op://`), backed by the 1Password Go SDK. Registered by default. |
 | `internal/credstore/bitwarden` | Provider for Bitwarden Secrets Manager (`bw://`), shelling out to the `bws` CLI. Registered by default. |
@@ -127,7 +128,7 @@ any other private key.
 | `internal/config` | YAML schema, strict-mode loader, line-numbered validator, and the fsnotify-backed hot-reload watcher with a 5s stat-poll fallback that survives silent watch death (watcher errors are logged at Warn). |
 | `internal/token` | Service-account token resolution chain (file → env → keychain) and the OS-keychain-backed store. |
 | `internal/runtime` | Assembles the proxy listener plus the optional loopback-only admin listener (`GET /healthz`), wires the broker hook, and owns graceful shutdown, connection tracking, and tunnel reaping. |
-| `internal/cli` | Cobra commands: `config`, `token`, `ca`, `server`, `rules`, `bootstrap`. |
+| `internal/cli` | Cobra commands: `config`, `token`, `ca`, `server`, `rules`, `bootstrap`, `approval`. |
 | `internal/logging` | slog factory (text/JSON, level, color) and the per-request summary handler. |
 
 ## Hot reload

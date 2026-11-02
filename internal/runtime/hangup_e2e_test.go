@@ -104,14 +104,15 @@ func startHangupRuntime(t *testing.T, hook *parkedHook) (string, *ca.CA) {
 	return rt.Addr(), root
 }
 
-// dialIntercepted opens a CONNECT tunnel and completes TLS against the
-// postern-minted leaf. It returns the TLS conn and the raw TCP conn under it.
-func dialIntercepted(t *testing.T, addr string, root *ca.CA) (*tls.Conn, *net.TCPConn) {
+// dialIntercepted opens a CONNECT tunnel to target (host:port) and completes
+// TLS against the postern-minted leaf. It returns the TLS conn and the raw
+// TCP conn under it.
+func dialIntercepted(t *testing.T, addr string, root *ca.CA, target string) (*tls.Conn, *net.TCPConn) {
 	t.Helper()
 	raw, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = raw.Close() })
-	_, err = io.WriteString(raw, "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n")
+	_, err = io.WriteString(raw, "CONNECT "+target+" HTTP/1.1\r\nHost: "+target+"\r\n\r\n")
 	require.NoError(t, err)
 	// The proxy writes nothing past the 200 until the client speaks TLS, so
 	// reading the response through a throwaway bufio.Reader loses no bytes.
@@ -120,7 +121,9 @@ func dialIntercepted(t *testing.T, addr string, root *ca.CA) (*tls.Conn, *net.TC
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	pool := x509.NewCertPool()
 	pool.AddCert(root.Cert)
-	tc := tls.Client(raw, &tls.Config{ServerName: "example.test", RootCAs: pool, MinVersion: tls.VersionTLS12})
+	host, _, err := net.SplitHostPort(target)
+	require.NoError(t, err)
+	tc := tls.Client(raw, &tls.Config{ServerName: host, RootCAs: pool, MinVersion: tls.VersionTLS12})
 	require.NoError(t, tc.Handshake())
 	return tc, raw.(*net.TCPConn)
 }
@@ -155,7 +158,7 @@ func TestHangupWatchSignalsWhenClientLeaves(t *testing.T) {
 			t.Parallel()
 			hook := newParkedHook(t)
 			addr, root := startHangupRuntime(t, hook)
-			conn, raw := dialIntercepted(t, addr, root)
+			conn, raw := dialIntercepted(t, addr, root, "example.test:443")
 			_, err := io.WriteString(conn, "GET /wait HTTP/1.1\r\nHost: example.test\r\n\r\n")
 			require.NoError(t, err)
 			select {
@@ -181,7 +184,7 @@ func TestHangupWatchKeepsKeepAliveStreamIntact(t *testing.T) {
 	t.Parallel()
 	hook := newParkedHook(t)
 	addr, root := startHangupRuntime(t, hook)
-	conn, _ := dialIntercepted(t, addr, root)
+	conn, _ := dialIntercepted(t, addr, root, "example.test:443")
 	br := bufio.NewReader(conn)
 
 	_, err := io.WriteString(conn, "POST /one HTTP/1.1\r\nHost: example.test\r\nContent-Length: 5\r\n\r\n")
