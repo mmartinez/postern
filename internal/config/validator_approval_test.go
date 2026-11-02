@@ -46,6 +46,33 @@ func TestCheckApproval(t *testing.T) {
 			wantLine: 13,
 		},
 		{
+			name:     "approval methods a case-variant subset of the rule's",
+			approval: "    methods: [GET, POST]\n    approval:\n      methods: [post]",
+			goos:     "linux",
+		},
+		{name: "approval methods without rule methods", approval: "    approval:\n      methods: [POST]", goos: "linux"},
+		{
+			name:     "approval method outside the rule's",
+			approval: "    methods: [GET, POST]\n    approval:\n      methods:\n        - POST\n        - DELETE",
+			goos:     "linux",
+			wantMsg:  `"DELETE" is not in the rule's methods`,
+			wantLine: 16,
+		},
+		{
+			name:     "approval method not a token",
+			approval: "    approval:\n      methods: [P0ST]",
+			goos:     "linux",
+			wantMsg:  `"P0ST" must be a non-empty alphabetic HTTP method token (e.g. POST)`,
+			wantLine: 13,
+		},
+		{
+			name:     "empty approval methods",
+			approval: "    approval:\n      methods: []",
+			goos:     "linux",
+			wantMsg:  "methods is empty; declare at least one entry or omit the key entirely (an omitted methods requires approval for every method)",
+			wantLine: 13,
+		},
+		{
 			name:     "null block",
 			approval: "    approval:",
 			goos:     "linux",
@@ -187,6 +214,71 @@ rules:
 			require.Len(t, v.out, 1)
 			require.Equal(t, "rules[0].approval.ttl", v.out[0].Path)
 			require.Equal(t, 6, v.out[0].Line)
+		})
+	}
+}
+
+// TestCheckApproval_MethodsThroughAliasOrMerge proves approval.methods is
+// checked, with the line of the offending value, when it reaches the rule
+// through an alias or a merge key.
+func TestCheckApproval_MethodsThroughAliasOrMerge(t *testing.T) {
+	t.Parallel()
+
+	const anchored = `
+credstores:
+  - name: default
+    provider: op
+rules:
+  - host: a.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+    methods: [GET, POST]
+    paths: &empty []
+    approval: &block
+      methods: &post [POST]
+  - host: b.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+    methods: [GET]
+`
+	const notInRule = `"POST" is not in the rule's methods`
+	cases := []struct {
+		name     string
+		approval string
+		wantPath string
+		wantMsg  string
+		wantLine int
+	}{
+		{name: "aliased block", approval: "    approval: *block", wantPath: "rules[1].approval.methods[0]", wantMsg: notInRule, wantLine: 15},
+		{name: "merged block", approval: "    approval:\n      <<: *block", wantPath: "rules[1].approval.methods[0]", wantMsg: notInRule, wantLine: 15},
+		{name: "aliased list", approval: "    approval:\n      methods: *post", wantPath: "rules[1].approval.methods[0]", wantMsg: notInRule, wantLine: 15},
+		{
+			name:     "aliased empty list",
+			approval: "    approval:\n      methods: *empty",
+			wantPath: "rules[1].approval.methods",
+			wantMsg:  "methods is empty",
+			wantLine: 24,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, root, err := Load(strings.NewReader(anchored + tc.approval + "\n"))
+			require.NoError(t, err)
+			v := newValidator(root)
+			v.goos = "linux"
+			v.checkApproval("rules[1]", cfg.Rules[1])
+			require.Len(t, v.out, 1, "got %v", v.out)
+			require.Equal(t, tc.wantPath, v.out[0].Path)
+			require.Contains(t, v.out[0].Message, tc.wantMsg)
+			require.Equal(t, tc.wantLine, v.out[0].Line)
 		})
 	}
 }

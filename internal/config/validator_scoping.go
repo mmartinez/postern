@@ -28,21 +28,28 @@ var alphabeticTokenPattern = regexp.MustCompile(`^[A-Za-z]+$`)
 func (v *validator) checkScoping(base string, r Rule) {
 	v.checkScopingList(base+".paths", r.Paths,
 		func(entry string) bool { return strings.HasPrefix(entry, "/") },
-		`must start with "/" (entries match as URL-path prefixes from the request root)`)
-	v.checkScopingList(base+".methods", r.Methods,
+		`must start with "/" (entries match as URL-path prefixes from the request root)`,
+		"leaves the rule unscoped")
+	v.checkMethods(base+".methods", r.Methods, "leaves the rule unscoped")
+}
+
+// checkMethods validates a list of HTTP method tokens at path. omitted says
+// what leaving the key out means, for the empty-list error.
+func (v *validator) checkMethods(path string, methods []string, omitted string) {
+	v.checkScopingList(path, methods,
 		func(entry string) bool { return alphabeticTokenPattern.MatchString(entry) },
-		"must be a non-empty alphabetic HTTP method token (e.g. POST)")
+		"must be a non-empty alphabetic HTTP method token (e.g. POST)", omitted)
 }
 
 // checkScopingList validates one scoping knob's entry list. Empty lists are
 // only rejected when the key is actually present in the YAML document,
 // which the decoded struct alone cannot reveal (both nil and [] decode from
 // different sources), so presence is confirmed against the AST.
-func (v *validator) checkScopingList(path string, entries []string, valid func(string) bool, requirement string) {
+func (v *validator) checkScopingList(path string, entries []string, valid func(string) bool, requirement, omitted string) {
 	if len(entries) == 0 {
-		if node := v.nodeAt(path); node != nil && node.Kind == yaml.SequenceNode {
+		if node := dealias(v.nodeAt(path)); node != nil && node.Kind == yaml.SequenceNode {
 			key := path[strings.LastIndex(path, ".")+1:]
-			v.add(path, fmt.Sprintf("%s is empty; declare at least one entry or omit the key entirely (an omitted %s leaves the rule unscoped)", key, key), SeverityError)
+			v.add(path, fmt.Sprintf("%s is empty; declare at least one entry or omit the key entirely (an omitted %s %s)", key, key, omitted), SeverityError)
 		}
 		return
 	}

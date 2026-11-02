@@ -668,6 +668,67 @@ func TestGate_WarmCacheStillPrompts(t *testing.T) {
 	require.Empty(t, warm.req.Header.Get("x-api-key"))
 }
 
+func TestGate_MethodOutsideApprovalMethodsSkipsPrompt(t *testing.T) {
+	t.Parallel()
+
+	rule := approvalRule()
+	rule.Approval = &config.Approval{Methods: []string{"post"}}
+	f := newGateFixture(t, nil, rule)
+
+	f.send(newRequest(t)).requireForwarded(t)
+	require.Zero(t, f.approver.calls.Load(), "a GET outside approval.methods must not prompt")
+	require.Equal(t, int64(1), f.res.calls.Load())
+
+	// Without a prompt there is nothing to buffer the body for, so a large
+	// upload streams as it would on a rule without approval.
+	upload, err := http.NewRequestWithContext(t.Context(), http.MethodPut, "https://api.example.com/v1/upload",
+		strings.NewReader(strings.Repeat("a", config.DefaultMaxBodyBytes+1)))
+	require.NoError(t, err)
+	f.send(upload).requireForwarded(t)
+	require.Zero(t, f.approver.calls.Load())
+	require.Equal(t, int64(2), f.res.calls.Load())
+
+	post := newRequest(t)
+	post.Method = http.MethodPost
+	in := f.send(post)
+	f.approver.next(t).answer <- broker.OutcomeDenied
+	in.requireFailClosed(t)
+	require.Equal(t, int64(2), f.res.calls.Load(), "a refused POST must never resolve")
+}
+
+// TestGate_MethodOverrideHeaderPrompts covers a request whose method is
+// outside approval.methods but which names another method in a header some
+// upstreams honour. It must prompt rather than inject, whatever the header
+// holds and however many times it repeats.
+func TestGate_MethodOverrideHeaderPrompts(t *testing.T) {
+	t.Parallel()
+
+	for _, header := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+		for name, values := range map[string][]string{
+			"one value":                  {"DELETE"},
+			"empty value first":          {"", "DELETE"},
+			"present with nothing in it": {""},
+		} {
+			t.Run(header+"/"+name, func(t *testing.T) {
+				t.Parallel()
+
+				rule := approvalRule()
+				rule.Approval = &config.Approval{Methods: []string{"DELETE"}}
+				f := newGateFixture(t, nil, rule)
+
+				req := newRequest(t)
+				for _, v := range values {
+					req.Header.Add(header, v)
+				}
+				in := f.send(req)
+				f.approver.next(t).answer <- broker.OutcomeDenied
+				in.requireFailClosed(t)
+				require.Zero(t, f.res.calls.Load())
+			})
+		}
+	}
+}
+
 func TestGate_WaitingCap(t *testing.T) {
 	t.Parallel()
 

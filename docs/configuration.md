@@ -457,9 +457,10 @@ upstream until the user approves.
 rules:
   - host: payments.example.com
     secret_ref: op://Agents/Payments/secret_key
-    methods: [POST, DELETE]
+    methods: [GET, POST, DELETE]
     approval:
       ttl: 10m
+      methods: [POST, DELETE]
     inject:
       type: header
       name: Authorization
@@ -468,7 +469,8 @@ rules:
 
 | Field | Required | Default | Meaning |
 |---|---|---|---|
-| `ttl` | no | `0s` | `0s` prompts for every request, and each approval releases only the request its dialog shows. A positive duration turns an approval into a grant: for that long, the route's agent (every client, for a rule without `routes`) may use the rule's secret on any request the rule allows, without another prompt. |
+| `ttl` | no | `0s` | `0s` prompts for every request, and each approval releases only the request its dialog shows. A positive duration turns an approval into a grant: for that long, the route's agent (every client, for a rule without `routes`) may use the rule's secret on any request the rule and `approval.methods` allow, without another prompt. |
+| `methods` | no | every method the rule brokers | Methods that need approval, compared case-insensitively. Requests with other methods inject without a prompt and log no approval line, unless they carry a method-override header (see [security.md](security.md)). |
 
 `approval: {}` prompts for every request. Write `ttl` with a unit (`0s`,
 `10m`); a bare `0` is not a duration. Approval is supported on Linux only,
@@ -487,12 +489,14 @@ A polkit authentication agent must be running in the desktop session.
   for a rule without `routes`. With a positive `ttl` it describes the grant:
   `postern is trying to let agent <route> use <secret_ref> for <methods>
   requests to <host> on <paths> for <ttl> (first request: <METHOD
-  host/path>).` Here `<methods>` is the rule's `methods` joined with `/`, or
-  `all`; `<host>` is the rule's host pattern; `<paths>` reads `paths starting
-  with` followed by the rule's `paths`, or `any path`; `<ttl>` reads like `10m`
-  or `1h30m`. In both forms the query string is dropped, the path is shown
-  escaped, bytes outside printable ASCII are shown as `?`, and the request line
-  is cut at 120 characters. `oauth1` rules show the `token_ref`.
+  host/path>).` Here `<methods>` is `approval.methods` joined with `/` and
+  followed by `or method-override`, else the rule's `methods`, else `all`;
+  `<host>` is the rule's host pattern; `<paths>` reads `paths starting with`
+  followed by the rule's `paths`, or `any path`; `<ttl>` reads like `10m` or
+  `1h30m`. In both forms a request with a method-override header shows its
+  method as `GET as DELETE`, the query string is dropped, the path is shown
+  escaped, bytes outside printable ASCII are shown as `?`, and the request
+  line is cut at 120 characters. `oauth1` rules show the `token_ref`.
 - **Grants.** An approved grant covers its key until `ttl` after the user
   answers. A request under a live grant injects at once, without waiting in
   the queue. Concurrent requests that need the same grant share one prompt,
@@ -522,21 +526,22 @@ A polkit authentication agent must be running in the desktop session.
   leaves just before its turn can still get a dialog. An open dialog stays open
   when its client leaves, but the request fails closed even if the user
   approves; an approved grant still covers later requests.
-- **Request bodies.** A request to an approval rule is read in full before
+- **Request bodies.** A request that needs approval is read in full before
   the prompt, up to `max_body_bytes`, so a client that leaves during an upload
   is noticed. A larger body gets `413` without a prompt. This also applies to
   requests a live grant covers.
 - **Fail closed.** Every outcome other than an approval returns the uniform
   `502`, and the resolver and the upstream are never called.
-- **Use it sparingly.** With `ttl: 0s` every request to the rule prompts.
-  Put approval on rules that write or hold high-impact secrets, narrowed with
-  `paths` and `methods`, and give them a non-zero `ttl` so one approval covers
-  a burst of related calls. Frequent prompts train the user to approve
-  without reading.
+- **Use it sparingly.** With `ttl: 0s` every covered request prompts. Put
+  approval on rules that write or hold high-impact secrets, narrowed with
+  `paths` and `methods`; limit it to writes with `approval.methods`; and give
+  it a non-zero `ttl` so one approval covers a burst of related calls.
+  Frequent prompts train the user to approve without reading.
 - **Validation.** A null `approval:` (no `{}`), written directly or reached
   through an alias or a merge key, is an error, because it would silently skip
   the prompt. An `approval` block on a platform other than Linux is an error,
-  and so is a negative `ttl`.
+  and so is a negative `ttl`. `approval.methods` entries follow the `methods`
+  rules, and when the rule declares `methods`, each entry must be one of them.
 
 ### Built-in templates
 
@@ -583,7 +588,9 @@ Errors block startup. Common errors:
 - An explicitly empty `paths` or `methods` list; a `paths` entry not starting
   with `/`; a `methods` entry that is not a non-empty alphabetic token.
 - A null `approval:` block (write `approval: {}`); an `approval` block on a
-  platform without approval support; a negative `approval.ttl`.
+  platform without approval support; a negative `approval.ttl`; an
+  `approval.methods` entry that is not a method token or, when the rule
+  declares `methods`, not one of them.
 
 Errors (each blocks startup):
 

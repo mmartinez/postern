@@ -330,6 +330,11 @@ type Approval struct {
 	// approves, the rule injects for the same client without a prompt.
 	// Zero prompts for every request.
 	TTL time.Duration `yaml:"ttl,omitempty"`
+
+	// Methods limits approval to these HTTP methods, compared
+	// case-insensitively. Requests with other methods inject without a
+	// prompt. Empty means every method the rule brokers needs approval.
+	Methods []string `yaml:"methods,omitempty"`
 }
 
 // Route is one entry of a placeholder-routing rule. Token is the placeholder an
