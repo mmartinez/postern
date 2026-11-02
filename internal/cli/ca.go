@@ -15,7 +15,7 @@ import (
 
 // NewCACmd builds `postern ca` with its install and uninstall subcommands.
 // caDir is the directory that holds ca.pem and ca.key; trustDir is the
-// system trust-anchor directory the install command publishes the CA to.
+// directory the install command publishes the CA to.
 // cmd/postern/main.go wires production callers via ca.DefaultDir and
 // ca.DefaultTrustDir; tests inject temp dirs.
 func NewCACmd(caDir, trustDir string) *cobra.Command {
@@ -23,8 +23,9 @@ func NewCACmd(caDir, trustDir string) *cobra.Command {
 		Use:   "ca",
 		Short: "Manage the local certificate authority",
 		Long: "Install or remove postern's local CA. The CA is generated on first\n" +
-			"install, persisted under ~/.postern, and published to the system\n" +
-			"trust store so agents can verify the proxy's minted leaf certs.",
+			"install and persisted under ~/.postern. On macOS, install also trusts it\n" +
+			"in your login keychain. On Linux, agents trust it through SSL_CERT_FILE\n" +
+			"(postern bootstrap) or the system-store steps in docs/security.md.",
 	}
 	cmd.AddCommand(newCAInstallCmd(caDir, trustDir))
 	cmd.AddCommand(newCAUninstallCmd(caDir, trustDir))
@@ -34,7 +35,7 @@ func NewCACmd(caDir, trustDir string) *cobra.Command {
 func newCAInstallCmd(caDir, trustDir string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
-		Short: "Generate the CA if needed and install it in the trust store",
+		Short: "Generate the CA if needed and publish it for agents to trust",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
 
@@ -62,7 +63,7 @@ func newCAUninstallCmd(caDir, trustDir string) *cobra.Command {
 	var purge bool
 	cmd := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove the local CA from the system trust store",
+		Short: "Remove the published CA and any trust settings postern added",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
 
