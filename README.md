@@ -132,6 +132,9 @@ postern server            # run the proxy
 eval "$(postern bootstrap)"
 ```
 
+Node-based agents need two more variables, `NODE_USE_ENV_PROXY=1` and
+`NODE_EXTRA_CA_CERTS`; see [Node-based agents](docs/security.md#key-and-token-handling).
+
 On macOS, `postern ca install` triggers an authorization prompt and trusts the
 CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes the
 trust settings (the certificate entry stays in the keychain, untrusted).
@@ -214,7 +217,8 @@ proxy, and have them trust the CA:
 
 ```sh
 export HTTPS_PROXY=http://localhost:1701
-export SSL_CERT_FILE=/path/to/ca.pem                   # NODE_EXTRA_CA_CERTS for Node-based agents
+export SSL_CERT_FILE=/path/to/ca.pem
+export NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/path/to/ca.pem   # Node-based agents
 ```
 
 Rotating the CA (at its ~10-year expiry, or on key compromise) means deleting
