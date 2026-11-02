@@ -157,9 +157,10 @@ export NODE_EXTRA_CA_CERTS="$HOME/.postern/ca.pem"
 
 A client that passes its own agent or `ca` option ignores these variables, and
 some agent CLIs read a proxy setting of their own. Check that each client
-reaches postern: every brokered request logs `broker injected host=<host>`. A
-client that skips the proxy calls the upstream directly with whatever key it
-holds, so the call fails instead of being brokered.
+reaches postern: at `--log-level info` (the default) or `debug`, every brokered
+request logs `broker injected host=<host>`; `quiet` hides that line. A client
+that skips the proxy calls the upstream directly with whatever key it holds, so
+the call fails instead of being brokered.
 
 **Service-account token.** Postern obtains the credential vendor's
 service-account token through a resolution chain. With `source: auto` it tries,
