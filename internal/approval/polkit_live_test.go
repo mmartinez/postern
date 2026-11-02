@@ -20,7 +20,7 @@ func TestPolkitLive(t *testing.T) {
 	if os.Getenv("POSTERN_POLKIT_E2E") != "1" {
 		t.Skip("set POSTERN_POLKIT_E2E=1 to answer real approval dialogs")
 	}
-	a := New()
+	a := NewPolkit()
 
 	t.Log("dialog 1: authenticate to approve")
 	got, err := a.Approve(t.Context(), "run live test 1 of 3: approve this")

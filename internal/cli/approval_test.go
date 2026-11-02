@@ -16,21 +16,35 @@ func TestApprovalPolicyCmd(t *testing.T) {
 	alice := func() (*user.User, error) { return &user.User{Username: "alice"}, nil }
 	cases := []struct {
 		name    string
+		goos    string
 		euid    int
 		wantOut string
 		wantErr string
 	}{
-		{name: "prints the policy for the current user", euid: 1000, wantOut: approval.Policy("alice")},
+		{name: "prints the policy for the current user", goos: "linux", euid: 1000, wantOut: approval.Policy("alice")},
 		{
 			name:    "refuses root",
+			goos:    "linux",
 			euid:    0,
 			wantErr: "run postern approval policy as your own user, not root, and pipe it into sudo tee " + policyPath,
+		},
+		{
+			name:    "macOS needs no policy",
+			goos:    "darwin",
+			euid:    501,
+			wantErr: "macOS needs no approval setup: postern asks LocalAuthentication directly",
+		},
+		{
+			name:    "unsupported platform",
+			goos:    "windows",
+			euid:    1000,
+			wantErr: "approval is not supported on windows",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			cmd := newApprovalPolicyCmd(func() int { return tc.euid }, alice)
+			cmd := newApprovalPolicyCmd(tc.goos, func() int { return tc.euid }, alice)
 			cmd.SilenceUsage, cmd.SilenceErrors = true, true
 			var out bytes.Buffer
 			cmd.SetOut(&out)

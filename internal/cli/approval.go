@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -22,20 +23,28 @@ func NewApprovalCmd() *cobra.Command {
 		Use:   "approval",
 		Short: "Set up OS approval prompts for rules that declare approval",
 	}
-	cmd.AddCommand(newApprovalPolicyCmd(os.Geteuid, user.Current))
+	cmd.AddCommand(newApprovalPolicyCmd(runtime.GOOS, os.Geteuid, user.Current))
 	return cmd
 }
 
-func newApprovalPolicyCmd(euid func() int, current func() (*user.User, error)) *cobra.Command {
+func newApprovalPolicyCmd(goos string, euid func() int, current func() (*user.User, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   "policy",
 		Short: "Print the polkit action file approval prompts need (Linux)",
 		Long: "Print the polkit action file that lets postern show approval\n" +
 			"prompts. Run it as the user who runs postern, then install it:\n\n" +
 			"  postern approval policy |\n" +
-			"    sudo tee " + policyPath,
+			"    sudo tee " + policyPath + "\n\n" +
+			"macOS needs no setup.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			switch goos {
+			case "linux":
+			case "darwin":
+				return errors.New("macOS needs no approval setup: postern asks LocalAuthentication directly")
+			default:
+				return fmt.Errorf("approval is not supported on %s", goos)
+			}
 			// The policy names its owner, and only the owner may set the
 			// dialog text, so it must be rendered for the unprivileged user.
 			if euid() == 0 {
