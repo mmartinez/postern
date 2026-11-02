@@ -52,8 +52,7 @@ func newCAInstallCmd(caDir, trustDir string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("install trust: %w", err)
 			}
-			_, _ = fmt.Fprintf(out, "Installed trust anchor at %s\n", path)
-			_, _ = fmt.Fprintln(out, "You can now point HTTPS_PROXY at postern.")
+			_, _ = fmt.Fprintf(out, caInstalledFormat, path)
 			return nil
 		},
 	}

@@ -8,19 +8,12 @@ import (
 	"path/filepath"
 )
 
-// defaultTrustDir resolves the per-user CA directory consulted by
-// Debian/Ubuntu's update-ca-certificates --user (and equivalent
-// integrations on derivatives). The XDG layout puts it at
-// ~/.local/share/ca-certificates/.
-//
-// Other distributions place anchors differently:
-//   - Fedora / RHEL:   /etc/pki/ca-trust/source/anchors/ + update-ca-trust
-//   - Arch:            /etc/ca-certificates/trust-source/anchors/ + trust extract
-//
-// Those paths require root and a `trust`/`update-ca-trust` follow-up, so
-// postern deliberately doesn't write to them. The README documents the
-// manual steps for those distros; running postern there still works as long
-// as the user sets SSL_CERT_FILE=~/.postern/ca.pem in the agent's env.
+// defaultTrustDir resolves ~/.local/share/ca-certificates, where ca install
+// writes a copy of the CA. No distribution trust tool reads that directory:
+// update-ca-certificates has no per-user mode, and Fedora's update-ca-trust
+// and Arch's trust read system directories only. Agents trust the CA through
+// SSL_CERT_FILE, which postern bootstrap sets, or through the system-store
+// steps in docs/security.md, which need root, so postern does not run them.
 func defaultTrustDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -29,14 +22,13 @@ func defaultTrustDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "ca-certificates"), nil
 }
 
-// installTrustAt on Linux is the anchor file drop: update-ca-certificates
-// --user picks up ~/.local/share/ca-certificates/postern.crt on its next run.
+// installTrustAt on Linux writes the CA copy into dir. It adds no trust; see
+// defaultTrustDir.
 func installTrustAt(dir string, certPEM []byte) (string, error) {
 	return writeAnchor(dir, certPEM)
 }
 
-// uninstallTrustAt on Linux removes the anchor file; the per-user updater
-// drops it from the trust bundle on its next run. There is no keychain-style
+// uninstallTrustAt on Linux removes the CA copy. There is no keychain-style
 // registration to revoke, so no hashes are ever reported.
 func uninstallTrustAt(dir string) ([]string, error) {
 	_, err := removeAnchor(dir)

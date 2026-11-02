@@ -51,7 +51,11 @@ func TestCAInstall_GeneratesAndCopiesToTrustStore(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Contains(t, stdout, "Generated CA at")
-	require.Contains(t, stdout, "Installed trust anchor at")
+	require.Contains(t, stdout, filepath.Join(trustDir, "postern.crt"))
+	// Distribution trust tools do not read trustDir, so install must not
+	// claim the CA is ready, and must point at what does work.
+	require.NotContains(t, stdout, "You can now point HTTPS_PROXY at postern")
+	require.Contains(t, stdout, "SSL_CERT_FILE")
 }
 
 func TestCAInstall_ReusesExistingCA(t *testing.T) {
