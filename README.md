@@ -121,7 +121,7 @@ example.
 From an installed binary (or `./dist/postern` when building from source):
 
 ```sh
-postern ca install        # generate a local CA and register it (Linux: user trust anchor; macOS: login keychain)
+postern ca install        # generate a local CA (macOS: and trust it in the login keychain)
 postern config init       # write a starter ~/.postern/config.yaml
 postern token set --stdin # store your 1Password service-account token (legacy single-vendor form)
 
@@ -138,6 +138,11 @@ Node-based agents need two more variables, `NODE_USE_ENV_PROXY=1` and
 On macOS, `postern ca install` triggers an authorization prompt and trusts the
 CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes the
 trust settings (the certificate entry stays in the keychain, untrusted).
+
+On Linux, `postern ca install` does not make the CA trusted system-wide.
+`postern bootstrap` sets `SSL_CERT_FILE` for the agent's shell; for clients
+that ignore it, see the per-distribution steps in
+[Local CA](docs/security.md#key-and-token-handling).
 
 `postern config validate` checks a config with line-numbered errors, and
 `postern rules list` shows rule-level fields — host and `secret_ref` — never a

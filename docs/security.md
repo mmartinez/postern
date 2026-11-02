@@ -178,12 +178,25 @@ credential, a fingerprint of it, or a route token.
 ## Key and token handling
 
 **Local CA.** `postern ca install` generates a CA at `~/.postern/ca.{pem,key}`
-(`0600` files under a `0700` directory) and registers it with your trust
-store. On Linux that writes the anchor into your per-user ca-certificates
-directory (`~/.local/share/ca-certificates/postern.crt`); activate it with
-`update-ca-certificates --user` (Debian/Ubuntu) or your distribution's
-equivalent — postern drops the file but does not refresh the bundle itself.
-On macOS it instead anchors the certificate at
+(`0600` files under a `0700` directory). On Linux it also writes a copy to
+`~/.local/share/ca-certificates/postern.crt`, but the trust tools of Debian,
+Ubuntu, Fedora, and Arch read only system directories, so that copy trusts
+nothing on its own. Clients that honor `SSL_CERT_FILE`, which `postern
+bootstrap` sets, need nothing more. For clients that ignore it, add the CA to
+the system store yourself:
+
+| Distribution | Add | Remove |
+|---|---|---|
+| Debian, Ubuntu | `sudo cp ~/.postern/ca.pem /usr/local/share/ca-certificates/postern.crt && sudo update-ca-certificates` | `sudo rm /usr/local/share/ca-certificates/postern.crt && sudo update-ca-certificates --fresh` |
+| Fedora, RHEL | `sudo cp ~/.postern/ca.pem /etc/pki/ca-trust/source/anchors/postern.pem && sudo update-ca-trust extract` | `sudo rm /etc/pki/ca-trust/source/anchors/postern.pem && sudo update-ca-trust extract` |
+| Arch | `sudo trust anchor --store ~/.postern/ca.pem` | `sudo trust anchor --remove ~/.postern/ca.pem` |
+
+`postern ca uninstall` does not undo these steps. The system store makes every
+program on the machine trust the CA, so a leaked `ca.key` could impersonate
+any site to all of them; `SSL_CERT_FILE` limits that trust to the agent's
+shell.
+
+On macOS, `postern ca install` instead anchors the certificate at
 `~/.postern/trust/ca.pem` and records a **user-domain** trust setting in your
 login keychain via `/usr/bin/security add-trusted-cert`: per-user, not
 system-wide, which is why no `sudo` is required (the authorization prompt the
