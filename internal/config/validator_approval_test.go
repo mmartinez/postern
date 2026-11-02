@@ -32,9 +32,19 @@ func TestCheckApproval(t *testing.T) {
 		approval string
 		goos     string
 		wantMsg  string // empty means no approval lint
+		wantLine int    // 0 means the approval line, 12
 	}{
 		{name: "empty mapping on linux", approval: "    approval: {}", goos: "linux"},
 		{name: "absent block", approval: "", goos: "darwin"},
+		{name: "positive ttl", approval: "    approval:\n      ttl: 10m", goos: "linux"},
+		{name: "zero ttl", approval: "    approval:\n      ttl: 0s", goos: "linux"},
+		{
+			name:     "negative ttl",
+			approval: "    approval:\n      ttl: -1m",
+			goos:     "linux",
+			wantMsg:  "ttl must be zero or positive",
+			wantLine: 13,
+		},
 		{
 			name:     "null block",
 			approval: "    approval:",
@@ -72,7 +82,11 @@ func TestCheckApproval(t *testing.T) {
 			got := v.out[0]
 			require.Equal(t, tc.wantMsg, got.Message)
 			require.Equal(t, SeverityError, got.Severity)
-			require.Equal(t, 12, got.Line, "lint must point at the approval line")
+			wantLine := 12
+			if tc.wantLine != 0 {
+				wantLine = tc.wantLine
+			}
+			require.Equal(t, wantLine, got.Line, "lint must point at the offending line")
 		})
 	}
 }
@@ -134,6 +148,49 @@ rules:
 	}
 }
 
+// TestCheckApproval_FieldLineThroughAliasOrMerge proves an approval field
+// error points at the line the value was read from when the block reaches
+// the rule through an alias or a merge key.
+func TestCheckApproval_FieldLineThroughAliasOrMerge(t *testing.T) {
+	t.Parallel()
+
+	const anchored = `
+credstores:
+  - name: default
+    provider: op
+    settings: &gate
+      ttl: -1m
+rules:
+  - host: api.example.com
+    secret_ref: op://Vault/Item/field
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+`
+	cases := []struct {
+		name     string
+		approval string
+	}{
+		{name: "alias", approval: "    approval: *gate"},
+		{name: "merge key", approval: "    approval:\n      <<: *gate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, root, err := Load(strings.NewReader(anchored + tc.approval + "\n"))
+			require.NoError(t, err)
+			v := newValidator(root)
+			v.goos = "linux"
+			v.checkApproval("rules[0]", cfg.Rules[0])
+			require.Len(t, v.out, 1)
+			require.Equal(t, "rules[0].approval.ttl", v.out[0].Path)
+			require.Equal(t, 6, v.out[0].Line)
+		})
+	}
+}
+
 // TestValidate_ApprovalRunsForEveryRuleShape proves the approval check is
 // reached for routing rules too, which return early from checkRule.
 func TestValidate_ApprovalRunsForEveryRuleShape(t *testing.T) {
@@ -169,6 +226,6 @@ rules:
 func TestLoad_ApprovalRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := Load(strings.NewReader(approvalRuleConfig("    approval: {ttl: 5m}")))
-	require.ErrorContains(t, err, "field ttl not found")
+	_, _, err := Load(strings.NewReader(approvalRuleConfig("    approval: {timeout: 5m}")))
+	require.ErrorContains(t, err, "field timeout not found")
 }

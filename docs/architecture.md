@@ -119,7 +119,7 @@ any other private key.
 |---|---|
 | `internal/proxy` | goproxy front end: CONNECT handling, MITM, panic recovery, response streaming. |
 | `internal/ca` | Local CA generation, per-host leaf minting, and system trust-store install. |
-| `internal/broker` | Host matching (`Engine`), per-rule request scoping (`paths`/`methods`), the approval gate (`Gate`) that serializes OS approval prompts and keeps refusal cooldowns, credential injection (`Inject`), and the proxy hook that wires match → scope → approve → resolve → inject. |
+| `internal/broker` | Host matching (`Engine`), per-rule request scoping (`paths`/`methods`), the approval gate (`Gate`) that serializes OS approval prompts and keeps refusal cooldowns and time-limited grants, credential injection (`Inject`), and the proxy hook that wires match → scope → approve → resolve → inject. |
 | `internal/approval` | Approval backend: asks polkit through `pkcheck` on Linux, and renders the polkit action file. Other platforms have no backend. |
 | `internal/credstore` | Provider registry keyed by URI scheme, the name-keyed `NameRouter` that dispatches a `secret_ref` (scheme plus optional `<scheme>+<name>://` qualifier) to one configured credstore instance, and the shared background-refreshing resolver cache (`cache.go`) every provider reuses. |
 | `internal/credstore/onepassword` | Provider for 1Password Service Accounts (`op://`), backed by the 1Password Go SDK. Registered by default. |

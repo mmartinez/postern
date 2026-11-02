@@ -199,7 +199,7 @@ rules:
 | `injects` | no | Several header injections fed by the rule's one `secret_ref`, for a host that authenticates the same credential through two different headers. Mutually exclusive with `inject`, `routes`, and `template`; see below. |
 | `routes` | no | Placeholder-routing entries: per-token secret selection for a shared host. Mutually exclusive with `secret_ref`/`inject.name`; see below. |
 | `template` | no | Name of a built-in preset (see below) that fills in `host` and `inject` defaults. |
-| `approval` | no | Ask the user to approve each injection in an OS authentication dialog (Linux only); see [Approval](#approval). |
+| `approval` | no | Ask the user to approve injections, per request or for a time window, in an OS authentication dialog (Linux only); see [Approval](#approval). |
 
 \* When `template` is set, `host` and `inject` may be omitted and are filled
 from the preset. Any field you do set on the rule overrides the preset.
@@ -449,7 +449,7 @@ rules:
 
 ### Approval
 
-`approval: {}` makes the rule wait for the user to approve every injection in
+An `approval` block makes the rule wait for the user to approve injections in
 an OS authentication dialog. Nothing is resolved and nothing reaches the
 upstream until the user approves.
 
@@ -458,17 +458,23 @@ rules:
   - host: payments.example.com
     secret_ref: op://Agents/Payments/secret_key
     methods: [POST, DELETE]
-    approval: {}
+    approval:
+      ttl: 10m
     inject:
       type: header
       name: Authorization
       template: "Bearer {{ CREDENTIAL }}"
 ```
 
-The block has no fields yet; its presence turns prompting on. Approval is
-supported on Linux only, through polkit. Install the action file once, as the
-user who runs postern (the command refuses to run as root, because the file
-names its owner and only the owner may set the dialog text):
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `ttl` | no | `0s` | `0s` prompts for every request, and each approval releases only the request its dialog shows. A positive duration turns an approval into a grant: for that long, the route's agent (every client, for a rule without `routes`) may use the rule's secret on any request the rule allows, without another prompt. |
+
+`approval: {}` prompts for every request. Write `ttl` with a unit (`0s`,
+`10m`); a bare `0` is not a duration. Approval is supported on Linux only,
+through polkit. Install the action file once, as the user who runs postern
+(the command refuses to run as root, because the file names its owner and
+only the owner may set the dialog text):
 
 ```sh
 postern approval policy | sudo tee /usr/share/polkit-1/actions/dev.postern.policy
@@ -476,20 +482,33 @@ postern approval policy | sudo tee /usr/share/polkit-1/actions/dev.postern.polic
 
 A polkit authentication agent must be running in the desktop session.
 
-- **Prompt text.** The dialog reads `postern is trying to send <secret_ref> to
-  <METHOD host/path> for agent <route>.`, or `for any client.` for a rule
-  without `routes`. The query string is dropped, the path is shown escaped,
-  bytes outside printable ASCII are shown as `?`, and the request line is cut
-  at 120 characters. `oauth1` rules show the `token_ref`.
+- **Prompt text.** With `ttl: 0s` the dialog reads `postern is trying to send
+  <secret_ref> to <METHOD host/path> for agent <route>.`, or `for any client.`
+  for a rule without `routes`. With a positive `ttl` it describes the grant:
+  `postern is trying to let agent <route> use <secret_ref> for <methods>
+  requests to <host> on <paths> for <ttl> (first request: <METHOD
+  host/path>).` Here `<methods>` is the rule's `methods` joined with `/`, or
+  `all`; `<host>` is the rule's host pattern; `<paths>` reads `paths starting
+  with` followed by the rule's `paths`, or `any path`; `<ttl>` reads like `10m`
+  or `1h30m`. In both forms the query string is dropped, the path is shown
+  escaped, bytes outside printable ASCII are shown as `?`, and the request line
+  is cut at 120 characters. `oauth1` rules show the `token_ref`.
+- **Grants.** An approved grant covers its key until `ttl` after the user
+  answers. A request under a live grant injects at once, without waiting in
+  the queue. Concurrent requests that need the same grant share one prompt,
+  and all of them proceed when the user approves it.
 - **One dialog at a time.** Requests waiting for approval queue in arrival
-  order, and each gets its own prompt. At most 64 requests wait at once; a
-  request over that cap fails closed without a prompt.
+  order. With `ttl: 0s` each request gets its own prompt. At most 64 requests
+  wait at once, counting each request that shares a grant prompt; a request
+  over that cap fails closed without a prompt.
 - **Per-rule keys.** Decisions are kept per rule and route. A rule without
-  `routes` has a single key, so every client calling it shares one cooldown.
+  `routes` has a single key, so every client calling it shares one cooldown
+  and one grant.
 - **Timeout and cooldown.** A dialog left unanswered closes after 60 seconds.
   A denial, a dismissed dialog, or a timeout starts a 30-second cooldown for
   that key: requests in the cooldown, including ones already queued, fail
-  closed without a prompt. A hot reload starts every key fresh.
+  closed without a prompt. A hot reload starts every key fresh, so it clears
+  grants and cooldowns.
 - **Refusal budget.** After two dialogs end without an approval within 15
   minutes, on any rule or route, every request that would open a dialog fails
   closed without one until the older refusal is 15 minutes old. An approval
@@ -498,20 +517,26 @@ A polkit authentication agent must be running in the desktop session.
   three in 15 minutes. The count lives in memory: a hot reload keeps it, a
   restart clears it.
 - **Client gone.** A queued request whose client disconnects leaves the queue
-  without a prompt. An open dialog stays open when its client leaves, but the
-  request fails closed even if the user approves.
+  without a prompt, and a queued grant prompt that every client has left never
+  opens. A disconnect is noticed shortly after it happens, so a client that
+  leaves just before its turn can still get a dialog. An open dialog stays open
+  when its client leaves, but the request fails closed even if the user
+  approves; an approved grant still covers later requests.
 - **Request bodies.** A request to an approval rule is read in full before
   the prompt, up to `max_body_bytes`, so a client that leaves during an upload
-  is noticed. A larger body gets `413` without a prompt.
+  is noticed. A larger body gets `413` without a prompt. This also applies to
+  requests a live grant covers.
 - **Fail closed.** Every outcome other than an approval returns the uniform
   `502`, and the resolver and the upstream are never called.
-- **Use it sparingly.** Every request to the rule prompts. Put approval on
-  rules that write or hold high-impact secrets, narrowed with `paths` and
-  `methods`, so read traffic does not train the user to approve without
-  reading.
+- **Use it sparingly.** With `ttl: 0s` every request to the rule prompts.
+  Put approval on rules that write or hold high-impact secrets, narrowed with
+  `paths` and `methods`, and give them a non-zero `ttl` so one approval covers
+  a burst of related calls. Frequent prompts train the user to approve
+  without reading.
 - **Validation.** A null `approval:` (no `{}`), written directly or reached
   through an alias or a merge key, is an error, because it would silently skip
-  the prompt. An `approval` block on a platform other than Linux is an error.
+  the prompt. An `approval` block on a platform other than Linux is an error,
+  and so is a negative `ttl`.
 
 ### Built-in templates
 
@@ -558,7 +583,7 @@ Errors block startup. Common errors:
 - An explicitly empty `paths` or `methods` list; a `paths` entry not starting
   with `/`; a `methods` entry that is not a non-empty alphabetic token.
 - A null `approval:` block (write `approval: {}`); an `approval` block on a
-  platform without approval support.
+  platform without approval support; a negative `approval.ttl`.
 
 Errors (each blocks startup):
 

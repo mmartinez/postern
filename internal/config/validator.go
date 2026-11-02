@@ -109,8 +109,6 @@ type validator struct {
 	out  []LintError
 	// goos selects the platform the approval check validates against.
 	goos string
-	// approvals caches decodedApproval's view of the document.
-	approvals map[string]*yaml.Node
 }
 
 func newValidator(root *yaml.Node) *validator {
@@ -705,21 +703,36 @@ func parsePath(path string) []func(*yaml.Node) *yaml.Node {
 	return steps
 }
 
+// mappingChild returns the node the decoder reads for key in n. It decodes n
+// instead of scanning its content, so aliases and merge keys resolve exactly
+// as they do when the config loads; the node keeps its source position.
 func mappingChild(n *yaml.Node, key string) *yaml.Node {
-	if n == nil || n.Kind != yaml.MappingNode {
+	if n == nil {
 		return nil
 	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if n.Content[i].Value == key {
-			return n.Content[i+1]
-		}
+	var m map[string]yaml.Node
+	if err := n.Decode(&m); err != nil {
+		return nil
 	}
-	return nil
+	child, ok := m[key]
+	if !ok {
+		return nil
+	}
+	return &child
 }
 
 func sequenceChild(n *yaml.Node, idx int) *yaml.Node {
+	n = dealias(n)
 	if n == nil || n.Kind != yaml.SequenceNode || idx < 0 || idx >= len(n.Content) {
 		return nil
 	}
 	return n.Content[idx]
+}
+
+// dealias returns the node an alias refers to, or n when it is not an alias.
+func dealias(n *yaml.Node) *yaml.Node {
+	for n != nil && n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	return n
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -15,9 +16,11 @@ import (
 )
 
 type fakeResolver struct {
-	value  string
-	err    error
-	calls  atomic.Int64
+	value string
+	err   error
+	calls atomic.Int64
+	// mu serializes lastVR writes from requests a grant releases together.
+	mu     sync.Mutex
 	lastVR struct {
 		vault, ref string
 	}
@@ -25,8 +28,10 @@ type fakeResolver struct {
 
 func (f *fakeResolver) Resolve(_ context.Context, vaultID, ref string) (string, error) {
 	f.calls.Add(1)
+	f.mu.Lock()
 	f.lastVR.vault = vaultID
 	f.lastVR.ref = ref
+	f.mu.Unlock()
 	if f.err != nil {
 		return "", f.err
 	}
