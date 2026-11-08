@@ -52,11 +52,7 @@ func newSecretSetCmd(store SecretStore) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			if err := store.SetSecret(ctx, args[0], val); err != nil {
+			if err := store.SetSecret(cmd.Context(), args[0], val); err != nil {
 				return fmt.Errorf("store %s: %w", args[0], err)
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Stored %s\n", args[0])
@@ -74,11 +70,7 @@ func newSecretRmCmd(store SecretStore) *cobra.Command {
 		Short: "Remove a stored value (idempotent)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			if err := store.RemoveSecret(ctx, args[0]); err != nil {
+			if err := store.RemoveSecret(cmd.Context(), args[0]); err != nil {
 				return fmt.Errorf("remove %s: %w", args[0], err)
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", args[0])
@@ -90,9 +82,12 @@ func newSecretRmCmd(store SecretStore) *cobra.Command {
 // readSecret reads the value from the flag-selected source, or prompts
 // without echo when neither flag is set and stdin is a terminal.
 func readSecret(cmd *cobra.Command, fromStdin bool, fromEnv string) (string, error) {
-	f, isFile := cmd.InOrStdin().(*os.File)
-	if fromStdin || fromEnv != "" || !isFile || !term.IsTerminal(int(f.Fd())) {
+	if fromStdin || fromEnv != "" {
 		return readToken(cmd.InOrStdin(), fromStdin, fromEnv)
+	}
+	f, isFile := cmd.InOrStdin().(*os.File)
+	if !isFile || !term.IsTerminal(int(f.Fd())) {
+		return "", errors.New("specify --stdin or --from-env VAR, or run on a terminal to be prompted")
 	}
 	_, _ = fmt.Fprint(cmd.ErrOrStderr(), "Value: ")
 	raw, err := term.ReadPassword(int(f.Fd()))

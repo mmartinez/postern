@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -111,4 +112,33 @@ func TestSecretRm(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, store.values)
 	require.Contains(t, stdout, "Removed keychain://anthropic")
+}
+
+func TestSecretRmStoreError(t *testing.T) {
+	t.Parallel()
+	store := &fakeSecretStore{values: map[string]string{}, err: errors.New("dbus: no reply")}
+
+	_, _, err := runSecretCmd(t, store, "", "rm", "keychain://anthropic")
+	require.ErrorContains(t, err, "remove keychain://anthropic: dbus: no reply")
+}
+
+// Piped stdin is a file but not a terminal: without a flag the command must
+// refuse rather than try a no-echo prompt on the pipe.
+func TestSecretSetPipedStdinNeedsFlag(t *testing.T) {
+	t.Parallel()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+	_, err = w.WriteString(fixtureSecret)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	store := &fakeSecretStore{values: map[string]string{}}
+	cmd := cli.NewSecretCmd(store)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetIn(r)
+	cmd.SetArgs([]string{"set", "keychain://anthropic"})
+	require.ErrorContains(t, cmd.Execute(), "specify --stdin or --from-env VAR")
+	require.Empty(t, store.values)
 }
