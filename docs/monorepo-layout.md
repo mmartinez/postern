@@ -388,6 +388,7 @@ site:
         cache-dependency-path: web/site/package-lock.json
     - run: npm ci
     - run: npm audit signatures
+    - run: npm audit --audit-level=high
     - run: npm run build
 ```
 
@@ -401,8 +402,10 @@ site:
 - `persist-credentials: false` keeps the job token out of `.git/config`, where
   npm code running in the job could read it.
 - `npm audit signatures` checks the registry signature of every installed
-  package (381 verified today). `npm audit` for advisories is not a gate yet;
-  see the maintainer decisions under
+  package.
+- `npm audit --audit-level=high` fails the job on any high or critical advisory
+  in the lockfile. The site moved to Astro 7 and Tailwind 4, so the tree is
+  clean and stays that way; see the maintainer decisions under
   [Folding in postern-web](#folding-in-postern-web).
 
 ### Aggregating: `ci-ok`
