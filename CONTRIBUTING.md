@@ -49,8 +49,8 @@ too. `ci-ok` aggregates the results and is the single status check that matters.
 
 Keep site changes in site-only pull requests, so the Go jobs stay skipped. A
 pull request that touches the site and root files together counts as a backend
-change for release-please: give it a non-releasable type (`build`, `ci`,
-`docs`, `chore`).
+change for release-please: give it a non-releasable type (`ci`, `docs`,
+`chore`). `build` cuts a release, like `feat`, `fix`, and `perf`.
 
 ## Before you open a pull request
 
