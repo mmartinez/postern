@@ -37,13 +37,13 @@ This skill covers a complete setup: install, CA trust, credential source, rules,
 Ask in one batch, and only for what the current state does not already answer:
 
 - APIs to broker: one host per API, and how each authenticates (header name and prefix, or a placeholder token the client already sends).
-- Credential provider: 1Password service account, Bitwarden machine account, or an OAuth2 client.
+- Credential provider: 1Password service account, Bitwarden machine account, the OS secret store (macOS Keychain, or a Secret Service such as GNOME Keyring on a Linux desktop session), or an OAuth2 client.
 - Secret reference for each host.
 - How postern should stay running: this session only, a systemd unit, a macOS LaunchAgent, or Docker Compose.
 - Whether the agent process can be restarted after setup, because its environment must change.
 
 Setup cannot finish without a provider and one secret reference per brokered host, or four for an OAuth 1.0a rule.
-Postern cannot broker credentials without a vault or IdP: with neither configured, stop and say so.
+Postern cannot broker credentials without a vault, the OS secret store, or an IdP: with none available, stop and say so.
 Do not guess vault, item, or field names.
 
 ## 2. Check current state
@@ -95,13 +95,14 @@ postern ca install
 
 ## 5. Choose and install the credential source
 
-Use exactly one form: `token:` for a single legacy 1Password store, or `credstores:` for multiple vendors or Bitwarden and OAuth2.
+Use exactly one form: `token:` for a single legacy 1Password store, or `credstores:` for multiple vendors or Bitwarden, the OS secret store, and OAuth2.
 The full grammar is in `references/config.md`.
 
 | Provider | Config | Token | Secret reference |
 |---|---|---|---|
 | 1Password | `provider: 1password` | service-account token | `op://Vault/Item/field` |
 | Bitwarden | `provider: bitwarden` | machine access token | `bw://<secret-uuid>` |
+| OS secret store | `provider: keychain` | none; omit `token:` | `keychain://<item>` |
 | OAuth2 | `provider: oauth2` plus `settings` | client secret in `token:`; refresh seed in `refresh_token:` for the refresh grant | `oauth2://<credstore-name>` |
 
 - Single 1Password store: the user runs `postern token set --stdin` in their own terminal, or `postern token set --from-env OP_SERVICE_ACCOUNT_TOKEN` when that variable already exists; never print the value.
@@ -109,6 +110,8 @@ The full grammar is in `references/config.md`.
 - Headless or container: set `token.source: file` with a 0600 file readable by the uid that runs postern, or `source: env` with a variable in postern's process environment.
   `auto` tries file, then env, then the keychain.
 - Bitwarden needs the `bws` CLI on postern's `PATH`, or `settings.bws_path`; postern does not bundle it.
+- OS secret store: the user stores each value with `postern secret set keychain://<item>` in their own terminal (it prompts without echo), or with `--from-env VAR`; never print the value.
+  It needs a desktop session; on a headless host or in a container postern refuses to boot, so use a vault provider there.
 - OAuth2 requires a registered client and `settings.token_url`, `settings.client_id`, and `settings.grant_type`.
 
 If the token is absent and the user has not supplied one, stop and ask them to install it.

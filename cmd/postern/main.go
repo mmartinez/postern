@@ -16,6 +16,7 @@ import (
 	"github.com/mmartinez/postern/internal/ca"
 	"github.com/mmartinez/postern/internal/cli"
 	"github.com/mmartinez/postern/internal/credstore"
+	"github.com/mmartinez/postern/internal/credstore/keychain"
 	"github.com/mmartinez/postern/internal/credstore/onepassword"
 	"github.com/mmartinez/postern/internal/token"
 	"github.com/mmartinez/postern/internal/version"
@@ -77,6 +78,7 @@ func newRootCmd() *cobra.Command {
 
 	store := newStore()
 	cmd.AddCommand(cli.NewTokenCmd(store, opValidator{}, tokenAccount()))
+	cmd.AddCommand(cli.NewSecretCmd(keychain.NewProvider()))
 
 	cmd.AddCommand(cli.NewCACmd(defaultCADir(), defaultTrustDir()))
 	cmd.AddCommand(cli.NewServerCmd(defaultCADir(), reg, store))
