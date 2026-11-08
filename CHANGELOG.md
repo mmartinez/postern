@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.1](https://github.com/mmartinez/postern/compare/v0.11.0...v0.11.1) (2026-11-08)
+
+
+### Build System
+
+* adopt the monorepo layout ([#130](https://github.com/mmartinez/postern/issues/130)) ([0f68095](https://github.com/mmartinez/postern/commit/0f68095230640db1fb2580c99c8ae58bd77a38fe))
+* **deps:** bump goproxy to v1.9.3 ([#141](https://github.com/mmartinez/postern/issues/141)) ([5dd7be7](https://github.com/mmartinez/postern/commit/5dd7be771d0451c5e94ef6c92801eee8e10b63db))
+* **web:** move the site to Astro 7 and Tailwind 4 ([#140](https://github.com/mmartinez/postern/issues/140)) ([89679ae](https://github.com/mmartinez/postern/commit/89679ae1142cbec9ff7f6d15d5839f4f443db014))
+
 ## [0.11.0](https://github.com/mmartinez/postern/compare/v0.10.3...v0.11.0) (2026-11-02)
 
 
