@@ -297,13 +297,16 @@ secret store, so a desktop user needs no vault account. It uses the first
 native store it can open:
 
 - the macOS Keychain (login keychain, service `postern`);
-- a Secret Service on Linux (GNOME Keyring, or KWallet), in the `login`
-  collection, which the desktop session unlocks at login.
+- a Secret Service on Linux, in the `login` collection, which the desktop
+  session unlocks at login. Verified with GNOME Keyring. KWallet works only
+  where it serves the Secret Service API with a `login` collection (not
+  verified).
 
 The `99designs/keyring` fallbacks (an encrypted file, `pass`, the kernel
-keyring) are never used. With no native store reachable, as on a headless
-server or in a container, boot fails with `no OS secret store available`
-rather than starting and failing on the first request.
+keyring) and its separate KWallet backend are never used. With no native
+store reachable, as on a headless server or in a container, boot fails with
+`no OS secret store available` rather than starting and failing on the first
+request.
 
 - **Name:** `keychain` · **Scheme:** `keychain`
 - **`secret_ref` grammar:** `keychain://<item>`, where `<item>` is the name the

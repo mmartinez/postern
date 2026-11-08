@@ -84,7 +84,6 @@ func TestProvider_OpensOnlyNativeStores(t *testing.T) {
 	require.ElementsMatch(t, []keyringlib.BackendType{
 		keyringlib.KeychainBackend,
 		keyringlib.SecretServiceBackend,
-		keyringlib.KWalletBackend,
 	}, cfg.AllowedBackends)
 	// The login collection unlocks with the desktop session; a dedicated
 	// collection would stay locked behind its own password.

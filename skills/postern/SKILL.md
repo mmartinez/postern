@@ -37,7 +37,7 @@ This skill covers a complete setup: install, CA trust, credential source, rules,
 Ask in one batch, and only for what the current state does not already answer:
 
 - APIs to broker: one host per API, and how each authenticates (header name and prefix, or a placeholder token the client already sends).
-- Credential provider: 1Password service account, Bitwarden machine account, the OS secret store (macOS Keychain, or GNOME Keyring or KWallet on a Linux desktop session), or an OAuth2 client.
+- Credential provider: 1Password service account, Bitwarden machine account, the OS secret store (macOS Keychain, or a Secret Service such as GNOME Keyring on a Linux desktop session), or an OAuth2 client.
 - Secret reference for each host.
 - How postern should stay running: this session only, a systemd unit, a macOS LaunchAgent, or Docker Compose.
 - Whether the agent process can be restarted after setup, because its environment must change.

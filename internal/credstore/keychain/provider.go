@@ -1,5 +1,5 @@
 // Package keychain implements a credstore.Provider backed by the OS secret
-// store: the macOS Keychain, or a Secret Service (GNOME Keyring, KWallet) on
+// store: the macOS Keychain, or a Secret Service (such as GNOME Keyring) on
 // Linux. A keychain://<item> reference resolves to the value `postern secret
 // set` stored under that item. The user's desktop session unlocks the store,
 // so the provider needs no service-account token.
@@ -129,14 +129,16 @@ func (p *Provider) RemoveSecret(_ context.Context, ref string) error {
 
 // openStore opens the first native OS secret store available. The library's
 // file, pass, and keyctl fallbacks are excluded: they are not the OS store,
-// and the file backend would prompt for a password of its own.
+// and the file backend would prompt for a password of its own. Its kwallet
+// backend is excluded too: it would open a separate wallet named after
+// ServiceName and ignores the status writeEntry returns, so a rejected write
+// would look stored. KWallet is reachable when it serves the Secret Service API.
 func (p *Provider) openStore() (keyring.Keyring, error) {
 	ring, err := p.open(keyring.Config{
 		ServiceName: serviceName,
 		AllowedBackends: []keyring.BackendType{
 			keyring.KeychainBackend,
 			keyring.SecretServiceBackend,
-			keyring.KWalletBackend,
 		},
 		// The login collection unlocks with the desktop session; the library
 		// default creates a collection with its own password that stays locked.
