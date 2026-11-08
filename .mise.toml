@@ -8,6 +8,8 @@ gofumpt        = "0.12"
 lefthook       = "2.1"
 gitleaks       = "8.30"
 goreleaser     = "2.18"
+# Web components (web/) build with Node; lockstep with NODE_VERSION in ci.yml.
+node           = "24.21.0"
 # Release-only tooling. syft generates SBOMs during a goreleaser run; zig is
 # the C cross-compiler for the CGO build matrix — the credential SDK
 # (internal/credstore/onepassword) forces CGO_ENABLED=1, so a stock gcc cannot

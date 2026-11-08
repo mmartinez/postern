@@ -34,6 +34,8 @@ env:
   GORELEASER_VERSION: "v2.18.2"
   ZIG_VERSION: "0.14.0"
   ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
+  # Web components. Lockstep with .mise.toml.
+  NODE_VERSION: "24.21.0"
 
 jobs:
   # Decides which components a run has to cover. Go jobs are skipped only
@@ -477,11 +479,34 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
         run: go test -run TestLive ./internal/credstore/onepassword/...
 
+  site:
+    name: site
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.site != 'false' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/site
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/site/package-lock.json
+      - run: npm ci
+      # Every package's registry signature. web/site/.npmrc disables install
+      # scripts, so no dependency code runs during the install.
+      - run: npm audit signatures
+      - run: npm run build
+
   # Single gate for branch protection: a skipped job passes, a failed or
   # cancelled one fails.
   ci-ok:
     if: ${{ always() }}
-    needs: [changes, lint, typecheck, test, test-macos, vuln, licenses, e2e, gitleaks, devcontainer-build, snapshot]
+    needs: [changes, lint, typecheck, test, test-macos, vuln, licenses, e2e, gitleaks, devcontainer-build, snapshot, site]
     runs-on: ubuntu-latest
     steps:
       - env:
