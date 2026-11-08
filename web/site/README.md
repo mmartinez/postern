@@ -29,7 +29,7 @@ The dev server runs with hot-module replacement, on a port the devcontainer forw
 make site-build
 ```
 
-Output goes to `dist/`, relative to this directory. The build is fully static — drop it behind any CDN or static hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages, etc.). `make site-ci` runs what CI runs: a clean install, then the build.
+Output goes to `dist/`, relative to this directory. The build is fully static — drop it behind any CDN or static hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages, etc.). `make site-ci` runs what CI runs: a clean install, the registry signature check, the advisory audit, then the build.
 
 ## Preview production build
 

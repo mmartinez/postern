@@ -500,6 +500,7 @@ jobs:
       # Every package's registry signature. web/site/.npmrc disables install
       # scripts, so no dependency code runs during the install.
       - run: npm audit signatures
+      - run: npm audit --audit-level=high
       - run: npm run build
 
   # Single gate for branch protection: a skipped job passes, a failed or

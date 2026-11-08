@@ -86,9 +86,10 @@ site-build: ## Build the static site into web/site/dist.
 	$(RUN) npm --prefix web/site run build
 
 .PHONY: site-ci
-site-ci: ## Install, verify signatures, and build the site the way CI does.
+site-ci: ## Install, verify signatures, audit, and build the site the way CI does.
 	$(RUN) npm --prefix web/site ci
 	$(RUN) npm --prefix web/site audit signatures
+	$(RUN) npm --prefix web/site audit --audit-level=high
 	$(RUN) npm --prefix web/site run build
 
 .PHONY: build
