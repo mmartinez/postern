@@ -372,7 +372,7 @@ import Layout from '../layouts/Layout.astro';
   - <span class="text-zinc-500">name:</span> vault
     <span class="text-zinc-500">provider:</span> <span class="text-emerald-400">1password</span>               <span class="text-zinc-600"># or: bitwarden</span>
     <span class="text-zinc-500">token:</span>
-      <span class="text-zinc-500">source:</span> env
+      <span class="text-zinc-500">source:</span> auto              <span class="text-zinc-600"># file → env → keychain</span>
       <span class="text-zinc-500">env_var:</span> OP_SERVICE_ACCOUNT_TOKEN
 
 <span class="text-zinc-500">proxy:</span>
@@ -428,7 +428,8 @@ import Layout from '../layouts/Layout.astro';
                 <p class="text-zinc-500 text-xs mb-1.5">Verify the cosign signature before trusting:</p>
                 <p class="text-zinc-300 whitespace-pre-wrap break-all text-xs">cosign verify-blob \
   --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '...' \
+  --certificate-identity-regexp '^https://github\.com/mmartinez/postern/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt</p>
               </div>
             </div>
