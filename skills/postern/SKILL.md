@@ -43,7 +43,7 @@ Ask in one batch, and only for what the current state does not already answer:
 - Whether the agent process can be restarted after setup, because its environment must change.
 
 Setup cannot finish without a provider and one secret reference per brokered host, or four for an OAuth 1.0a rule.
-Postern cannot broker credentials without a vault or IdP: with neither configured, stop and say so.
+Postern cannot broker credentials without a vault, the OS secret store, or an IdP: with none available, stop and say so.
 Do not guess vault, item, or field names.
 
 ## 2. Check current state
