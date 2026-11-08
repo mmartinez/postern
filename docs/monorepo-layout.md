@@ -499,16 +499,15 @@ private repository:
    Apache-2.0 grants no trademark rights (section 6), so the mark itself stays
    reserved. Nothing third-party is vendored; fonts load from Google Fonts at
    runtime.
-2. **Known advisories.** `npm audit --omit=dev` on the lockfile reports 1
-   critical, 16 high and 7 moderate: astro 4.16 (fixed only in 7.x),
-   tailwindcss 3.4 (no 3.x fix) and their build toolchain. All of them are
-   build-time or dev-server packages; the built site is one HTML page, one CSS
-   file and a favicon. With Dependabot alerts enabled, they show up as alerts
-   on this repository after the import. Recommendation: import as-is, because the
-   import must stay a pure move to stay reviewable, and land the Astro and
-   Tailwind upgrade as the first site PR afterwards. Add
-   `npm audit --omit=dev --audit-level=high` to the `site` job once that
-   upgrade is in.
+2. **Known advisories.** The imported lockfile reported 1 critical, 16 high and
+   7 moderate advisories: astro 4.16 (fixed only in 7.x), tailwindcss 3.4 (no
+   3.x fix) and their build toolchain.
+   All of them are build-time or dev-server packages; the built site is one HTML
+   page, one CSS file and a favicon.
+   The import landed as-is, as a pure move, and the follow-up site PR moved the
+   site to Astro 7 with Tailwind 4 through `@tailwindcss/vite`.
+   The `site` job now runs `npm audit --audit-level=high`, and the lockfile
+   reports no advisories.
 
 ## Releases and versioning
 
