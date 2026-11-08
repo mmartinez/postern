@@ -258,7 +258,7 @@ Three components share this repository:
 | app | `web/app/` (reserved) | The postern app web frontend. |
 
 The backend stays at the root in one Go module; web frontends are self-contained npm projects under `web/`.
-[docs/monorepo-layout.md](docs/monorepo-layout.md) records the target layout, the reasoning, and the tooling rules that keep the two apart.
+[web/README.md](web/README.md) lists the web components and the rules for adding one.
 
 ### Site
 
@@ -284,7 +284,7 @@ make site-ci        # clean install and build, the way CI does it
 `skills/postern/SKILL.md` is an Agent Skills package that walks an agent through a complete setup: install, CA trust, credential source, rules, starting the proxy, wiring the calling agent, and end-to-end verification.
 It links two references for depth: the full rule and credstore grammar, and failure diagnosis.
 
-Agents discover it automatically through the linked conventional roots (`.claude/skills/`, `.agents/skills/`, `.github/skills/`).
+Agents discover it automatically through the linked conventional roots (`.claude/skills/`, `.agents/skills/`).
 A harness with skill commands can invoke it explicitly (`/skill:postern`); otherwise the agent loads it on demand from a matching request.
 
 To use it outside this repository, copy the canonical directory into that tool's user skill root:
