@@ -4,13 +4,15 @@ Marketing site for [Postern](https://github.com/mmartinez/postern) — a credent
 
 Built with [Astro](https://astro.build) and [Tailwind CSS](https://tailwindcss.com).
 
-This is one of the repository's web components; see [web/README.md](../README.md) and
-[docs/monorepo-layout.md](../../docs/monorepo-layout.md) for how the monorepo is organized.
+This is one of the repository's web components; see [web/README.md](../README.md) for how the monorepo is organized.
 
 ## Prerequisites
 
 None beyond the repository's container-first setup: Node is pinned in `.mise.toml` and
 installed inside the devcontainer.
+
+`.npmrc` sets `ignore-scripts=true`, so no dependency install script runs, in CI or in the devcontainer.
+If a dependency really needs its script, run `npm rebuild <pkg>` for that one package instead of turning scripts back on.
 
 ## Local development
 
