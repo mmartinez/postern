@@ -36,8 +36,45 @@ env:
   ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
 
 jobs:
+  # Decides which components a run has to cover. Go jobs are skipped only
+  # when every changed file is under web/site/, and only on an explicit
+  # "false": a failed classifier runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.classify.outputs.go }}
+      site: ${{ steps.classify.outputs.site }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          go=true site=true
+          if [ "$EVENT" = "pull_request" ]; then
+            changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
+            if [ -n "$changed" ]; then
+              go=false site=false
+              while IFS= read -r f; do
+                case "$f" in
+                  web/site/*) site=true ;;
+                  .github/workflows/ci.yml | .mise.toml) go=true site=true ;;
+                  *) go=true ;;
+                esac
+              done <<< "$changed"
+            fi
+          fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+          echo "site=$site" >> "$GITHUB_OUTPUT"
+
   lint:
     name: lint
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -73,6 +110,8 @@ jobs:
   typecheck:
     name: typecheck (go ${{ matrix.go }})
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -102,6 +141,8 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -122,6 +163,8 @@ jobs:
   test-macos:
     name: test (macos)
     runs-on: macos-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -137,6 +180,8 @@ jobs:
   vuln:
     name: vuln
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -149,6 +194,8 @@ jobs:
   licenses:
     name: licenses
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -186,6 +233,8 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -268,6 +317,8 @@ jobs:
   devcontainer-build:
     name: devcontainer-build
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@v7
       - name: build devcontainer image
@@ -280,6 +331,8 @@ jobs:
   snapshot:
     name: snapshot
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -423,3 +476,16 @@ jobs:
           OP_E2E: "1"
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
         run: go test -run TestLive ./internal/credstore/onepassword/...
+
+  # Single gate for branch protection: a skipped job passes, a failed or
+  # cancelled one fails.
+  ci-ok:
+    if: ${{ always() }}
+    needs: [changes, lint, typecheck, test, test-macos, vuln, licenses, e2e, gitleaks, devcontainer-build, snapshot]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then exit 1; fi
