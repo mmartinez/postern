@@ -19,12 +19,13 @@ import (
 	"github.com/mmartinez/postern/internal/ca"
 	"github.com/mmartinez/postern/internal/config"
 	"github.com/mmartinez/postern/internal/credstore"
-	// bitwarden and onepassword are imported for their init() side effect: each
-	// registers its provider (scheme "bw" / "op") in the process-wide credstore
+	// bitwarden, keychain, oauth2, and onepassword are imported for their init()
+	// side effect: each registers its provider in the process-wide credstore
 	// registry. pickProvider falls back to "op" for the legacy default
 	// credstore. The cli package depends on those schemes existing, so the
 	// anchors belong here rather than only in the binary's main package.
 	_ "github.com/mmartinez/postern/internal/credstore/bitwarden"
+	_ "github.com/mmartinez/postern/internal/credstore/keychain"
 	_ "github.com/mmartinez/postern/internal/credstore/oauth2"
 	_ "github.com/mmartinez/postern/internal/credstore/onepassword"
 	"github.com/mmartinez/postern/internal/logging"
@@ -364,15 +365,23 @@ func buildCredStoreResolvers(ctx context.Context, reg *credstore.Registry, store
 			return nil, err
 		}
 
-		tok, src, err := token.Resolve(ctx, cs.Token, store)
-		if err != nil {
-			return nil, fmt.Errorf("credstore %q: resolve service-account token: %w", cs.Name, err)
+		var tok string
+		if _, ok := provider.(credstore.TokenlessProvider); ok {
+			if !cs.Token.IsZero() {
+				return nil, fmt.Errorf("credstore %q: provider %q takes no token block", cs.Name, provider.Name())
+			}
+		} else {
+			var src string
+			tok, src, err = token.Resolve(ctx, cs.Token, store)
+			if err != nil {
+				return nil, fmt.Errorf("credstore %q: resolve service-account token: %w", cs.Name, err)
+			}
+			logger.Info("token resolved",
+				slog.String("credstore", cs.Name),
+				slog.String("provider", provider.Name()),
+				slog.String("source", src),
+			)
 		}
-		logger.Info("token resolved",
-			slog.String("credstore", cs.Name),
-			slog.String("provider", provider.Name()),
-			slog.String("source", src),
-		)
 
 		resolver, probe, err := buildOneResolver(ctx, provider, cs, tok, store)
 		if err != nil {

@@ -67,10 +67,11 @@ the credential, and forwards the request. The full request lifecycle and trust
 boundary are in [docs/architecture.md](docs/architecture.md).
 
 The matched rule's secret reference (`op://…` or `bw://…` for a vault,
-`oauth2://…` for a minted token, optionally credstore-qualified as
-`op+name://…` when several accounts of one vendor are configured) resolves from
-the configured provider; adding a new provider is a single package plus one
-import. See [docs/providers.md](docs/providers.md).
+`keychain://…` for the OS secret store, `oauth2://…` for a minted token,
+optionally credstore-qualified as `op+name://…` when several accounts of one
+vendor are configured) resolves from the configured provider; adding a new
+provider is a single package plus one import. See
+[docs/providers.md](docs/providers.md).
 
 > **Status:** early development. The proxy works end-to-end, and the release
 > pipeline (checksum-verified binaries, SBOMs, and a signed multi-arch container
@@ -276,7 +277,7 @@ make site-ci        # clean install and build, the way CI does it
 - [Architecture](docs/architecture.md) — request lifecycle, trust boundary, components.
 - [Security model](docs/security.md) — fail-closed semantics, logging, threat model, key handling.
 - [Configuration](docs/configuration.md) — the full YAML reference.
-- [Providers](docs/providers.md) — the credential-vendor plugin contract (1Password, Bitwarden) and the OAuth2 short-lived-token provider.
+- [Providers](docs/providers.md) — the credential-vendor plugin contract (1Password, Bitwarden, the OS secret store) and the OAuth2 short-lived-token provider.
 - [Agent skill](skills/postern/SKILL.md): the setup runbook agents load.
 
 ### Agent skill

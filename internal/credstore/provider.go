@@ -72,3 +72,14 @@ type SecondarySecretProvider interface {
 	// NewResolverWithSecondary mirrors Provider.NewResolver with the secondary secret.
 	NewResolverWithSecondary(ctx context.Context, token, secondary string, settings map[string]string) (broker.Resolver, error)
 }
+
+// TokenlessProvider is implemented by a Provider that authenticates with no
+// service-account token, such as one backed by the OS secret store. The
+// runtime skips token resolution for its credstores (Validate and NewResolver
+// receive an empty token) and rejects a `token:` block configured against
+// them rather than silently ignoring it.
+type TokenlessProvider interface {
+	Provider
+	// Tokenless marks the provider as needing no token. It has no behavior.
+	Tokenless()
+}

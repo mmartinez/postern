@@ -154,6 +154,14 @@ credential, a fingerprint of it, or a route token.
   on what the agent asks postern to do, not a boundary against code running as
   your user: such code can read postern's memory or drive the dialog itself.
   Keep the agent under a separate uid.
+- *Other processes reading the OS secret store.* A `keychain` credstore keeps
+  its values in the OS secret store, which the desktop session unlocks for
+  every process of that user. On Linux, any process running as your user can
+  read an unlocked Secret Service collection without a prompt (`secret-tool`
+  does). On macOS each item trusts only the postern binary that stored it, so
+  other programs are expected to get a Keychain prompt (not verified on
+  macOS). Run the agent under a separate uid so it cannot read the store
+  directly.
 - *Prompt fatigue.* A prompt on every request trains the user to approve
   without reading. Put `approval` on rules that write or hold high-impact
   secrets, narrow them with `paths` and `methods`, and give them a short
@@ -259,11 +267,12 @@ local-dev quick start — prefer `source: file`, and run postern as a separate
 principal from the agent when you can.
 
 **Validation at boot.** Each configured credstore validates its token with a
-cheap read-only ping before the proxy binds its listeners. A bad token fails the
-process at startup rather than surfacing as a `502` on the first brokered
-request. Boot proves validity once; when `proxy.admin_listen` is configured,
-the `/healthz` endpoint re-exposes the last-known validation result (and
-refreshes it asynchronously on scrape) so drift after boot is observable
+cheap read-only ping before the proxy binds its listeners (a `keychain`
+credstore instead checks that a native OS secret store answers). A bad token
+fails the process at startup rather than surfacing as a `502` on the first
+brokered request. Boot proves validity once; when `proxy.admin_listen` is
+configured, the `/healthz` endpoint re-exposes the last-known validation result
+(and refreshes it asynchronously on scrape) so drift after boot is observable
 without log scraping.
 
 ### Admin health endpoint

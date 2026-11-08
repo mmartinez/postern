@@ -19,8 +19,8 @@ one of them:
 
 - **Single vendor (legacy)** — a top-level `token:` block. Postern synthesizes
   an implicit credstore named `default` from it, hardwired to the legacy
-  1Password provider (`op://` references). Bitwarden and OAuth2 credstores
-  require the `credstores:` form.
+  1Password provider (`op://` references). Bitwarden, OS secret store, and
+  OAuth2 credstores require the `credstores:` form.
 - **Multiple vendors** — a `credstores:` list. Omit the top-level `token:`.
 
 Setting both is a validation error.
@@ -71,7 +71,19 @@ credstores:
 |---|---|
 | `name` | Routing key for this credstore. Must be unique; rules reach a store by name through the secret-ref grammar below. |
 | `provider` | The registered **Name** of a provider compiled into the binary (e.g. `1password`). Not the URI scheme. |
-| `token` | A `token` block (same fields as above) for this credstore. |
+| `token` | A `token` block (same fields as above) for this credstore. Omitted for `provider: keychain`, which reads the OS secret store and needs no token. |
+
+A credstore backed by the OS secret store (the macOS Keychain or a Linux Secret
+Service) needs only a name and the provider:
+
+```yaml
+credstores:
+  - name: desktop
+    provider: keychain            # secret_ref: keychain://<item>
+```
+
+Store its values with `postern secret set keychain://<item>`; see
+[providers.md](providers.md#os-secret-store-keychain).
 
 A rule routes to a credstore through its `secret_ref`. The qualified grammar
 `<scheme>+<name>://<rest>` (e.g. `op+team://Vault/Item/field`) names its

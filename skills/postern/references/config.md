@@ -43,6 +43,8 @@ credstores:
 - `1password`: scheme `op`, reference `op://Vault/Item/field`, no settings keys.
 - `bitwarden`: scheme `bw`, reference `bw://<secret-uuid>`.
   Needs the `bws` CLI on `PATH` or `settings.bws_path`; optional `settings.server_url` for self-hosted.
+- `keychain`: scheme `keychain`, reference `keychain://<item>`, no `token:` block, no settings keys.
+  Reads the macOS Keychain or the Secret Service login collection; store values with `postern secret set keychain://<item>`.
 - `oauth2`: scheme `oauth2`, reference `oauth2://<credstore-name>`.
   Required settings: `token_url` (https), `client_id`, `grant_type` (`client_credentials` or `refresh_token`).
   Optional: `scope`, `auth_style` (`basic` or `post`), `refresh_token_path` for a rotated refresh token.

@@ -13,11 +13,11 @@ new sub-package plus one side-effect import; the broker and proxy do not
 need to be edited.
 
 The shipped providers fall into two roles, and the distinction matters when
-you reason about what postern holds in memory. `onepassword` and `bitwarden`
-**fetch a stored value** — a long-lived secret that a vault already contains.
-`oauth2` **mints a short-lived one** per resolution. They satisfy the same
-interface and are configured the same way; see
-[OAuth2 — short-lived token minting](#oauth2--short-lived-token-minting).
+you reason about what postern holds in memory. `onepassword`, `bitwarden`, and
+`keychain` **fetch a stored value** — a long-lived secret that a vault or the OS
+secret store already contains. `oauth2` **mints a short-lived one** per
+resolution. They satisfy the same interface and are configured the same way;
+see [OAuth2 — short-lived token minting](#oauth2--short-lived-token-minting).
 
 ## The interface
 
@@ -92,6 +92,12 @@ implements `credstore.SecondarySecretProvider`, which mirrors `Validate` and
 token chain and calls the secondary variants; a provider that does not
 implement the interface rejects a configured `refresh_token:` block at boot.
 
+A provider that authenticates with no token at all (the `keychain` provider,
+which the desktop session unlocks) implements `credstore.TokenlessProvider`, a
+marker interface. The runtime skips token resolution for its credstores,
+passes an empty token to `Validate` and `NewResolver`, and rejects a configured
+`token:` block at boot.
+
 ## Registration
 
 Providers self-register via `init()` against the process-wide registry,
@@ -123,11 +129,12 @@ To activate the provider, add a blank side-effect import of your provider
 package to the anchor block in `internal/cli/server.go` — that is where the
 `server` command's registry is populated, so an import added anywhere else
 (e.g. `cmd/postern/main.go`) leaves the provider unregistered at runtime. The
-default postern binary registers three providers there — `onepassword`,
-`bitwarden`, and `oauth2`, none behind a build tag — so they are available out
-of the box. A still-experimental provider gets a *tagged* side-effect import
-instead (see [Build tags](#build-tags-for-experimental-providers)) so the
-default binary doesn't pull in its dependency until it graduates.
+default postern binary registers four providers there — `onepassword`,
+`bitwarden`, `keychain`, and `oauth2`, none behind a build tag — so they are
+available out of the box. A still-experimental provider gets a *tagged*
+side-effect import instead (see
+[Build tags](#build-tags-for-experimental-providers)) so the default binary
+doesn't pull in its dependency until it graduates.
 
 ## Layout convention
 
@@ -150,6 +157,9 @@ internal/credstore/
     settings.go            # parses server_url / bws_path settings
     resolver.go            # broker.Resolver that runs `bws secret get`
     live_test.go           # opt-in live test (BWS_E2E=1)
+  keychain/                # production provider (OS secret store via 99designs/keyring)
+    provider.go            # implements credstore.Provider; set/remove for `postern secret`
+    resolver.go            # broker.Resolver that reads one item
   oauth2/                  # production provider (mints tokens via golang.org/x/oauth2)
     provider.go            # implements credstore.Provider
     resolver.go            # broker.Resolver that exchanges client creds for a bearer token
@@ -201,8 +211,8 @@ provider-interpreted** configuration — things like a self-hosted server URL
 that aren't a token and aren't part of the `secret_ref`. The keys are defined
 by each provider; `postern config validate` asks the provider to vet them, so
 an unknown key or a malformed value is a line-numbered error rather than a
-silently ignored field. The 1password provider recognizes no keys (any setting
-is rejected); the bitwarden provider's keys are listed below.
+silently ignored field. The 1password and keychain providers recognize no keys
+(any setting is rejected); the bitwarden provider's keys are listed below.
 
 ## Bitwarden Secrets Manager
 
@@ -280,15 +290,80 @@ GPL-3.0, postern is Apache-2.0, and we redistribute nothing GPL. You acquire
   `cargo install bws`) and put it on `PATH`. The provider works as soon as
   `bws` is reachable; nothing in postern downloads it for you.
 
+## OS secret store (keychain)
+
+The `keychain` provider reads credentials from the operating system's own
+secret store, so a desktop user needs no vault account. It uses the first
+native store it can open:
+
+- the macOS Keychain (login keychain, service `postern`);
+- a Secret Service on Linux (GNOME Keyring, or KWallet), in the `login`
+  collection, which the desktop session unlocks at login.
+
+The `99designs/keyring` fallbacks (an encrypted file, `pass`, the kernel
+keyring) are never used. With no native store reachable, as on a headless
+server or in a container, boot fails with `no OS secret store available`
+rather than starting and failing on the first request.
+
+- **Name:** `keychain` · **Scheme:** `keychain`
+- **`secret_ref` grammar:** `keychain://<item>`, where `<item>` is the name the
+  value was stored under. Qualify it as `keychain+<name>://<item>` only to pick
+  between two keychain credstores; both read the same store.
+- **Token:** none. The credstore takes no `token:` block (one is rejected at
+  boot) and no `settings`.
+- **Caching:** cacheable, like the vault providers. A value changed with
+  `postern secret set` while the server runs is picked up at the next cache
+  refresh (`proxy.cache.refresh_ahead`), not immediately.
+- **Fail closed:** a missing or empty item returns the uniform `502` and the
+  upstream is never contacted.
+
+### Storing values
+
+Store and remove values with the `postern secret` command, not with Keychain
+Access, Seahorse, or `secret-tool`: postern keeps items under its own key
+(`postern/<item>`) and, on Linux, in the library's own encoding, so an entry
+created by another tool is not found.
+
+```sh
+postern secret set keychain://anthropic        # prompts without echo on a terminal
+printf %s "$KEY" | postern secret set keychain://anthropic --stdin
+postern secret set keychain://anthropic --from-env ANTHROPIC_API_KEY
+postern secret rm keychain://anthropic         # idempotent
+```
+
+The value is never printed. On macOS, each item trusts the postern binary that
+stored it, so the server reads it without a Keychain prompt. Not yet verified
+on macOS: whether a rebuilt or upgraded binary is still trusted, or prompts
+until the value is stored again.
+
+### Config example
+
+```yaml
+credstores:
+  - name: desktop
+    provider: keychain
+
+rules:
+  - host: api.anthropic.com
+    secret_ref: keychain://anthropic
+    inject:
+      type: header
+      name: x-api-key
+      template: "{{ CREDENTIAL }}"
+```
+
+An unlocked OS secret store is readable by other processes running as the same
+user; see [security.md](security.md#threat-model).
+
 ## OAuth2 — short-lived token minting
 
-The other two providers fetch a **stored** value: a vault holds a long-lived
-API key, postern reads it, and the broker cache holds it until it goes stale.
-The `oauth2` provider is the odd one out. It does not fetch a stored secret —
-it **mints** one, per resolution, from credentials the operator holds and the
-identity provider issues replacements for. That difference is why it is worth
-separating out from the vault backends rather than describing it as a third
-vendor.
+The vault and OS-store providers fetch a **stored** value: a vault holds a
+long-lived API key, postern reads it, and the broker cache holds it until it
+goes stale. The `oauth2` provider is the odd one out. It does not fetch a
+stored secret — it **mints** one, per resolution, from credentials the operator
+holds and the identity provider issues replacements for. That difference is
+why it is worth separating out from the stored-value backends rather than
+describing it as another vendor.
 
 At resolve time the provider exchanges long-lived client credentials — or a
 long-lived refresh token — at a token endpoint for a short-lived bearer access
