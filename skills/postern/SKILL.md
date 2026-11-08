@@ -149,7 +149,9 @@ For every host to broker:
 
 Hot reload applies rule changes to a running server.
 Listener, cache, `admin_listen`, token, `on_no_match`, `scrub_responses`, and `max_body_bytes` changes need a restart.
-When the user passes `--config PATH`, pass it to every command, including `bootstrap` and `server`.
+`credstores` are resolved at boot too: a new store, or a change to a store's provider, token source, or settings, needs a restart before a rule can use it.
+When the user passes `--config PATH`, pass it to the commands that read the config: `config init`, `config validate`, `rules list`, `bootstrap`, and `server`.
+`token` and `ca` commands do not accept the flag; token commands always use the fixed `default` account.
 
 ## 7. Start the proxy
 
@@ -204,7 +206,7 @@ Either signal alone is insufficient: a process check or admin healthcheck proves
    Record both:
    - the endpoint's expected successful status (usually 2xx), and
    - a `broker injected host=<host>` line for that request in the server log.
-   If the response succeeds but no injection line appears, the call bypassed postern and nothing is brokered.
+   If no injection line appears, the request was not brokered: it either bypassed postern or matched no rule.
 5. To test a rule in isolation, copy the config and run a second server on another port with `--config`; never break the live config.
 6. If the user declines the live call, report the setup as unverified, with the exact request still to run.
 7. Report what changed: files touched, rules added, commands the user ran, and how to undo (remove the rules, `postern ca uninstall --purge`, `postern token rm`).

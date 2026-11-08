@@ -171,6 +171,7 @@ Tokens must be unique, non-overlapping, and high entropy (a low-entropy token on
 ```
 
 - Nothing resolves and nothing reaches the upstream until the user approves.
+- A request that needs approval is read in full before the prompt, up to `proxy.max_body_bytes`; a larger body gets a `413` without a prompt.
 - With `ttl: 0s`, every request prompts; with a positive `ttl`, one approval grants the rule and route for that window.
 - Methods outside `approval.methods` inject without a prompt, except requests carrying a method-override header.
 - A denial, dismissal, timeout, or cooldown returns the uniform 502.
@@ -214,4 +215,5 @@ Warnings, which do not block startup: a route token with low estimated entropy, 
 A running server with at least one rule watches the config file.
 A clean parse swaps the ruleset atomically and increments the health `ruleset_version`.
 A config with a fatal lint is rejected and the previous ruleset keeps serving.
-Listener, cache, `admin_listen`, token, `on_no_match`, `scrub_responses`, and `max_body_bytes` are bound at startup and need a restart.
+Listener, cache, `admin_listen`, token, `credstores`, `on_no_match`, `scrub_responses`, and `max_body_bytes` are bound at startup and need a restart.
+A `credstores` change matters even when validation passes: a rule added against a store the running server never resolved fails closed until the restart.
