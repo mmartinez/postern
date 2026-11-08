@@ -2,6 +2,9 @@ module github.com/mmartinez/postern
 
 go 1.27.3
 
+// Web frontends are Node projects, not part of this module.
+ignore ./web
+
 require (
 	github.com/1password/onepassword-sdk-go v0.4.1
 	github.com/99designs/keyring v1.2.2

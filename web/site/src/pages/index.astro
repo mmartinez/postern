@@ -1,0 +1,671 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Postern — Credential brokering for AI agents">
+  <!-- NAV -->
+  <header class="fixed top-0 inset-x-0 z-50 border-b border-border/60 bg-canvas/90 backdrop-blur-sm">
+    <nav class="mx-auto max-w-6xl px-6 h-14 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 text-zinc-100 font-semibold text-sm">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+          <rect x="1" y="1" width="20" height="20" rx="5" stroke="#10b981" stroke-width="1.5"/>
+          <path d="M7 11h8M11 7v8" stroke="#10b981" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="11" cy="11" r="2.5" fill="#10b981"/>
+        </svg>
+        Postern
+      </a>
+      <div class="hidden sm:flex items-center gap-6 text-sm text-zinc-400">
+        <a href="#how-it-works" class="hover:text-zinc-100 transition-colors">How it works</a>
+        <a href="#providers" class="hover:text-zinc-100 transition-colors">Providers</a>
+        <a href="#quickstart" class="hover:text-zinc-100 transition-colors">Quick start</a>
+        <a
+          href="https://github.com/mmartinez/postern"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-100 transition-colors"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          GitHub
+        </a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="relative pt-32 pb-24 px-6 overflow-hidden">
+      <!-- subtle grid background -->
+      <div class="absolute inset-0 bg-[linear-gradient(rgba(16,185,129,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(16,185,129,0.03)_1px,transparent_1px)] bg-[size:48px_48px] [mask-image:radial-gradient(ellipse_80%_60%_at_50%_0%,black,transparent)]" aria-hidden="true"></div>
+
+      <div class="relative mx-auto max-w-4xl text-center">
+        <div class="inline-flex items-center gap-2 text-xs font-medium text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 rounded-full px-3 py-1 mb-8">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          Early development · Linux amd64/arm64
+        </div>
+
+        <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-zinc-50 leading-[1.1] mb-6">
+          Your AI agents call authenticated APIs
+          <span class="text-emerald-400"> without ever holding the credentials.</span>
+        </h1>
+
+        <p class="text-lg sm:text-xl text-zinc-400 max-w-2xl mx-auto leading-relaxed mb-10">
+          Postern is a credential-brokering HTTPS proxy. Agents send requests with no API keys; postern matches the destination host against your rules, fetches the real secret from your vault, and injects it on the way out.
+        </p>
+
+        <div class="flex flex-wrap items-center justify-center gap-3">
+          <a
+            href="#quickstart"
+            class="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-sm px-5 py-2.5 rounded-md transition-colors"
+          >
+            Get started
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </a>
+          <a
+            href="https://github.com/mmartinez/postern"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-2 bg-surface-raised hover:bg-surface-hover border border-border text-zinc-300 hover:text-zinc-100 font-medium text-sm px-5 py-2.5 rounded-md transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            View on GitHub
+          </a>
+        </div>
+      </div>
+
+      <!-- Terminal preview -->
+      <div class="relative mx-auto mt-16 max-w-2xl">
+        <div class="rounded-lg border border-border bg-surface overflow-hidden shadow-xl shadow-black/40">
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-border bg-surface-raised">
+            <span class="w-3 h-3 rounded-full bg-zinc-700"></span>
+            <span class="w-3 h-3 rounded-full bg-zinc-700"></span>
+            <span class="w-3 h-3 rounded-full bg-zinc-700"></span>
+            <span class="ml-2 text-xs text-zinc-500 font-mono">agent shell</span>
+          </div>
+          <div class="p-5 font-mono text-sm leading-relaxed">
+            <p class="text-zinc-500"># The agent sets HTTPS_PROXY and trusts the postern CA</p>
+            <p class="mt-1"><span class="text-emerald-400">$</span> <span class="text-zinc-300">eval "$(postern bootstrap)"</span></p>
+            <p class="mt-4 text-zinc-500"># Call an authenticated API — no API key in the request</p>
+            <p class="mt-1"><span class="text-emerald-400">$</span> <span class="text-zinc-300">curl -x http://localhost:1701 \</span></p>
+            <p class="pl-4 text-zinc-300">&nbsp;&nbsp;https://api.anthropic.com/v1/messages \</p>
+            <p class="pl-4 text-zinc-300">&nbsp;&nbsp;-d '&#123; "model": "claude-sonnet-4-6", ... &#125;'</p>
+            <p class="mt-3 text-zinc-500"># ↑ no Authorization header. Postern injects it from your vault.</p>
+            <p class="mt-3 text-zinc-400">HTTP/2 200</p>
+            <p class="text-zinc-400">&#123;"id":"msg_...","type":"message",...&#125;</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- WHY IT MATTERS -->
+    <section class="py-20 px-6 border-t border-border">
+      <div class="mx-auto max-w-5xl">
+        <div class="text-center mb-14">
+          <h2 class="text-2xl sm:text-3xl font-bold text-zinc-50 mb-3">Why it matters</h2>
+          <p class="text-zinc-400 max-w-xl mx-auto">
+            Credentials in agent memory are credentials an attacker can steal. Postern moves secrets outside the agent's reach entirely.
+          </p>
+        </div>
+
+        <div class="grid sm:grid-cols-3 gap-6">
+          <div class="rounded-lg border border-border bg-surface p-6">
+            <div class="w-10 h-10 rounded-md bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-4">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path d="M9 2L2 15h14L9 2z" stroke="#f87171" stroke-width="1.5" stroke-linejoin="round"/>
+                <path d="M9 8v3M9 13v.5" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <h3 class="text-zinc-100 font-semibold text-sm mb-2">Prompt injection</h3>
+            <p class="text-zinc-400 text-sm leading-relaxed">
+              Malicious content in a tool response can instruct an agent to exfiltrate whatever is in its context window — including API keys stored in environment variables.
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-border bg-surface p-6">
+            <div class="w-10 h-10 rounded-md bg-orange-500/10 border border-orange-500/20 flex items-center justify-center mb-4">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <circle cx="9" cy="9" r="7" stroke="#fb923c" stroke-width="1.5"/>
+                <path d="M9 5v5l3 2" stroke="#fb923c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <h3 class="text-zinc-100 font-semibold text-sm mb-2">Compromised dependency</h3>
+            <p class="text-zinc-400 text-sm leading-relaxed">
+              A supply-chain attack on an agent's dependencies can read environment variables or memory. If the agent never held the credential, there is nothing to steal.
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-border bg-surface p-6 relative overflow-hidden">
+            <div class="w-10 h-10 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path d="M9 2l2.5 5h5L12 10.5l1.5 5L9 13l-4.5 2.5L6 10.5 1.5 7h5L9 2z" stroke="#34d399" stroke-width="1.5" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <h3 class="text-zinc-100 font-semibold text-sm mb-2">Reduced blast radius</h3>
+            <p class="text-zinc-400 text-sm leading-relaxed">
+              When an agent is compromised, the damage is bounded to what it can do — not what it can leak. Postern ensures API keys are never in scope.
+            </p>
+            <div class="absolute bottom-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-tl-full" aria-hidden="true"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section id="how-it-works" class="py-20 px-6 border-t border-border">
+      <div class="mx-auto max-w-5xl">
+        <div class="text-center mb-14">
+          <h2 class="text-2xl sm:text-3xl font-bold text-zinc-50 mb-3">How it works</h2>
+          <p class="text-zinc-400 max-w-xl mx-auto">
+            The agent points <code class="text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded text-xs">HTTPS_PROXY</code> at postern and trusts its local CA. For each request, postern matches, resolves, injects, and forwards.
+          </p>
+        </div>
+
+        <!-- Request lifecycle diagram -->
+        <div class="rounded-lg border border-border bg-surface overflow-hidden mb-12">
+          <div class="flex items-center gap-2 px-5 py-3 border-b border-border bg-surface-raised">
+            <span class="text-xs text-zinc-500 font-mono">request lifecycle</span>
+          </div>
+          <div class="p-5 sm:p-8 overflow-x-auto">
+            <pre class="font-mono text-xs sm:text-sm leading-relaxed text-zinc-300 whitespace-pre"><span class="text-zinc-500">agent                     postern (127.0.0.1:1701)                 upstream</span>
+<span class="text-zinc-600">  │                              │                                     │</span>
+<span class="text-zinc-400">  │  CONNECT api.example.com:443 │</span>
+<span class="text-zinc-400">  ├──────────────────────────────▶                                    │</span>
+<span class="text-zinc-500">  │                              │  mint per-host leaf cert from</span>
+<span class="text-zinc-500">  │                              │  the local CA, complete TLS</span>
+<span class="text-zinc-400">  │  ◀────── TLS (postern cert) ──┤                                     │</span>
+<span class="text-zinc-600">  │                              │                                     │</span>
+<span class="text-emerald-400">  │  GET /v1/messages  (no auth) │</span>
+<span class="text-emerald-400">  ├──────────────────────────────▶  1. match host against rules        │</span>
+<span class="text-emerald-400">  │                              │  2. resolve secret_ref from vault   │</span>
+<span class="text-emerald-400">  │                              │  3. inject credential into request  │</span>
+<span class="text-emerald-400">  │                              │                  4. forward ────────▶</span>
+<span class="text-zinc-600">  │                              │                                     │</span>
+<span class="text-zinc-400">  │                              │  ◀──────── response (streamed) ─────┤</span>
+<span class="text-zinc-400">  │  ◀────── response ───────────┤                                     │</span></pre>
+          </div>
+        </div>
+
+        <!-- 4-step cards -->
+        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="rounded-lg border border-border bg-surface p-5">
+            <div class="text-xs font-mono text-emerald-400 mb-3">01</div>
+            <h3 class="text-zinc-100 font-semibold text-sm mb-2">Match</h3>
+            <p class="text-zinc-400 text-sm leading-relaxed">
+              The destination host is matched against YAML-declared rules. First match wins. Unmatched hosts are tunneled untouched — postern only intercepts what you configure.
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-border bg-surface p-5">
+            <div class="text-xs font-mono text-emerald-400 mb-3">02</div>
+            <h3 class="text-zinc-100 font-semibold text-sm mb-2">Resolve</h3>
+            <p class="text-zinc-400 text-sm leading-relaxed">
+              The rule's <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">secret_ref</code> (e.g. <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">op://Vault/Item/field</code>) is fetched from your vault. Resolved values are cached with a configurable TTL.
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-border bg-surface p-5">
+            <div class="text-xs font-mono text-emerald-400 mb-3">03</div>
+            <h3 class="text-zinc-100 font-semibold text-sm mb-2">Inject</h3>
+            <p class="text-zinc-400 text-sm leading-relaxed">
+              The credential is rendered through the rule's template and set as a named header or substituted for a placeholder already in the request.
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-border bg-surface p-5">
+            <div class="text-xs font-mono text-emerald-400 mb-3">04</div>
+            <h3 class="text-zinc-100 font-semibold text-sm mb-2">Forward</h3>
+            <p class="text-zinc-400 text-sm leading-relaxed">
+              The authenticated request is forwarded and the response is streamed back. Server-sent events and other incremental responses arrive as produced.
+            </p>
+          </div>
+        </div>
+
+        <!-- Fail-closed callout -->
+        <div class="mt-6 rounded-lg border border-zinc-700/60 bg-zinc-900/40 px-5 py-4 flex gap-3">
+          <svg class="flex-shrink-0 mt-0.5" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" stroke="#a1a1aa" stroke-width="1.2"/>
+            <path d="M8 5v4M8 11v.5" stroke="#a1a1aa" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          <p class="text-sm text-zinc-400">
+            <strong class="text-zinc-300">Fails closed.</strong> If credential resolution or injection fails at any point, postern returns a <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">502</code> to the agent and never contacts the upstream. The upstream is never reached without a valid credential.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROVIDERS -->
+    <section id="providers" class="py-20 px-6 border-t border-border">
+      <div class="mx-auto max-w-5xl">
+        <div class="text-center mb-14">
+          <h2 class="text-2xl sm:text-3xl font-bold text-zinc-50 mb-3">Supported providers</h2>
+          <p class="text-zinc-400 max-w-xl mx-auto">
+            Credential providers are pluggable. Postern ships three out of the box; adding a new vendor is a single new sub-package.
+          </p>
+        </div>
+
+        <div class="grid sm:grid-cols-3 gap-5">
+          <!-- 1Password -->
+          <div class="rounded-lg border border-border bg-surface p-6">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-9 h-9 rounded bg-[#0572EC]/10 border border-[#0572EC]/30 flex items-center justify-center flex-shrink-0">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <rect width="18" height="18" rx="4" fill="#0572EC" opacity="0.15"/>
+                  <circle cx="9" cy="9" r="5" stroke="#0572EC" stroke-width="1.5"/>
+                  <circle cx="9" cy="9" r="2" fill="#0572EC"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-zinc-100 font-semibold text-sm">1Password</h3>
+                <span class="text-xs text-zinc-500 font-mono">op://</span>
+              </div>
+            </div>
+            <p class="text-zinc-400 text-sm leading-relaxed mb-4">
+              Backed by the 1Password Go SDK via Service Accounts. Reference any vault item field as <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">op://Vault/Item/field</code>.
+            </p>
+            <div class="text-xs font-mono text-zinc-500">
+              <span class="text-zinc-400">provider:</span> 1password
+            </div>
+          </div>
+
+          <!-- Bitwarden -->
+          <div class="rounded-lg border border-border bg-surface p-6">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-9 h-9 rounded bg-[#175DDC]/10 border border-[#175DDC]/30 flex items-center justify-center flex-shrink-0">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <path d="M9 2L3 5v5c0 3.5 2.5 6.1 6 7 3.5-.9 6-3.5 6-7V5L9 2z" stroke="#175DDC" stroke-width="1.5" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-zinc-100 font-semibold text-sm">Bitwarden</h3>
+                <span class="text-xs text-zinc-500 font-mono">bw://</span>
+              </div>
+            </div>
+            <p class="text-zinc-400 text-sm leading-relaxed mb-4">
+              Bitwarden Secrets Manager via the <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">bws</code> CLI. Reference a secret by its UUID as <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">bw://&lt;uuid&gt;</code>. Self-hosted instances supported.
+            </p>
+            <div class="text-xs font-mono text-zinc-500">
+              <span class="text-zinc-400">provider:</span> bitwarden
+            </div>
+          </div>
+
+          <!-- OAuth2 -->
+          <div class="rounded-lg border border-border bg-surface p-6">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-9 h-9 rounded bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <path d="M3 9a6 6 0 1 0 12 0M9 3v6l4 2" stroke="#10b981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-zinc-100 font-semibold text-sm">OAuth2</h3>
+                <span class="text-xs text-zinc-500 font-mono">oauth2://</span>
+              </div>
+            </div>
+            <p class="text-zinc-400 text-sm leading-relaxed mb-4">
+              Mints short-lived bearer tokens at a token endpoint. Supports <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">client_credentials</code> and <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">refresh_token</code> grants, with automatic refresh on expiry.
+            </p>
+            <div class="text-xs font-mono text-zinc-500">
+              <span class="text-zinc-400">provider:</span> oauth2
+            </div>
+          </div>
+        </div>
+
+        <p class="text-center text-sm text-zinc-500 mt-6">
+          Adding a new vendor is a single new sub-package plus one import.
+          <a href="https://github.com/mmartinez/postern/blob/main/docs/providers.md" target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-zinc-200 underline underline-offset-2 ml-1 transition-colors">Read the provider contract →</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- QUICK START -->
+    <section id="quickstart" class="py-20 px-6 border-t border-border">
+      <div class="mx-auto max-w-4xl">
+        <div class="text-center mb-14">
+          <h2 class="text-2xl sm:text-3xl font-bold text-zinc-50 mb-3">Quick start</h2>
+          <p class="text-zinc-400 max-w-xl mx-auto">
+            From an installed binary to a running proxy in four commands.
+          </p>
+        </div>
+
+        <div class="rounded-lg border border-border bg-surface overflow-hidden">
+          <div class="flex items-center gap-2 px-5 py-3 border-b border-border bg-surface-raised">
+            <span class="text-xs text-zinc-500 font-mono">terminal</span>
+          </div>
+          <div class="p-6 font-mono text-sm space-y-4">
+            <div>
+              <p class="text-zinc-500 mb-1"># 1. Generate a local CA and add it to your trust store</p>
+              <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-200">postern ca install</span></p>
+            </div>
+            <div>
+              <p class="text-zinc-500 mb-1"># 2. Write a starter config file</p>
+              <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-200">postern config init</span></p>
+            </div>
+            <div>
+              <p class="text-zinc-500 mb-1"># 3. Store your vault service-account token</p>
+              <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-200">postern token set --stdin</span></p>
+            </div>
+            <div>
+              <p class="text-zinc-500 mb-1"># 4. Start the proxy</p>
+              <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-200">postern server</span></p>
+            </div>
+            <div class="pt-2 border-t border-border">
+              <p class="text-zinc-500 mb-1"># In your agent's shell, wire HTTPS_PROXY + CA trust in one step:</p>
+              <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-200">eval "$(postern bootstrap)"</span></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Minimal config example -->
+        <div class="mt-8">
+          <h3 class="text-sm font-semibold text-zinc-300 mb-3">Minimal <code class="text-emerald-400 font-mono bg-emerald-400/10 px-1.5 py-0.5 rounded">~/.postern/config.yaml</code></h3>
+          <div class="rounded-lg border border-border bg-surface overflow-hidden">
+            <div class="flex items-center gap-2 px-5 py-3 border-b border-border bg-surface-raised">
+              <span class="text-xs text-zinc-500 font-mono">~/.postern/config.yaml</span>
+            </div>
+            <div class="p-6 font-mono text-sm leading-relaxed">
+              <pre class="text-zinc-300 whitespace-pre"><span class="text-zinc-500">credstores:</span>
+  - <span class="text-zinc-500">name:</span> vault
+    <span class="text-zinc-500">provider:</span> <span class="text-emerald-400">1password</span>               <span class="text-zinc-600"># or: bitwarden</span>
+    <span class="text-zinc-500">token:</span>
+      <span class="text-zinc-500">source:</span> auto              <span class="text-zinc-600"># file → env → keychain</span>
+      <span class="text-zinc-500">env_var:</span> OP_SERVICE_ACCOUNT_TOKEN
+
+<span class="text-zinc-500">proxy:</span>
+  <span class="text-zinc-500">listen:</span> 127.0.0.1:1701
+  <span class="text-zinc-500">cache_ttl:</span> 5m
+
+<span class="text-zinc-500">rules:</span>
+  - <span class="text-zinc-500">host:</span> api.anthropic.com
+    <span class="text-zinc-500">secret_ref:</span> <span class="text-amber-400">op://Agents/Anthropic/api_key</span>
+    <span class="text-zinc-500">inject:</span>
+      <span class="text-zinc-500">type:</span> header
+      <span class="text-zinc-500">name:</span> x-api-key
+      <span class="text-zinc-500">template:</span> <span class="text-zinc-400">"&#123;&#123; CREDENTIAL &#125;&#125;"</span></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hot reload note -->
+        <div class="mt-4 rounded-lg border border-border/60 bg-surface/50 px-5 py-4 flex gap-3">
+          <svg class="flex-shrink-0 mt-0.5" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 8a6 6 0 1 0 12 0H2zM8 2v2M5 3l1 1.7M11 3l-1 1.7" stroke="#34d399" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          <p class="text-sm text-zinc-400">
+            <strong class="text-zinc-300">Hot reload.</strong> <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">postern server</code> watches the config file. Saving it re-parses and atomically swaps the ruleset — in-flight requests are unaffected. A config with a parse error is rejected and the previous ruleset keeps serving.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section id="install" class="py-20 px-6 border-t border-border">
+      <div class="mx-auto max-w-4xl">
+        <div class="text-center mb-14">
+          <h2 class="text-2xl sm:text-3xl font-bold text-zinc-50 mb-3">Install</h2>
+          <p class="text-zinc-400 max-w-xl mx-auto">
+            Prebuilt binaries and the container image publish from <code class="text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded text-xs">v0.1.0</code> onward. Until then, build from source.
+          </p>
+        </div>
+
+        <div class="grid sm:grid-cols-2 gap-6">
+          <!-- Binary -->
+          <div class="rounded-lg border border-border bg-surface overflow-hidden">
+            <div class="px-5 py-4 border-b border-border bg-surface-raised">
+              <h3 class="text-sm font-semibold text-zinc-200">Binary</h3>
+              <p class="text-xs text-zinc-500 mt-0.5">Linux amd64 / arm64</p>
+            </div>
+            <div class="p-5 font-mono text-sm space-y-3">
+              <div>
+                <p class="text-zinc-500 text-xs mb-1.5">Install script (verifies SHA-256):</p>
+                <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-300">curl -fsSL https://raw.githubusercontent.com/mmartinez/postern/main/install.sh | sh</span></p>
+              </div>
+              <div class="pt-3 border-t border-border">
+                <p class="text-zinc-500 text-xs mb-1.5">Verify the cosign signature before trusting:</p>
+                <p class="text-zinc-300 whitespace-pre-wrap break-all text-xs">cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/mmartinez/postern/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Docker -->
+          <div class="rounded-lg border border-border bg-surface overflow-hidden">
+            <div class="px-5 py-4 border-b border-border bg-surface-raised">
+              <h3 class="text-sm font-semibold text-zinc-200">Docker</h3>
+              <p class="text-xs text-zinc-500 mt-0.5">Distroless, non-root, multi-arch</p>
+            </div>
+            <div class="p-5 font-mono text-sm space-y-3">
+              <div>
+                <p class="text-zinc-500 text-xs mb-1.5">Image (linux/amd64 + arm64):</p>
+                <p><span class="text-zinc-300">ghcr.io/mmartinez/postern</span></p>
+              </div>
+              <div class="pt-3 border-t border-border">
+                <p class="text-zinc-500 text-xs mb-1.5">Bootstrap + run with Docker Compose:</p>
+                <div class="space-y-1">
+                  <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-300">docker compose run --rm bootstrap</span></p>
+                  <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-300">docker compose up -d</span></p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Build from source -->
+        <div class="mt-6 rounded-lg border border-border bg-surface overflow-hidden">
+          <div class="px-5 py-4 border-b border-border bg-surface-raised">
+            <h3 class="text-sm font-semibold text-zinc-200">Build from source</h3>
+            <p class="text-xs text-zinc-500 mt-0.5">Requires Docker, git, and the devcontainer CLI</p>
+          </div>
+          <div class="p-5 font-mono text-sm space-y-1">
+            <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-300">git clone https://github.com/mmartinez/postern.git && cd postern</span></p>
+            <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-300">devcontainer up --workspace-folder .</span></p>
+            <p><span class="text-emerald-400 select-none">$ </span><span class="text-zinc-300">make build</span><span class="text-zinc-500 font-sans text-xs ml-3"># produces dist/postern</span></p>
+          </div>
+        </div>
+
+        <div class="mt-6 rounded-lg border border-amber-500/20 bg-amber-500/5 px-5 py-4 flex gap-3">
+          <svg class="flex-shrink-0 mt-0.5" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 2L1.5 13h13L8 2z" stroke="#fbbf24" stroke-width="1.2" stroke-linejoin="round"/>
+            <path d="M8 7v3M8 12v.5" stroke="#fbbf24" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          <p class="text-sm text-zinc-400">
+            <strong class="text-amber-400">Early development.</strong> The proxy works end-to-end and the release pipeline publishes from <code class="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">v0.1.0</code> onward. Currently <strong class="text-zinc-300">Linux amd64/arm64 only</strong> — macOS and Windows are deferred until there is demand.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECURITY -->
+    <section class="py-20 px-6 border-t border-border">
+      <div class="mx-auto max-w-4xl">
+        <div class="grid sm:grid-cols-2 gap-10 items-center">
+          <div>
+            <h2 class="text-2xl sm:text-3xl font-bold text-zinc-50 mb-4">Security model</h2>
+            <p class="text-zinc-400 leading-relaxed mb-6">
+              The real credential exists only inside the postern process and on the wire to the upstream. It never crosses to the agent's side.
+            </p>
+            <ul class="space-y-3">
+              <li class="flex gap-3 text-sm">
+                <svg class="flex-shrink-0 mt-0.5 text-emerald-400" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8l4 4 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="text-zinc-300">Agent holds no credential — only the placeholder it sent (if any)</span>
+              </li>
+              <li class="flex gap-3 text-sm">
+                <svg class="flex-shrink-0 mt-0.5 text-emerald-400" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8l4 4 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="text-zinc-300"><code class="text-zinc-400 bg-zinc-800 px-1 rounded text-xs">postern rules list</code> shows the <code class="text-zinc-400 bg-zinc-800 px-1 rounded text-xs">secret_ref</code>, never a resolved value</span>
+              </li>
+              <li class="flex gap-3 text-sm">
+                <svg class="flex-shrink-0 mt-0.5 text-emerald-400" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8l4 4 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="text-zinc-300">Logs redact credential-bearing headers and never print a resolved secret</span>
+              </li>
+              <li class="flex gap-3 text-sm">
+                <svg class="flex-shrink-0 mt-0.5 text-emerald-400" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8l4 4 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="text-zinc-300">Only brokered hosts have TLS intercepted — unmatched hosts are tunneled untouched</span>
+              </li>
+              <li class="flex gap-3 text-sm">
+                <svg class="flex-shrink-0 mt-0.5 text-emerald-400" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8l4 4 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="text-zinc-300">Resolver errors fail closed with 502 — upstream is never reached on failure</span>
+              </li>
+            </ul>
+          </div>
+          <div class="space-y-4">
+            <a
+              href="https://github.com/mmartinez/postern/blob/main/docs/security.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-start gap-4 rounded-lg border border-border bg-surface p-5 hover:border-zinc-600 transition-colors group"
+            >
+              <div class="w-9 h-9 rounded bg-zinc-800 border border-border flex items-center justify-center flex-shrink-0">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M8 1L2 4v4c0 3.5 2.5 5.8 6 7 3.5-1.2 6-3.5 6-7V4L8 1z" stroke="#a1a1aa" stroke-width="1.2" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div>
+                <div class="text-sm font-semibold text-zinc-200 group-hover:text-zinc-100 transition-colors">Security model</div>
+                <div class="text-xs text-zinc-500 mt-0.5">Threat model, fail-closed semantics, key handling</div>
+              </div>
+              <svg class="ml-auto flex-shrink-0 text-zinc-600 group-hover:text-zinc-400 transition-colors mt-0.5" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </a>
+
+            <a
+              href="https://github.com/mmartinez/postern/blob/main/docs/architecture.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-start gap-4 rounded-lg border border-border bg-surface p-5 hover:border-zinc-600 transition-colors group"
+            >
+              <div class="w-9 h-9 rounded bg-zinc-800 border border-border flex items-center justify-center flex-shrink-0">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <rect x="1" y="1" width="6" height="6" rx="1" stroke="#a1a1aa" stroke-width="1.2"/>
+                  <rect x="9" y="1" width="6" height="6" rx="1" stroke="#a1a1aa" stroke-width="1.2"/>
+                  <rect x="1" y="9" width="6" height="6" rx="1" stroke="#a1a1aa" stroke-width="1.2"/>
+                  <rect x="9" y="9" width="6" height="6" rx="1" stroke="#a1a1aa" stroke-width="1.2"/>
+                </svg>
+              </div>
+              <div>
+                <div class="text-sm font-semibold text-zinc-200 group-hover:text-zinc-100 transition-colors">Architecture</div>
+                <div class="text-xs text-zinc-500 mt-0.5">Request lifecycle, trust boundary, components</div>
+              </div>
+              <svg class="ml-auto flex-shrink-0 text-zinc-600 group-hover:text-zinc-400 transition-colors mt-0.5" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </a>
+
+            <a
+              href="https://github.com/mmartinez/postern/blob/main/docs/configuration.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-start gap-4 rounded-lg border border-border bg-surface p-5 hover:border-zinc-600 transition-colors group"
+            >
+              <div class="w-9 h-9 rounded bg-zinc-800 border border-border flex items-center justify-center flex-shrink-0">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M13 3H3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1z" stroke="#a1a1aa" stroke-width="1.2"/>
+                  <path d="M5 7h6M5 10h4" stroke="#a1a1aa" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+              </div>
+              <div>
+                <div class="text-sm font-semibold text-zinc-200 group-hover:text-zinc-100 transition-colors">Configuration reference</div>
+                <div class="text-xs text-zinc-500 mt-0.5">Full YAML schema with all options</div>
+              </div>
+              <svg class="ml-auto flex-shrink-0 text-zinc-600 group-hover:text-zinc-400 transition-colors mt-0.5" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="py-20 px-6 border-t border-border">
+      <div class="mx-auto max-w-2xl text-center">
+        <h2 class="text-2xl sm:text-3xl font-bold text-zinc-50 mb-4">
+          Ready to remove credentials from your agents?
+        </h2>
+        <p class="text-zinc-400 mb-8">
+          Postern is open source and Apache 2.0 licensed. Contributions welcome.
+        </p>
+        <div class="flex flex-wrap items-center justify-center gap-3">
+          <a
+            href="#quickstart"
+            class="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-sm px-5 py-2.5 rounded-md transition-colors"
+          >
+            Get started
+          </a>
+          <a
+            href="https://github.com/mmartinez/postern"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-2 bg-surface-raised hover:bg-surface-hover border border-border text-zinc-300 hover:text-zinc-100 font-medium text-sm px-5 py-2.5 rounded-md transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            View on GitHub
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="border-t border-border py-10 px-6">
+    <div class="mx-auto max-w-5xl">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+        <div>
+          <div class="flex items-center gap-2 text-zinc-300 font-semibold text-sm mb-1">
+            <svg width="18" height="18" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+              <rect x="1" y="1" width="20" height="20" rx="5" stroke="#10b981" stroke-width="1.5"/>
+              <path d="M7 11h8M11 7v8" stroke="#10b981" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="11" cy="11" r="2.5" fill="#10b981"/>
+            </svg>
+            Postern
+          </div>
+          <p class="text-xs text-zinc-500">Apache License 2.0</p>
+          <p class="text-xs text-zinc-600 mt-1">
+            1Password® is a trademark of AgileBits Inc. Bitwarden® is a trademark of Bitwarden, Inc.<br />
+            Postern is not affiliated with, endorsed by, or sponsored by either company.
+          </p>
+        </div>
+        <div class="flex gap-6 text-sm text-zinc-500">
+          <a href="https://github.com/mmartinez/postern" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-300 transition-colors">GitHub</a>
+          <a href="https://github.com/mmartinez/postern/blob/main/docs/architecture.md" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-300 transition-colors">Architecture</a>
+          <a href="https://github.com/mmartinez/postern/blob/main/docs/security.md" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-300 transition-colors">Security</a>
+          <a href="https://github.com/mmartinez/postern/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-300 transition-colors">Disclosure</a>
+          <a href="https://github.com/mmartinez/postern/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-300 transition-colors">License</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Smooth scroll for anchor links -->
+  <script>
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          const top = target.getBoundingClientRect().top + window.scrollY - 72;
+          window.scrollTo({ top, behavior: 'smooth' });
+        }
+      });
+    });
+  </script>
+</Layout>

@@ -12,12 +12,10 @@
   "updateRemoteUserUID": true,
   "workspaceFolder": "/workspaces/postern",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/postern,type=bind,consistency=cached",
-
   "mounts": [
     "source=postern-go-mod,target=/home/dev/go/pkg/mod,type=volume",
     "source=postern-go-build,target=/home/dev/.cache/go-build,type=volume"
   ],
-
   "containerEnv": {
     "POSTERN_IN_CONTAINER": "1",
     "GOPATH": "/home/dev/go",
@@ -25,22 +23,27 @@
     "GOCACHE": "/home/dev/.cache/go-build",
     "PATH": "/home/dev/.local/share/mise/shims:/home/dev/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   },
-
   "postCreateCommand": "bash .devcontainer/post-create.sh",
-
-  "forwardPorts": [1701],
+  "forwardPorts": [
+    1701,
+    4321
+  ],
   "portsAttributes": {
     "1701": {
       "label": "postern proxy",
       "onAutoForward": "silent"
+    },
+    "4321": {
+      "label": "postern site dev server",
+      "onAutoForward": "silent"
     }
   },
-
   "customizations": {
     "vscode": {
       "extensions": [
         "golang.go",
-        "tamasfe.even-better-toml"
+        "tamasfe.even-better-toml",
+        "astro-build.astro-vscode"
       ]
     }
   }

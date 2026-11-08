@@ -16,6 +16,9 @@ tasks/
 *.swp
 *.swo
 
+# Web frontends are not part of the backend image build.
+web/
+
 # Local env / secrets — never in image context
 .env
 .env.*

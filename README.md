@@ -247,6 +247,30 @@ Set `token.source: file` and `token.file:
 token read-only into the unit's private credentials directory for the lifetime of
 the process.
 
+## Repository layout
+
+Three components share this repository:
+
+| Component | Path | What it is |
+|---|---|---|
+| postern | repository root | The Go backend: the `postern` binary, its container image and its installer. |
+| site | `web/site/` | The marketing landing page served at https://postern.dev (Astro + Tailwind). |
+| app | `web/app/` (reserved) | The postern app web frontend. |
+
+The backend stays at the root in one Go module; web frontends are self-contained npm projects under `web/`.
+[docs/monorepo-layout.md](docs/monorepo-layout.md) records the target layout, the reasoning, and the tooling rules that keep the two apart.
+
+### Site
+
+Like everything else in the repository, the site is built through the devcontainer:
+
+```sh
+make site-install   # install dependencies from the lockfile
+make site-dev       # Astro dev server on http://localhost:4321
+make site-build     # static build into web/site/dist/
+make site-ci        # clean install and build, the way CI does it
+```
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) — request lifecycle, trust boundary, components.
