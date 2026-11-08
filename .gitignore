@@ -26,6 +26,8 @@ vendor/
 .vscode/
 .claude/*
 !.claude/settings.json
+!.claude/skills/
+!.claude/skills/**
 *.swp
 *.swo
 
