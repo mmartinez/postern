@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/mmartinez/postern/compare/v0.11.1...v0.12.0) (2026-11-08)
+
+
+### Features
+
+* **credstore:** add a keychain provider backed by the OS secret store ([#146](https://github.com/mmartinez/postern/issues/146)) ([6805ecc](https://github.com/mmartinez/postern/commit/6805ecc6a745c177e6300474c9dbfa881b6f6ac7))
+
 ## [0.11.1](https://github.com/mmartinez/postern/compare/v0.11.0...v0.11.1) (2026-11-08)
 
 
