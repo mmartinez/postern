@@ -27,6 +27,7 @@ All Go work runs through `make`; on the host these wrap `devcontainer exec`.
 - `make ci` — lint + test + vuln + license check (the core local gate; CI adds platform, format, gitleaks, and snapshot/image jobs on top); run before pushing.
 - `make snapshot` — local release build (binaries, archives, SBOMs, checksums; no publish/sign).
 - `make licenses` — regenerate `THIRD_PARTY_NOTICES.md` after any dependency change.
+- `make site-install` / `make site-dev` / `make site-build` / `make site-ci`: web work, `npm --prefix web/site` through the same devcontainer wrapper.
 
 ## Project layout
 
@@ -38,6 +39,8 @@ All Go work runs through `make`; on the host these wrap `devcontainer exec`.
 - `internal/credstore/` — provider registry plus the `onepassword/`, `bitwarden/`, and `oauth2/` backends.
 - `internal/token/` — service-account token storage (file and OS keyring).
 - `internal/{runtime,logging,templates,version}/` — server assembly, slog setup, template rendering, build version.
+- `skills/`: the Agent Skills package documented in the README.
+- `web/`: web frontends, one self-contained npm project per component: `web/site/` (the landing page) and the reserved `web/app/`. No Go code here. See `docs/monorepo-layout.md`.
 
 ## Git workflow
 
@@ -142,6 +145,9 @@ This is a credential-brokering tool — be paranoid about leakage.
 - Use a regex when a single-`*` glob suffices for host patterns.
 - Add a dependency without regenerating `THIRD_PARTY_NOTICES.md` (run `make licenses`).
 - Add anything under `pkg/`. App code lives under `internal/`.
+- Run npm in `release.yml`. Website dependencies must never execute in a job that can sign or publish postern.
+- Put Go code under `web/`.
+- Create a tag or GitHub release that is not a backend `vX.Y.Z`.
 
 ## When you finish a task
 

@@ -24,6 +24,34 @@ Every Go, lint, test, and format task runs through `make`. From the host the
 targets wrap `devcontainer exec`; inside the container they run directly (the
 Makefile detects which side it is on). Bump tool versions only in `.mise.toml`.
 
+## Web components
+
+The site at `web/site/` is a self-contained npm project, like every future
+component under `web/`. Its commands run through the devcontainer too:
+
+```sh
+make site-install   # install dependencies from the lockfile
+make site-dev       # Astro dev server on port 4321
+make site-build     # static build into web/site/dist/
+make site-ci        # clean install and build, the way CI does it
+```
+
+Node is pinned in `.mise.toml`, in lockstep with `NODE_VERSION` in the CI
+workflow. Never put Go code under `web/`, and never run npm in the release
+workflow.
+
+## What CI runs
+
+A `changes` job classifies every pull request. The Go jobs are skipped only
+when every changed file is under `web/site/`; the `site` job runs when the site
+changed. Anything else, including other paths under `web/`, runs the Go jobs
+too. `ci-ok` aggregates the results and is the single status check that matters.
+
+Keep site changes in site-only pull requests, so the Go jobs stay skipped. A
+pull request that touches the site and root files together counts as a backend
+change for release-please: give it a non-releasable type (`build`, `ci`,
+`docs`, `chore`).
+
 ## Before you open a pull request
 
 Run the full local pipeline and make sure it is green:

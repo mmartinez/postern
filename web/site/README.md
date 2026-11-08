@@ -1,35 +1,42 @@
-# postern-web
+# postern-site
 
 Marketing site for [Postern](https://github.com/mmartinez/postern) — a credential-brokering HTTPS proxy for AI agents.
 
 Built with [Astro](https://astro.build) and [Tailwind CSS](https://tailwindcss.com).
 
+This is one of the repository's web components; see [web/README.md](../README.md) and
+[docs/monorepo-layout.md](../../docs/monorepo-layout.md) for how the monorepo is organized.
+
 ## Prerequisites
 
-- Node.js 18+
-- npm (or pnpm / yarn)
+None beyond the repository's container-first setup: Node is pinned in `.mise.toml` and
+installed inside the devcontainer.
 
 ## Local development
 
+Run from the repository root:
+
 ```sh
-npm install
-npm run dev
+make site-install   # install dependencies from package-lock.json
+make site-dev       # Astro dev server on http://localhost:4321
 ```
 
-The dev server starts at `http://localhost:4321` with hot-module replacement.
+The dev server runs with hot-module replacement, on a port the devcontainer forwards.
 
 ## Build
 
 ```sh
-npm run build
+make site-build
 ```
 
-Output goes to `dist/`. The build is fully static — drop it behind any CDN or static hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages, etc.).
+Output goes to `dist/`, relative to this directory. The build is fully static — drop it behind any CDN or static hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages, etc.). `make site-ci` runs what CI runs: a clean install, then the build.
 
 ## Preview production build
 
+Inside a container shell (`make shell`):
+
 ```sh
-npm run preview
+cd web/site && npm run preview
 ```
 
 Serves the `dist/` output at `http://localhost:4321`.

@@ -1,15 +1,15 @@
 # Monorepo layout
 
-> **Status: accepted design, not yet implemented.** Nothing has moved yet.
-> Stages 2–4 of the [execution checklist](#execution-checklist) carry it out;
-> update this line as they land.
+> **Status: implemented.** The root preparation (Stage 2), the site import
+> (Stage 3) and this documentation (Stage 4) have landed; the
+> [execution checklist](#execution-checklist) records what each stage changed.
 
-This repository is becoming a monorepo for three components:
+This repository is a monorepo for three components:
 
 | Component | What it is | Path | Exists |
 |---|---|---|---|
 | **postern** | The Go backend: the `postern` binary, its container image and its installer. Module `github.com/mmartinez/postern`. | repository root | yes |
-| **site** | The marketing landing page served at `https://postern.dev`: an Astro + Tailwind static site, today in the private `mmartinez/postern-web` repository. | `web/site/` | yes; imported in Stage 3 |
+| **site** | The marketing landing page served at `https://postern.dev`: an Astro + Tailwind static site, imported from the private `mmartinez/postern-web` repository at `e4ca727`. | `web/site/` | yes |
 | **app** | The postern app web frontend. | `web/app/` (reserved) | not yet |
 
 This document records the target layout, why it beats the alternatives, what
@@ -44,6 +44,7 @@ postern/
 │   │   └── public/         favicon.svg
 │   └── app/                reserved: the postern app web frontend    (created by the app's first PR)
 ├── docs/                   project documentation
+├── skills/                 Agent Skills package for setup runbooks (skills/postern)
 ├── scripts/                repository tooling
 ├── install.sh              one-line installer (its raw URL is published)
 ├── Dockerfile, docker-compose.yml, .goreleaser.yaml
@@ -59,6 +60,7 @@ Everything not marked new stays exactly where it is. Rules for placing new files
   Each component is a self-contained npm project with its own `package.json`,
   lockfile, `.gitignore` and build. There is no root `package.json`, and nothing
   outside `web/` belongs to an npm project.
+- **Agent skills** live under `skills/`, one directory per skill.
 - **Repository-wide tooling** (hooks, CI, toolchain pins, the devcontainer)
   stays at the root: one copy, shared by every component.
 - **A new web component** is a new directory under `web/` with its own
