@@ -33,13 +33,20 @@ var ErrNoBackend = errors.New("no OS secret store available " +
 	"(needs the macOS Keychain or a Secret Service such as GNOME Keyring)")
 
 // Provider implements credstore.Provider over the OS secret store. open is
-// the store opener: keyring.Open in production, a fake in tests.
+// the store opener: keyring.Open in production, a fake in tests. sem admits
+// one native store call at a time across Validate and every resolver the
+// provider builds, since all keychain credstores share the one OS store.
 type Provider struct {
 	open func(keyring.Config) (keyring.Keyring, error)
+	sem  chan struct{}
 }
 
 // NewProvider constructs a Provider that opens the real OS secret store.
-func NewProvider() *Provider { return &Provider{open: keyring.Open} }
+func NewProvider() *Provider { return newProvider(keyring.Open) }
+
+func newProvider(open func(keyring.Config) (keyring.Keyring, error)) *Provider {
+	return &Provider{open: open, sem: make(chan struct{}, 1)}
+}
 
 // Name returns the registry-facing provider name.
 func (p *Provider) Name() string { return providerName }
@@ -66,33 +73,35 @@ func (p *Provider) ValidateSettings(settings map[string]string) error {
 // Validate opens the store and reads a key no item can have, proving the
 // store answers without touching a stored value. A host with no native store
 // fails the proxy closed at boot; a store that does not answer before ctx ends
-// fails the check. token is ignored.
+// fails the check without starting another native call. token is ignored.
 func (p *Provider) Validate(ctx context.Context, _ string, settings map[string]string) error {
 	if err := p.ValidateSettings(settings); err != nil {
 		return err
 	}
-	ring, err := p.openStore()
-	if err != nil {
-		return err
+	_, err := bounded(ctx, p.sem, func() (keyring.Item, error) {
+		ring, err := p.openStore()
+		if err != nil {
+			return keyring.Item{}, err
+		}
+		return ring.Get(keyPrefix)
+	})
+	if errors.Is(err, keyring.ErrKeyNotFound) {
+		return nil
 	}
-	_, err = read(ctx, func() (keyring.Item, error) { return ring.Get(keyPrefix) })
-	if err != nil && !errors.Is(err, keyring.ErrKeyNotFound) {
-		return fmt.Errorf("keychain: read OS secret store: %w", err)
-	}
-	return nil
+	return err
 }
 
 // NewResolver returns a broker.Resolver reading from the OS secret store.
 // token is ignored.
-func (p *Provider) NewResolver(_ context.Context, _ string, settings map[string]string) (broker.Resolver, error) {
+func (p *Provider) NewResolver(ctx context.Context, _ string, settings map[string]string) (broker.Resolver, error) {
 	if err := p.ValidateSettings(settings); err != nil {
 		return nil, err
 	}
-	ring, err := p.openStore()
+	ring, err := bounded(ctx, p.sem, p.openStore)
 	if err != nil {
 		return nil, err
 	}
-	return newResolver(ring), nil
+	return &resolver{sem: p.sem, ring: ring}, nil
 }
 
 // SetSecret stores value under the item a keychain://<item> reference names,

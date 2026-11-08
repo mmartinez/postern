@@ -44,7 +44,7 @@ func (failingRing) Get(string) (keyringlib.Item, error) {
 
 func newTestProvider(items ...keyringlib.Item) (*Provider, *fakeOpener) {
 	f := &fakeOpener{ring: keyringlib.NewArrayKeyring(items)}
-	return &Provider{open: f.open}, f
+	return newProvider(f.open), f
 }
 
 func TestProvider_NameAndScheme(t *testing.T) {
@@ -96,7 +96,7 @@ func TestProvider_OpensOnlyNativeStores(t *testing.T) {
 func TestProvider_ValidateFailsWithoutNativeStore(t *testing.T) {
 	t.Parallel()
 	f := &fakeOpener{err: keyringlib.ErrNoAvailImpl}
-	p := &Provider{open: f.open}
+	p := newProvider(f.open)
 
 	err := p.Validate(context.Background(), "", nil)
 	require.ErrorIs(t, err, ErrNoBackend)
@@ -105,7 +105,7 @@ func TestProvider_ValidateFailsWithoutNativeStore(t *testing.T) {
 func TestProvider_ValidateFailsWhenStoreDoesNotAnswer(t *testing.T) {
 	t.Parallel()
 	f := &fakeOpener{ring: failingRing{}}
-	p := &Provider{open: f.open}
+	p := newProvider(f.open)
 
 	require.Error(t, p.Validate(context.Background(), "", nil))
 }
@@ -123,7 +123,7 @@ func TestProvider_RejectsSettings(t *testing.T) {
 // is still a working store.
 func TestProvider_ValidateAcceptsAnsweringStore(t *testing.T) {
 	t.Parallel()
-	p := &Provider{open: (&fakeOpener{ring: &sessionRing{}}).open}
+	p := newProvider((&fakeOpener{ring: &sessionRing{}}).open)
 	require.NoError(t, p.Validate(context.Background(), "", nil))
 }
 
@@ -184,7 +184,7 @@ func (s *sessionRing) Get(string) (keyringlib.Item, error) {
 func TestResolver_ConcurrentResolve(t *testing.T) {
 	t.Parallel()
 	ring := &sessionRing{}
-	r, err := (&Provider{open: (&fakeOpener{ring: ring}).open}).NewResolver(context.Background(), "", nil)
+	r, err := newProvider((&fakeOpener{ring: ring}).open).NewResolver(context.Background(), "", nil)
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -199,67 +199,111 @@ func TestResolver_ConcurrentResolve(t *testing.T) {
 	require.Equal(t, 8, ring.session)
 }
 
-// stallingRing blocks every Get until release is closed, standing in for a
-// store waiting on an unlock prompt nobody answers.
-type stallingRing struct {
-	keyringlib.Keyring
-	entered chan struct{} // receives once per Get that reaches the store
+// stall blocks each caller until release is closed, standing in for a store
+// waiting on an unlock prompt nobody answers.
+type stall struct {
+	entered chan struct{} // receives once per call that reaches the store
 	release chan struct{}
 	calls   atomic.Int32
 }
 
-func newStallingRing() *stallingRing {
-	return &stallingRing{entered: make(chan struct{}, 8), release: make(chan struct{})}
+func newStall() *stall {
+	return &stall{entered: make(chan struct{}, 8), release: make(chan struct{})}
 }
 
-func (s *stallingRing) Get(string) (keyringlib.Item, error) {
+func (s *stall) wait() {
 	s.calls.Add(1)
 	s.entered <- struct{}{}
 	<-s.release
+}
+
+// stallingRing stalls every Get.
+type stallingRing struct {
+	keyringlib.Keyring
+	*stall
+}
+
+func (r stallingRing) Get(string) (keyringlib.Item, error) {
+	r.wait()
 	return keyringlib.Item{Data: []byte("v")}, nil
 }
 
+// stallingOpen stalls every open, then hands out an empty store.
+func stallingOpen(s *stall) func(keyringlib.Config) (keyringlib.Keyring, error) {
+	return func(keyringlib.Config) (keyringlib.Keyring, error) {
+		s.wait()
+		return keyringlib.NewArrayKeyring(nil), nil
+	}
+}
+
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
 // A stalled store read must not outlive the caller's deadline, and while it
-// stalls, reads of other items must give up at their own deadline instead of
-// queueing on the store.
+// stalls, other reads and health probes must give up at their own deadline
+// instead of reaching the store.
 func TestResolver_StalledStoreHonorsDeadline(t *testing.T) {
 	t.Parallel()
-	ring := newStallingRing()
-	r, err := (&Provider{open: (&fakeOpener{ring: ring}).open}).NewResolver(context.Background(), "", nil)
+	s := newStall()
+	p := newProvider((&fakeOpener{ring: stallingRing{stall: s}}).open)
+	r, err := p.NewResolver(context.Background(), "", nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { <-ring.entered; cancel() }()
+	go func() { <-s.entered; cancel() }()
 	_, err = r.Resolve(ctx, "", "keychain://a")
 	require.ErrorIs(t, err, context.Canceled)
 
-	done, cancelDone := context.WithCancel(context.Background())
-	cancelDone()
-	_, err = r.Resolve(done, "", "keychain://b")
+	_, err = r.Resolve(canceledContext(), "", "keychain://b")
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, int32(1), ring.calls.Load(), "a read must not reach the store while another stalls")
+	require.ErrorIs(t, p.Validate(canceledContext(), "", nil), context.Canceled)
+	require.Equal(t, int32(1), s.calls.Load(), "nothing may reach the store while a read stalls")
 
-	close(ring.release)
+	close(s.release)
 	got, err := r.Resolve(context.Background(), "", "keychain://c")
 	require.NoError(t, err)
 	require.Equal(t, "v", got)
 }
 
-func TestProvider_ValidateHonorsDeadline(t *testing.T) {
+// The health probe re-runs Validate after every timeout. While the store
+// stalls, in its open or its read, repeated probes must give up at their
+// deadline without starting another native call.
+func TestProvider_StalledProbesDoNotPileUp(t *testing.T) {
 	t.Parallel()
-	ring := newStallingRing()
-	defer close(ring.release)
-	p := &Provider{open: (&fakeOpener{ring: ring}).open}
+	cases := map[string]func(*stall) func(keyringlib.Config) (keyringlib.Keyring, error){
+		"open stalls": stallingOpen,
+		"read stalls": func(s *stall) func(keyringlib.Config) (keyringlib.Keyring, error) {
+			return (&fakeOpener{ring: stallingRing{stall: s}}).open
+		},
+	}
+	for name, opener := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newStall()
+			p := newProvider(opener(s))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { <-ring.entered; cancel() }()
-	require.ErrorIs(t, p.Validate(ctx, "", nil), context.Canceled)
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() { <-s.entered; cancel() }()
+			require.ErrorIs(t, p.Validate(ctx, "", nil), context.Canceled)
+
+			for range 3 {
+				require.ErrorIs(t, p.Validate(canceledContext(), "", nil), context.Canceled)
+			}
+			require.Equal(t, int32(1), s.calls.Load(), "a probe must not start a native call while one stalls")
+
+			close(s.release)
+			require.NoError(t, p.Validate(context.Background(), "", nil))
+		})
+	}
 }
 
 func TestProvider_NewResolverFailsWithoutNativeStore(t *testing.T) {
 	t.Parallel()
 	f := &fakeOpener{err: keyringlib.ErrNoAvailImpl}
-	p := &Provider{open: f.open}
+	p := newProvider(f.open)
 
 	_, err := p.NewResolver(context.Background(), "", nil)
 	require.ErrorIs(t, err, ErrNoBackend)
@@ -302,7 +346,7 @@ func TestProvider_SetSecretRejectsBadInput(t *testing.T) {
 func TestProvider_SetSecretFailsWithoutNativeStore(t *testing.T) {
 	t.Parallel()
 	f := &fakeOpener{err: keyringlib.ErrNoAvailImpl}
-	p := &Provider{open: f.open}
+	p := newProvider(f.open)
 
 	require.ErrorIs(t, p.SetSecret(context.Background(), "keychain://anthropic", "v"), ErrNoBackend)
 	require.ErrorIs(t, p.RemoveSecret(context.Background(), "keychain://anthropic"), ErrNoBackend)
@@ -321,9 +365,9 @@ func TestProvider_RemoveSecretErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	missing := &Provider{open: (&fakeOpener{ring: removeRing{err: keyringlib.ErrKeyNotFound}}).open}
+	missing := newProvider((&fakeOpener{ring: removeRing{err: keyringlib.ErrKeyNotFound}}).open)
 	require.NoError(t, missing.RemoveSecret(ctx, "keychain://anthropic"), "a missing item must not fail rm")
 
-	broken := &Provider{open: (&fakeOpener{ring: removeRing{err: errors.New("dbus: no reply")}}).open}
+	broken := newProvider((&fakeOpener{ring: removeRing{err: errors.New("dbus: no reply")}}).open)
 	require.ErrorContains(t, broken.RemoveSecret(ctx, "keychain://anthropic"), "dbus: no reply")
 }
