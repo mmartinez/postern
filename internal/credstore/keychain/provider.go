@@ -65,8 +65,9 @@ func (p *Provider) ValidateSettings(settings map[string]string) error {
 
 // Validate opens the store and reads a key no item can have, proving the
 // store answers without touching a stored value. A host with no native store
-// fails the proxy closed at boot. token is ignored.
-func (p *Provider) Validate(_ context.Context, _ string, settings map[string]string) error {
+// fails the proxy closed at boot; a store that does not answer before ctx ends
+// fails the check. token is ignored.
+func (p *Provider) Validate(ctx context.Context, _ string, settings map[string]string) error {
 	if err := p.ValidateSettings(settings); err != nil {
 		return err
 	}
@@ -74,7 +75,8 @@ func (p *Provider) Validate(_ context.Context, _ string, settings map[string]str
 	if err != nil {
 		return err
 	}
-	if _, err := ring.Get(keyPrefix); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) {
+	_, err = read(ctx, func() (keyring.Item, error) { return ring.Get(keyPrefix) })
+	if err != nil && !errors.Is(err, keyring.ErrKeyNotFound) {
 		return fmt.Errorf("keychain: read OS secret store: %w", err)
 	}
 	return nil
@@ -90,7 +92,7 @@ func (p *Provider) NewResolver(_ context.Context, _ string, settings map[string]
 	if err != nil {
 		return nil, err
 	}
-	return &resolver{ring: ring}, nil
+	return newResolver(ring), nil
 }
 
 // SetSecret stores value under the item a keychain://<item> reference names,
@@ -121,10 +123,11 @@ func (p *Provider) RemoveSecret(_ context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
-	if err := ring.Remove(keyPrefix + name); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) {
-		return err
+	err = ring.Remove(keyPrefix + name)
+	if errors.Is(err, keyring.ErrKeyNotFound) {
+		return nil
 	}
-	return nil
+	return err
 }
 
 // openStore opens the first native OS secret store available. The library's
@@ -146,11 +149,10 @@ func (p *Provider) openStore() (keyring.Keyring, error) {
 		// Lets the binary that wrote an item read it back without a prompt.
 		KeychainTrustApplication: true,
 	})
-	if errors.Is(err, keyring.ErrNoAvailImpl) {
-		return nil, ErrNoBackend
-	}
+	// keyring.Open reports every failure, including a backend that would not
+	// open, as ErrNoAvailImpl.
 	if err != nil {
-		return nil, fmt.Errorf("keychain: open OS secret store: %w", err)
+		return nil, ErrNoBackend
 	}
 	return ring, nil
 }

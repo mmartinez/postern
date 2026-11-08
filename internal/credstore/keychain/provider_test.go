@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	keyringlib "github.com/99designs/keyring"
@@ -109,10 +110,21 @@ func TestProvider_ValidateFailsWhenStoreDoesNotAnswer(t *testing.T) {
 	require.Error(t, p.Validate(context.Background(), "", nil))
 }
 
-func TestProvider_ValidateRejectsSettings(t *testing.T) {
+func TestProvider_RejectsSettings(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestProvider()
-	require.Error(t, p.Validate(context.Background(), "", map[string]string{"x": "y"}))
+	settings := map[string]string{"x": "y"}
+	require.Error(t, p.Validate(context.Background(), "", settings))
+	_, err := p.NewResolver(context.Background(), "", settings)
+	require.Error(t, err)
+}
+
+// A store whose probe read succeeds (some other tool created the probe key)
+// is still a working store.
+func TestProvider_ValidateAcceptsAnsweringStore(t *testing.T) {
+	t.Parallel()
+	p := &Provider{open: (&fakeOpener{ring: &sessionRing{}}).open}
+	require.NoError(t, p.Validate(context.Background(), "", nil))
 }
 
 func TestResolver_Resolve(t *testing.T) {
@@ -156,12 +168,23 @@ func TestResolver_Resolve(t *testing.T) {
 	}
 }
 
-// The secret-service backend mutates its session on every Get, so concurrent
-// resolves must be serialized. Run with -race.
+// sessionRing models the Secret Service backend, which rewrites its session
+// field on every Get: unserialized concurrent reads are a data race.
+type sessionRing struct {
+	keyringlib.Keyring
+	session int
+}
+
+func (s *sessionRing) Get(string) (keyringlib.Item, error) {
+	s.session++
+	return keyringlib.Item{Data: []byte("v")}, nil
+}
+
+// Concurrent resolves must be serialized. Run with -race.
 func TestResolver_ConcurrentResolve(t *testing.T) {
 	t.Parallel()
-	p, _ := newTestProvider(keyringlib.Item{Key: "postern/a", Data: []byte("v")})
-	r, err := p.NewResolver(context.Background(), "", nil)
+	ring := &sessionRing{}
+	r, err := (&Provider{open: (&fakeOpener{ring: ring}).open}).NewResolver(context.Background(), "", nil)
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -173,6 +196,64 @@ func TestResolver_ConcurrentResolve(t *testing.T) {
 		})
 	}
 	wg.Wait()
+	require.Equal(t, 8, ring.session)
+}
+
+// stallingRing blocks every Get until release is closed, standing in for a
+// store waiting on an unlock prompt nobody answers.
+type stallingRing struct {
+	keyringlib.Keyring
+	entered chan struct{} // receives once per Get that reaches the store
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func newStallingRing() *stallingRing {
+	return &stallingRing{entered: make(chan struct{}, 8), release: make(chan struct{})}
+}
+
+func (s *stallingRing) Get(string) (keyringlib.Item, error) {
+	s.calls.Add(1)
+	s.entered <- struct{}{}
+	<-s.release
+	return keyringlib.Item{Data: []byte("v")}, nil
+}
+
+// A stalled store read must not outlive the caller's deadline, and while it
+// stalls, reads of other items must give up at their own deadline instead of
+// queueing on the store.
+func TestResolver_StalledStoreHonorsDeadline(t *testing.T) {
+	t.Parallel()
+	ring := newStallingRing()
+	r, err := (&Provider{open: (&fakeOpener{ring: ring}).open}).NewResolver(context.Background(), "", nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-ring.entered; cancel() }()
+	_, err = r.Resolve(ctx, "", "keychain://a")
+	require.ErrorIs(t, err, context.Canceled)
+
+	done, cancelDone := context.WithCancel(context.Background())
+	cancelDone()
+	_, err = r.Resolve(done, "", "keychain://b")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int32(1), ring.calls.Load(), "a read must not reach the store while another stalls")
+
+	close(ring.release)
+	got, err := r.Resolve(context.Background(), "", "keychain://c")
+	require.NoError(t, err)
+	require.Equal(t, "v", got)
+}
+
+func TestProvider_ValidateHonorsDeadline(t *testing.T) {
+	t.Parallel()
+	ring := newStallingRing()
+	defer close(ring.release)
+	p := &Provider{open: (&fakeOpener{ring: ring}).open}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-ring.entered; cancel() }()
+	require.ErrorIs(t, p.Validate(ctx, "", nil), context.Canceled)
 }
 
 func TestProvider_NewResolverFailsWithoutNativeStore(t *testing.T) {
@@ -225,4 +306,24 @@ func TestProvider_SetSecretFailsWithoutNativeStore(t *testing.T) {
 
 	require.ErrorIs(t, p.SetSecret(context.Background(), "keychain://anthropic", "v"), ErrNoBackend)
 	require.ErrorIs(t, p.RemoveSecret(context.Background(), "keychain://anthropic"), ErrNoBackend)
+}
+
+// removeRing reports the native stores' Remove behavior: a missing key is
+// ErrKeyNotFound, unlike the in-memory ArrayKeyring.
+type removeRing struct {
+	keyringlib.Keyring
+	err error
+}
+
+func (r removeRing) Remove(string) error { return r.err }
+
+func TestProvider_RemoveSecretErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	missing := &Provider{open: (&fakeOpener{ring: removeRing{err: keyringlib.ErrKeyNotFound}}).open}
+	require.NoError(t, missing.RemoveSecret(ctx, "keychain://anthropic"), "a missing item must not fail rm")
+
+	broken := &Provider{open: (&fakeOpener{ring: removeRing{err: errors.New("dbus: no reply")}}).open}
+	require.ErrorContains(t, broken.RemoveSecret(ctx, "keychain://anthropic"), "dbus: no reply")
 }
