@@ -56,6 +56,38 @@ func TestAgentChild(_ *testing.T) {
 	os.Exit(0)
 }
 
+func TestAgentLauncherLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("# operator comment\nproxy:\n  listen: 127.0.0.1:1701\n  cache_ttl: 1h\n  client_auth: required\n"), 0o600))
+	t.Setenv("POSTERN_LAUNCHER_TEST", "1")
+	t.Setenv("POSTERN_ENROLLMENT_TEST", path)
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := NewAgentCmd()
+		var output bytes.Buffer
+		cmd.SetOut(&output)
+		cmd.SetErr(&output)
+		cmd.SetArgs(args)
+		require.NoError(t, cmd.Execute())
+		require.False(t, strings.Contains(output.String(), "pst_"), "key appeared in command output")
+		return output.String()
+	}
+	run("add", "agent", "--config", path, "--exec", executable, "-test.run=^TestAgentChild$")
+	before, err := config.LoadForCLI(path, true)
+	require.NoError(t, err)
+	require.Equal(t, "agent\n", run("list", "--config", path))
+	run("rotate", "agent", "--config", path, "--exec", executable, "-test.run=^TestAgentChild$")
+	after, err := config.LoadForCLI(path, true)
+	require.NoError(t, err)
+	require.True(t, before.Agents[0].KeySHA256 != after.Agents[0].KeySHA256, "rotation did not replace verifier")
+	run("remove", "agent", "--config", path)
+	removed, err := config.LoadForCLI(path, true)
+	require.NoError(t, err)
+	require.Zero(t, len(removed.Agents))
+}
+
 func TestRemoteEnrollmentArtifact(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "enrollment.yaml")
 	t.Setenv("POSTERN_LAUNCHER_TEST", "1")

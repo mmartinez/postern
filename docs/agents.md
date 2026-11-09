@@ -11,3 +11,10 @@ resolution or upstream access. Configure the recipient's public CA trust before
 launch. Legacy bootstrap snippets cannot enroll authenticated clients. Processes
 that can inspect the child environment can impersonate that identity; deployments
 must enforce egress containment. Loss of the in-memory key requires re-enrollment.
+
+Use `postern agent rotate NAME --exec PROGRAM [ARGS...]` to replace a key and
+`postern agent remove NAME` to revoke it. Reload publishes identities and rules
+together, permanently invalidates old sessions and tears down busy client and
+upstream connections. Old grants never transfer to a new incarnation. Launch
+failure retains the new verifier; it never restores a rotated key. Configuration
+edits preserve comments, reject concurrent editors and replace the file atomically.

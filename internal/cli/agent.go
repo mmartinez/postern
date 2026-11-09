@@ -20,7 +20,7 @@ import (
 // NewAgentCmd constructs the named, in-memory credential launcher and inventory.
 func NewAgentCmd() *cobra.Command {
 	root := &cobra.Command{Use: "agent", Short: "Enroll and launch authenticated proxy clients", SilenceUsage: true, SilenceErrors: true}
-	for _, action := range []string{"add", "list"} {
+	for _, action := range []string{"add", "rotate", "remove", "list"} {
 		usage := action + " [NAME] [flags]"
 		if action == "add" || action == "rotate" {
 			usage = action + " NAME [flags] --exec PROGRAM [ARGS...]"
