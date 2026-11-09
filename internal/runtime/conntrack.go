@@ -82,6 +82,7 @@ type trackedConn struct {
 	accepted     time.Time    // fixed at track time; tier-1 clock start
 	lastActivity atomic.Int64 // unix nanos of last successful Read/Write
 	progress     atomic.Int64 // total bytes read+written since accept
+	closed       chan struct{}
 	closeOnce    sync.Once
 	half         halfClosable // non-nil when the underlying conn half-closes
 }
@@ -109,6 +110,7 @@ func (c *trackedConn) markActive() { c.lastActivity.Store(time.Now().UnixNano())
 func (c *trackedConn) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
+		close(c.closed)
 		c.reg.remove(c)
 		err = c.hangupConn.Close()
 	})
@@ -158,6 +160,7 @@ func (r *connRegistry) track(c net.Conn) *trackedConn {
 	t := &trackedConn{
 		hangupConn: newHangupConn(c),
 		reg:        r,
+		closed:     make(chan struct{}),
 		accepted:   time.Now(),
 	}
 	t.lastActivity.Store(t.accepted.UnixNano())
@@ -223,3 +226,6 @@ func (l *trackingListener) Accept() (net.Conn, error) {
 	}
 	return l.reg.track(c), nil
 }
+
+// Closed signals completion of the underlying client connection.
+func (c *trackedConn) Closed() <-chan struct{} { return c.closed }

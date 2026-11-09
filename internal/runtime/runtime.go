@@ -40,6 +40,7 @@ const idleTimeout = 2 * time.Minute
 // Options carries the resolved configuration runtime needs. CLI populates
 // it from cobra flags and config files; tests construct it inline.
 type Options struct {
+	Authenticator proxy.Authenticator
 	// CA is the local certificate authority used to MITM TLS. Required.
 	CA *ca.CA
 
@@ -147,8 +148,22 @@ func New(opts Options) (*Runtime, error) {
 	if opts.Addr == "" {
 		return nil, errors.New("addr is required")
 	}
+	if opts.Authenticator != nil {
+		host, _, err := net.SplitHostPort(opts.Addr)
+		ip := net.ParseIP(host)
+		if err != nil || ip == nil || !ip.IsLoopback() {
+			return nil, errors.New("network authentication requires a protected proxy connection")
+		}
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(discardWriter{}, nil))
+	}
+	if opts.Authenticator == nil {
+		host, _, err := net.SplitHostPort(opts.Addr)
+		ip := net.ParseIP(host)
+		if err == nil && (ip == nil || !ip.IsLoopback()) {
+			opts.Logger.Warn("unauthenticated network proxy has no authenticated-agent security guarantee")
+		}
 	}
 	if opts.AdminListen != "" && opts.HealthStatus == nil {
 		return nil, errors.New("admin_listen requires a HealthStatus source")
@@ -161,6 +176,7 @@ func New(opts Options) (*Runtime, error) {
 
 	p, err := proxy.New(proxy.Config{
 		CA:                 opts.CA,
+		Authenticator:      opts.Authenticator,
 		Minter:             minter,
 		Logger:             opts.Logger,
 		UpstreamTLS:        opts.UpstreamTLS,
@@ -188,6 +204,7 @@ func New(opts Options) (*Runtime, error) {
 			ReadHeaderTimeout: 30 * time.Second,
 			IdleTimeout:       idle,
 			ConnContext:       proxy.ConnContext,
+			TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
 		},
 
 		stalledConnTimeout: stalledConnTimeout,
@@ -268,7 +285,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := r.srv.Serve(&trackingListener{Listener: listener, reg: r.conns})
+		var inbound net.Listener = &trackingListener{Listener: listener, reg: r.conns}
+
+		err := r.srv.Serve(inbound)
 		if errors.Is(err, http.ErrServerClosed) {
 			serveErr <- nil
 			return

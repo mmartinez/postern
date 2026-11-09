@@ -29,6 +29,7 @@ import (
 	_ "github.com/mmartinez/postern/internal/credstore/oauth2"
 	_ "github.com/mmartinez/postern/internal/credstore/onepassword"
 	"github.com/mmartinez/postern/internal/logging"
+	"github.com/mmartinez/postern/internal/proxy"
 	"github.com/mmartinez/postern/internal/runtime"
 	"github.com/mmartinez/postern/internal/token"
 )
@@ -108,6 +109,7 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 
 			rt, err := runtime.New(runtime.Options{
 				CA:                 authority,
+				Authenticator:      bundle.authenticator,
 				Addr:               addr,
 				Logger:             logger,
 				PreUpstreamHandler: bundle.hook,
@@ -167,6 +169,7 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 // captures proxy + token at boot so the reloader can warn when an edit
 // touches a field that needs a restart.
 type brokerBundle struct {
+	authenticator  proxy.Authenticator
 	hook           func(*http.Request) *http.Response
 	engine         *broker.Engine
 	scrubResponses *bool
@@ -262,6 +265,19 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		// read when there is a config to read it from; nil means scrubbing on.
 		if cfg != nil {
 			b.scrubResponses = cfg.Proxy.ScrubResponses
+
+			if cfg.Proxy.ClientAuth == "required" {
+				engine := broker.NewEngine(nil)
+				if err := engine.Publish(nil, cfg.Agents); err != nil {
+					return brokerBundle{}, err
+				}
+				b.engine, b.authenticator, b.cfgPath = engine, engine, cfgPath
+				b.baseline = &broker.Baseline{Proxy: cfg.Proxy, CredStores: cfg.CredStores}
+				b.version = broker.NewVersionCounter()
+				b.shouldIntercept = func(host string) bool { _, ok := engine.Match(host); return ok }
+				b.blockNonBrokered = cfg.Proxy.OnNoMatch == config.OnNoMatchBlock
+				b.hook = broker.Hook(engine, nil, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger) //nolint:bodyclose // hook is a closure; proxy closes synthetic response bodies
+			}
 		}
 		return b, nil
 	}
@@ -271,6 +287,13 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		return brokerBundle{}, fmt.Errorf("translate rules: %w", err)
 	}
 	engine := broker.NewEngine(rules)
+	if err := engine.Publish(rules, cfg.Agents); err != nil {
+		return brokerBundle{}, err
+	}
+	var authenticator proxy.Authenticator
+	if cfg.Proxy.ClientAuth == "required" {
+		authenticator = engine
+	}
 
 	version := broker.NewVersionCounter()
 	health := NewHealthTracker(true, version.Load)
@@ -316,10 +339,11 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 	)
 	gate := broker.NewGate(ctx, broker.GateConfig{Approver: newApprover(), Logger: logger})
 	return brokerBundle{
-		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger, gate), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
-		engine:  engine,
-		cfgPath: cfgPath,
-		listen:  cfg.Proxy.Listen,
+		authenticator: authenticator,
+		hook:          broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger, gate), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
+		engine:        engine,
+		cfgPath:       cfgPath,
+		listen:        cfg.Proxy.Listen,
 		baseline: &broker.Baseline{
 			Proxy:      cfg.Proxy,
 			CredStores: cfg.CredStores,

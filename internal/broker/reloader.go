@@ -136,7 +136,10 @@ func applyReload(engine *Engine, ev config.Event, logger *slog.Logger, baseline 
 		)
 		return
 	}
-	engine.Swap(newRules)
+	if err := engine.Publish(newRules, ev.New.Agents); err != nil {
+		logger.Warn("config reload rejected", slog.String("reason", "invalid identity enrollment"))
+		return
+	}
 	version.Bump()
 	logger.Info("config reload applied", slog.Int("rules", len(newRules)))
 
@@ -164,6 +167,9 @@ func denyAllAtBoot(baseline *Baseline) bool {
 // swap path does not pick up. Without this signal the user sees "config
 // reload applied" and assumes their cache_ttl/token change took effect.
 func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.Logger) {
+	if reloaded.Proxy.ClientAuth != baseline.Proxy.ClientAuth {
+		logger.Warn("config edit ignored", slog.String("field", "proxy.client_auth"), slog.String("reason", "authentication mode is bound at startup; restart postern to apply"))
+	}
 	if reloaded.Proxy.CacheTTL != baseline.Proxy.CacheTTL {
 		logger.Warn("config edit ignored",
 			slog.String("field", "proxy.cache_ttl"),

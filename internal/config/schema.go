@@ -74,10 +74,18 @@ const DefaultMaxBodyBytes = 1 << 20 // 1 MiB
 //     vendor and token source. Top-level `token:` must be omitted in this
 //     form (validation rejects mixing the two).
 type Config struct {
+	Agents     []Agent     `yaml:"agents,omitempty"`
 	Token      Token       `yaml:"token,omitempty"`
 	CredStores []CredStore `yaml:"credstores,omitempty"`
 	Proxy      Proxy       `yaml:"proxy"`
 	Rules      []Rule      `yaml:"rules"`
+}
+
+// Agent is a named proxy identity. KeySHA256 is the only persistable verifier;
+// proxy key material is never written to configuration.
+type Agent struct {
+	Name      string `yaml:"name"`
+	KeySHA256 string `yaml:"key_sha256"`
 }
 
 // CredStore declares a single credential vendor configuration the broker
@@ -154,7 +162,8 @@ func (t Token) IsZero() bool {
 
 // Proxy is the listener + caching configuration for the forward HTTPS proxy.
 type Proxy struct {
-	Listen string `yaml:"listen"`
+	ClientAuth string `yaml:"client_auth,omitempty"`
+	Listen     string `yaml:"listen"`
 	// CacheTTL is the legacy scalar credential-cache TTL. It is retained for
 	// backward compatibility and is an alias for Cache.TTL; new configs should
 	// use the cache block. See Proxy.CacheSettings for how the two interact.

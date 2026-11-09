@@ -24,6 +24,9 @@ func Load(r io.Reader) (*Config, *yaml.Node, error) {
 	if err := yaml.Unmarshal(raw, &ast); err != nil {
 		return nil, nil, fmt.Errorf("parse config: %w", err)
 	}
+	if err := checkEnrollmentNodes(&ast); err != nil {
+		return nil, nil, err
+	}
 
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(raw))

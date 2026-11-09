@@ -20,12 +20,14 @@ import (
 	"github.com/elazarl/goproxy"
 
 	"github.com/mmartinez/postern/internal/ca"
+	"github.com/mmartinez/postern/internal/identity"
 )
 
 // Config bundles the dependencies New needs to construct a Proxy. Plumbing
 // these as an explicit struct (rather than positional args) keeps cmd/postern
 // wiring stable as later slices add fields.
 type Config struct {
+	Authenticator Authenticator
 	// CA is the local certificate authority used to sign per-host leaf
 	// certificates during MITM. Required.
 	CA *ca.CA
@@ -93,8 +95,9 @@ type Config struct {
 // Proxy is the postern HTTPS proxy. Construct one with New; expose its
 // http.Handler to an http.Server (or httptest server in tests).
 type Proxy struct {
-	cfg    Config
-	server *goproxy.ProxyHttpServer
+	throttle *failureThrottle
+	cfg      Config
+	server   *goproxy.ProxyHttpServer
 }
 
 // New validates cfg and returns a ready-to-serve Proxy. Required fields
@@ -113,6 +116,7 @@ func New(cfg Config) (*Proxy, error) {
 
 	gp := goproxy.NewProxyHttpServer()
 	gp.Verbose = false
+	gp.AllowHTTP2 = false
 	// goproxy's default logger writes to stderr; mute it — we log via slog.
 	gp.Logger = mutedLogger{}
 
@@ -158,8 +162,11 @@ func New(cfg Config) (*Proxy, error) {
 			// api.example:443 tunnel would pass the guard and receive the
 			// brokered credential. The tunnel also carries the client conn's
 			// hangup watch to the pre-upstream hook.
-			t := &tunnel{authority: strings.ToLower(host)}
-			t.hangup, _ = ctx.Req.Context().Value(connKey{}).(hangupWatcher)
+			markTunnelStarted(ctx.Req)
+			t := &tunnel{authority: strings.ToLower(host), principal: identity.FromContext(ctx.Req.Context()), ctx: ctx.Req.Context()}
+			if encrypted, _ := ctx.Req.Context().Value(tlsKey{}).(bool); !encrypted {
+				t.hangup, _ = ctx.Req.Context().Value(connKey{}).(hangupWatcher)
+			}
 			ctx.UserData = t
 			return &goproxy.ConnectAction{
 				Action:    goproxy.ConnectMitm,
@@ -171,6 +178,7 @@ func New(cfg Config) (*Proxy, error) {
 	// Registered before the logging/pre-upstream handlers so a malformed
 	// or non-brokered inner request is rejected before anything
 	// dereferences req.URL.
+	installIdentityGuard(gp, cfg.Authenticator)
 	installInnerGuard(gp, cfg.Logger)
 	// Registered before the logging handler so the "proxy response" line
 	// describes what the agent actually receives, not what upstream sent.
@@ -180,9 +188,15 @@ func New(cfg Config) (*Proxy, error) {
 	installResponseScrubber(gp, cfg.Logger, scrubEnabled(cfg.ScrubResponses))
 	installHandlers(gp, cfg.Logger)
 	installPreUpstream(gp, cfg.Logger, cfg.PreUpstreamHandler)
+	installIdentityGuard(gp, cfg.Authenticator)
+	installAdmission(gp, cfg.Authenticator)
 	installConnectionErrHandler(gp, cfg.Logger)
 
-	return &Proxy{cfg: cfg, server: gp}, nil
+	throttle := newFailureThrottle(time.Now)
+	throttle.onTransition = func(source string, exhausted bool) {
+		cfg.Logger.Info("proxy authentication throttle transition", slog.String("source", source), slog.Bool("exhausted", exhausted))
+	}
+	return &Proxy{cfg: cfg, server: gp, throttle: throttle}, nil
 }
 
 // Outbound timeout budget. goproxy's default transport sets zero timeouts,
@@ -242,7 +256,7 @@ func newUpstreamTransport(cfg Config) *http.Transport {
 
 // Handler returns the proxy's net/http handler. Mount it on any http.Server
 // (postern uses a 127.0.0.1-bound server in production; tests use httptest).
-func (p *Proxy) Handler() http.Handler { return p.server }
+func (p *Proxy) Handler() http.Handler { return http.HandlerFunc(p.serveHTTP) }
 
 // mitmTLSConfig builds the per-CONNECT TLS config factory that goproxy hands
 // the client. Each invocation mints (or cache-hits) a leaf for the requested
@@ -260,6 +274,7 @@ func mitmTLSConfig(minter *ca.Minter) func(host string, ctx *goproxy.ProxyCtx) (
 		}
 		return &tls.Config{
 			Certificates: []tls.Certificate{*leaf},
+			NextProtos:   []string{"http/1.1"},
 			MinVersion:   tls.VersionTLS12,
 		}, nil
 	}

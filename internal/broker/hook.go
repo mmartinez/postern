@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mmartinez/postern/internal/config"
+	"github.com/mmartinez/postern/internal/identity"
 )
 
 // Resolver turns a vendor-specific secret reference into the resolved
@@ -81,6 +82,18 @@ func Hook(engine *Engine, resolver Resolver, onNoMatch config.OnNoMatch, maxBody
 		g = gate[0]
 	}
 	return func(req *http.Request) *http.Response {
+		principal := identity.FromContext(req.Context())
+		if principal != nil && !engine.Current(principal) {
+			return failClosed(req)
+		}
+		req.Header.Del("Proxy-Authorization")
+		selected := engine.snapshot.Load()
+		*req = *req.WithContext(context.WithValue(req.Context(), authorizationKey{}, selected.epoch))
+		resolver := guardedResolver{engine: engine, next: resolver}
+		logger := logger
+		if principal != nil {
+			logger = logger.With(slog.String("agent", principal.Name()))
+		}
 		host := canonicalHost(stripPort(req.URL.Host))
 		rule, ok := engine.Match(host)
 		if !ok {
