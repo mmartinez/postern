@@ -1,20 +1,84 @@
-# Agent enrollment
+# Agent enrollment and launch
 
-New configurations require named proxy identities. Enroll a client and launch
-its explicitly selected recipient with `postern agent add NAME --exec PROGRAM
-[ARGS...]`. Keys stay in memory and reach only the child environment; configuration
-stores only a verifier. `postern agent list` prints names only. A hash-only remote
-enrollment artifact can be selected with `--enrollment-out PATH --proxy URL`.
+Start from `postern config init`, install the proxy CA, and enable required client
+authentication. Enroll only into a writable, protected configuration. The launcher
+requires its recipient before mutation, keeps the key in memory, commits only the
+verifier and starts the selected program without a shell:
 
-Missing or invalid proxy authentication gets a generic 407 before credential
-resolution or upstream access. Configure the recipient's public CA trust before
-launch. Legacy bootstrap snippets cannot enroll authenticated clients. Processes
-that can inspect the child environment can impersonate that identity; deployments
-must enforce egress containment. Loss of the in-memory key requires re-enrollment.
+```sh
+postern agent add worker --ca /trusted/postern-ca.pem --exec PROGRAM ARGUMENTS
+postern agent rotate worker --ca /trusted/postern-ca.pem --exec PROGRAM ARGUMENTS
+postern agent list
+postern agent remove worker
+```
 
-Use `postern agent rotate NAME --exec PROGRAM [ARGS...]` to replace a key and
-`postern agent remove NAME` to revoke it. Reload publishes identities and rules
-together, permanently invalidates old sessions and tears down busy client and
-upstream connections. Old grants never transfer to a new incarnation. Launch
-failure retains the new verifier; it never restores a rotated key. Configuration
-edits preserve comments, reject concurrent editors and replace the file atomically.
+`--exec` consumes all remaining arguments verbatim. All launcher flags go before
+it. `--config PATH` selects the live configuration; `--proxy URL` selects an
+endpoint without userinfo. TLS configs derive their default URL from the first
+configured listener hostname. `--ca PATH` supplies a public CA bundle to
+`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and `REQUESTS_CA_BUNDLE` in the child only.
+Without it the recipient must already trust both hops through its own settings
+or system store. curl also needs its explicit `--proxy-cacert PATH` option for
+the proxy hop. The recipient's argument list may include public trust settings,
+but must never include proxy keys.
+
+The child receives authenticated HTTP(S) proxy URLs and `NODE_USE_ENV_PROXY=1`.
+Existing proxy/bypass
+environment settings are replaced in that child; parent settings are unchanged.
+This is a credential-aware launcher, not the connect/disconnect configuration
+manager. Applications can ignore environment proxy settings; use egress
+containment and verify the selected client's real request path.
+
+For a remote client, run issuance on its trusted launcher host:
+
+```sh
+postern agent add worker --enrollment-out ./worker-enrollment.yaml \
+  --proxy https://proxy.example.test:1701 --ca /trusted/postern-ca.pem \
+  --exec PROGRAM ARGUMENTS
+```
+
+The artifact contains only the name and verifier and has owner-only permissions.
+An operator installs its `agents` entry through the existing protected config
+workflow. The client receives 407 until that snapshot applies. `--enrollment-out`
+and live `--config` mutation are mutually exclusive; existing artifacts are never
+overwritten. A read-only live config is an error, never a reason to print a key.
+
+Keys cannot be recovered/exported. Process loss requires re-enrollment/rotation.
+Launch failure leaves enrollment committed and never rolls a rotation back.
+Removing/rotating a live identity tears down busy sessions as well as idle ones.
+Old configuration backups can re-enable old keys; handle them as protected state.
+
+## Compatibility evidence
+
+The real listener, authentication path and MITM were rechecked on Linux with
+these clients. Each reached a local TLS mock upstream with its named proxy
+identity, without forwarding proxy authentication. These are transport checks;
+the CLI model endpoints returned a deliberate refusal and made no model-service
+calls. They do not certify every configuration or client release.
+
+| Client | Version | Proxy hop | Public CA setting |
+| --- | --- | --- | --- |
+| curl | 8.14.1 | TLS | `--proxy-cacert` and destination `--cacert` |
+| Go net/http | 1.27.3 | TLS | `SSL_CERT_FILE`, explicit proxy URL selection |
+| Node fetch | 24.21.0 | TLS | `NODE_EXTRA_CA_CERTS`, `NODE_USE_ENV_PROXY=1` |
+| Claude Code | 2.1.319 | TLS | `NODE_EXTRA_CA_CERTS` |
+| Codex CLI | 0.167.0 | TLS | `SSL_CERT_FILE` |
+| requests / urllib3 | 2.34.0 / 2.8.0 | TLS | `REQUESTS_CA_BUNDLE` |
+| httpx | 0.28.1 | TLS | `SSL_CERT_FILE` |
+| Python urllib | 3.13.5 | protected plaintext | `SSL_CERT_FILE` for destination |
+
+urllib's HTTPS proxy route did not protect CONNECT credentials in the preliminary
+spike, so it uses loopback or an explicitly externally protected plaintext path.
+Never interpret `HTTPS_PROXY` or destination TLS alone as proxy-hop protection.
+For opaque passthrough, a client still needs normal destination roots; provide
+a public bundle containing the Postern CA and the roots the recipient needs.
+
+The opt-in `TestClientsAgainstProxyImplementation` uses testdata/client-check.sh.
+Inside `make shell`, set `POSTERN_CLIENT_CHECK=1`, point `POSTERN_CLIENT_TOOLS`
+at the directory containing the two CLI executables, make requests/httpx available
+to Python, and run the runtime package test with that name. Tests generate keys
+in memory, discard client diagnostics and write only a public CA certificate.
+CLI fixtures use nonpersistent sessions and a local mock endpoint. Codex's
+[noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode) and
+[endpoint override](https://learn.chatgpt.com/docs/config-file/config-advanced)
+settings were checked against official documentation and the installed CLI.

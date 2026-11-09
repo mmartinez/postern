@@ -162,8 +162,10 @@ func (t Token) IsZero() bool {
 
 // Proxy is the listener + caching configuration for the forward HTTPS proxy.
 type Proxy struct {
-	ClientAuth string `yaml:"client_auth,omitempty"`
-	Listen     string `yaml:"listen"`
+	TLS                 *ListenerTLS `yaml:"tls,omitempty"`
+	ExternallyProtected bool         `yaml:"externally_protected,omitempty"`
+	ClientAuth          string       `yaml:"client_auth,omitempty"`
+	Listen              string       `yaml:"listen"`
 	// CacheTTL is the legacy scalar credential-cache TTL. It is retained for
 	// backward compatibility and is an alias for Cache.TTL; new configs should
 	// use the cache block. See Proxy.CacheSettings for how the two interact.
@@ -195,6 +197,11 @@ type Proxy struct {
 	// their incremental delivery. Bound at startup; a hot-reload edit warns
 	// and does not take effect.
 	ScrubResponses *bool `yaml:"scrub_responses,omitempty"`
+}
+
+// ListenerTLS selects TLS for the proxy hop and restricts minted listener names.
+type ListenerTLS struct {
+	Names []string `yaml:"names"`
 }
 
 // ScrubResponsesEnabled reports whether the response-path credential scrub is

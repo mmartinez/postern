@@ -22,7 +22,7 @@ import (
 
 func TestRevocationClosesBusyMITMStream(t *testing.T) {
 	t.Parallel()
-	for _, encrypted := range []bool{false} {
+	for _, encrypted := range []bool{false, true} {
 		name := "plaintext"
 		if encrypted {
 			name = "tls"
@@ -48,9 +48,13 @@ func checkRevokedMITMStream(t *testing.T, encrypted bool) {
 	pool := x509.NewCertPool()
 	pool.AddCert(u.Certificate())
 	root := fixtureCA(t)
-
+	var names []string
+	if encrypted {
+		names = []string{"localhost"}
+	}
 	rt, err := runtime.New(runtime.Options{
-		CA: root, Addr: "127.0.0.1:0", Authenticator: e,
+		ListenerTLSNames: names,
+		CA:               root, Addr: "127.0.0.1:0", Authenticator: e,
 		UpstreamTLS: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	})
 	require.NoError(t, err)

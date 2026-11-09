@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"sync/atomic"
 
@@ -167,6 +168,9 @@ func denyAllAtBoot(baseline *Baseline) bool {
 // swap path does not pick up. Without this signal the user sees "config
 // reload applied" and assumes their cache_ttl/token change took effect.
 func warnDriftedFields(reloaded *config.Config, baseline Baseline, logger *slog.Logger) {
+	if !reflect.DeepEqual(reloaded.Proxy.TLS, baseline.Proxy.TLS) || reloaded.Proxy.ExternallyProtected != baseline.Proxy.ExternallyProtected {
+		logger.Warn("config edit ignored", slog.String("field", "proxy.tls/externally_protected"), slog.String("reason", "listener settings require restart"))
+	}
 	if reloaded.Proxy.ClientAuth != baseline.Proxy.ClientAuth {
 		logger.Warn("config edit ignored", slog.String("field", "proxy.client_auth"), slog.String("reason", "authentication mode is bound at startup; restart postern to apply"))
 	}

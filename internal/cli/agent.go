@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -29,6 +30,7 @@ func NewAgentCmd() *cobra.Command {
 		cmd.Flags().String("config", "", "Config path (default: ~/.postern/config.yaml)")
 		cmd.Flags().String("enrollment-out", "", "Write hash-only enrollment artifact")
 		cmd.Flags().String("proxy", "", "Proxy URL without credentials")
+		cmd.Flags().String("ca", "", "Public CA bundle for both TLS hops")
 		cmd.RunE = func(cmd *cobra.Command, args []string) error { return runAgent(cmd, action, args) }
 		root.AddCommand(cmd)
 	}
@@ -65,7 +67,12 @@ func runAgent(cmd *cobra.Command, action string, args []string) error {
 	}
 	out, _ := cmd.Flags().GetString("enrollment-out")
 	proxyURL, _ := cmd.Flags().GetString("proxy")
-
+	caPath, _ := cmd.Flags().GetString("ca")
+	if caPath != "" {
+		if _, err := os.Stat(caPath); err != nil {
+			return errors.New("public CA bundle is not readable")
+		}
+	}
 	if out != "" && (cmd.Flags().Changed("config") || action != "add" && action != "rotate") {
 		return errors.New("enrollment output is mutually exclusive with live config mutation")
 	}
@@ -89,6 +96,10 @@ func runAgent(cmd *cobra.Command, action string, args []string) error {
 		}
 		if proxyURL == "" {
 			proxyURL = "http://" + cfg.Proxy.Listen
+			if cfg.Proxy.TLS != nil {
+				_, port, _ := net.SplitHostPort(cfg.Proxy.Listen)
+				proxyURL = "https://" + net.JoinHostPort(cfg.Proxy.TLS.Names[0], port)
+			}
 		}
 	}
 	name := args[0]
@@ -114,7 +125,11 @@ func runAgent(cmd *cobra.Command, action string, args []string) error {
 	u.User = url.UserPassword(name, key)
 	child := exec.CommandContext(cmd.Context(), recipient[0], recipient[1:]...) //nolint:gosec // explicitly selected recipient, never a shell
 	child.Env = launcherEnv(os.Environ(), u.String())
-
+	if caPath != "" {
+		for _, variable := range []string{"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE"} {
+			child.Env = append(child.Env, variable+"="+caPath)
+		}
+	}
 	child.Stdin, child.Stdout, child.Stderr = cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
 	if err := child.Run(); err != nil {
 		return fmt.Errorf("agent %s: client launch or execution failed", name)
@@ -157,6 +172,9 @@ func writeEnrollment(path string, agent config.Agent) error {
 func editAgentConfig(path, action string, agent config.Agent) error {
 	lock, err := os.OpenFile(path+".enrollment-lock", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // cooperative editor lock
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return errors.New("config directory is read-only; install enrollment through the protected operator config workflow")
+		}
 		return errors.New("config is being edited; retry after the other editor finishes")
 	}
 	defer func() { _ = lock.Close(); _ = os.Remove(lock.Name()) }()
@@ -255,7 +273,7 @@ func editAgentConfig(path, action string, agent config.Agent) error {
 		return errors.New("config changed concurrently; retry")
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return errors.New("replace config failed")
+		return errors.New("replace config failed; install enrollment through the protected operator config workflow")
 	}
 	return nil
 }

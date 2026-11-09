@@ -49,3 +49,20 @@ func TestEnrollmentRefusesReadOnlyAndConcurrentEditor(t *testing.T) {
 		require.Equal(t, raw, after)
 	}
 }
+
+func TestReadOnlyConfigDirectoryExplainsProtectedEnrollment(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("directory permission enforcement requires an unprivileged user")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("proxy:\n  listen: 127.0.0.1:1701\n  cache_ttl: 1h\n  client_auth: required\n"), 0o600))
+	_, hash, err := identity.Generate()
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	defer func() { _ = os.Chmod(dir, 0o700) }()
+	err = editAgentConfig(path, "add", config.Agent{Name: "agent", KeySHA256: hash})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "protected operator config workflow")
+}

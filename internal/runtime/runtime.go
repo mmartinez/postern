@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,7 +41,11 @@ const idleTimeout = 2 * time.Minute
 // Options carries the resolved configuration runtime needs. CLI populates
 // it from cobra flags and config files; tests construct it inline.
 type Options struct {
-	Authenticator proxy.Authenticator
+	// ListenerTLSNames enables the TLS proxy hop for these configured hostnames.
+	ListenerTLSNames []string
+	// ExternallyProtected declares operator-controlled peer isolation/encryption.
+	ExternallyProtected bool
+	Authenticator       proxy.Authenticator
 	// CA is the local certificate authority used to MITM TLS. Required.
 	CA *ca.CA
 
@@ -148,7 +153,7 @@ func New(opts Options) (*Runtime, error) {
 	if opts.Addr == "" {
 		return nil, errors.New("addr is required")
 	}
-	if opts.Authenticator != nil {
+	if opts.Authenticator != nil && len(opts.ListenerTLSNames) == 0 && !opts.ExternallyProtected {
 		host, _, err := net.SplitHostPort(opts.Addr)
 		ip := net.ParseIP(host)
 		if err != nil || ip == nil || !ip.IsLoopback() {
@@ -286,7 +291,20 @@ func (r *Runtime) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		var inbound net.Listener = &trackingListener{Listener: listener, reg: r.conns}
-
+		if len(r.opts.ListenerTLSNames) > 0 {
+			inbound = tls.NewListener(inbound, &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				NextProtos: []string{"http/1.1"},
+				GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					for _, name := range r.opts.ListenerTLSNames {
+						if strings.EqualFold(name, hello.ServerName) {
+							return r.minter.Mint(name)
+						}
+					}
+					return nil, errors.New("listener hostname is not configured")
+				},
+			})
+		}
 		err := r.srv.Serve(inbound)
 		if errors.Is(err, http.ErrServerClosed) {
 			serveErr <- nil

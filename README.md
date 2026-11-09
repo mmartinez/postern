@@ -129,20 +129,24 @@ postern token set --stdin # store your 1Password service-account token (legacy s
 # edit ~/.postern/config.yaml to add rules for the APIs your agent calls, then:
 postern server            # run the proxy
 
-# in the agent's shell, wire HTTPS_PROXY + CA trust in one step:
-eval "$(postern bootstrap)"
+# in another terminal, enroll and launch the selected agent:
+postern agent add worker --ca "$HOME/.postern/ca.pem" --exec YOUR_AGENT
 ```
 
-Node-based agents need two more variables, `NODE_USE_ENV_PROXY=1` and
-`NODE_EXTRA_CA_CERTS`; see [Node-based agents](docs/security.md#key-and-token-handling).
+New configs require a named proxy identity. The launcher keeps its key in memory
+and passes proxy/trust settings only to the selected child, including Node's
+`NODE_USE_ENV_PROXY=1`. Use `agent rotate` to replace a key and `agent remove` to
+revoke live access. See [Agent enrollment](docs/agents.md) for remote enrollment,
+supported clients and the TLS proxy hop. Legacy `bootstrap` snippets apply only
+to plaintext configurations with authentication off.
 
 On macOS, `postern ca install` triggers an authorization prompt and trusts the
 CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes the
 trust settings (the certificate entry stays in the keychain, untrusted).
 
 On Linux, `postern ca install` does not make the CA trusted system-wide.
-`postern bootstrap` sets `SSL_CERT_FILE` for the agent's shell; for clients
-that ignore it, see the per-distribution steps in
+The launcher's `--ca` sets the child's public CA bundle; for client-specific
+trust settings, see the per-distribution steps in
 [Local CA](docs/security.md#key-and-token-handling).
 
 `postern config validate` checks a config with line-numbered errors, and
@@ -191,6 +195,9 @@ secret and the CA mounted read-only. It expects two files alongside it:
     file: /run/secrets/op_token
   proxy:
     listen: 0.0.0.0:1701
+    client_auth: required
+    tls:
+      names: [proxy.example.test]
     admin_listen: 127.0.0.1:1702   # loopback-only inside the container; probed by the compose healthcheck
     cache_ttl: 5m
   rules:
@@ -218,13 +225,14 @@ docker compose run --rm bootstrap                      # one-time: generate the 
 docker compose up -d                                   # run the proxy
 ```
 
-Distribute `./postern-ca/.postern/ca.pem` to your agents, point them at the
-proxy, and have them trust the CA:
+Distribute only `./postern-ca/.postern/ca.pem` to trusted client launchers, use the
+configured proxy hostname, and install each hash-only enrollment entry through
+the protected operator configuration workflow:
 
 ```sh
-export HTTPS_PROXY=http://localhost:1701
-export SSL_CERT_FILE=/path/to/ca.pem
-export NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/path/to/ca.pem   # Node-based agents
+postern agent add worker --enrollment-out ./worker-enrollment.yaml \
+  --proxy https://proxy.example.test:1701 --ca /path/to/ca.pem \
+  --exec YOUR_AGENT
 ```
 
 Rotating the CA (at its ~10-year expiry, or on key compromise) means deleting

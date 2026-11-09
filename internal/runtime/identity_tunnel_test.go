@@ -24,7 +24,7 @@ import (
 
 func TestRevocationClosesBothPassthroughSockets(t *testing.T) {
 	t.Parallel()
-	for _, encrypted := range []bool{false} {
+	for _, encrypted := range []bool{false, true} {
 		name := "plaintext"
 		if encrypted {
 			name = "tls"
@@ -50,8 +50,11 @@ func checkRevokedPassthrough(t *testing.T, encrypted bool) {
 		}
 	}()
 	root := fixtureCA(t)
-
-	rt, err := runtime.New(runtime.Options{CA: root, Addr: "127.0.0.1:0", Authenticator: e, ShouldIntercept: func(string) bool { return false }})
+	var names []string
+	if encrypted {
+		names = []string{"localhost"}
+	}
+	rt, err := runtime.New(runtime.Options{CA: root, ListenerTLSNames: names, Addr: "127.0.0.1:0", Authenticator: e, ShouldIntercept: func(string) bool { return false }})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)

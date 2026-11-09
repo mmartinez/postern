@@ -46,6 +46,30 @@ func TestIdentityConfig(t *testing.T) {
 	}
 }
 
+func TestRequiredNetworkAuthRequiresProtectedTransport(t *testing.T) {
+	t.Parallel()
+	base := "proxy:\n  listen: 0.0.0.0:1701\n  cache_ttl: 1h\n  client_auth: required\n"
+	for _, tc := range []struct {
+		extra string
+		valid bool
+	}{
+		{"", false},
+		{"  externally_protected: true\n", true},
+		{"  tls:\n    names: [proxy.example.test]\n", true},
+		{"  tls:\n    names: []\n", false},
+	} {
+		_, lints, err := config.LoadAndValidate(strings.NewReader(base + tc.extra))
+		require.NoError(t, err)
+		fatal := false
+		for _, l := range lints {
+			if l.Severity == config.SeverityError {
+				fatal = true
+			}
+		}
+		require.Equal(t, !tc.valid, fatal)
+	}
+}
+
 func TestIdentityParseErrorsDoNotExposeEnrollmentValues(t *testing.T) {
 	t.Parallel()
 	_, hash, err := identity.Generate()

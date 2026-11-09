@@ -4,16 +4,27 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/mmartinez/postern/internal/identity"
 )
 
 func (v *validator) checkAgents(cfg *Config) {
-	if cfg.Proxy.ClientAuth == "required" {
+	if cfg.Proxy.TLS != nil {
+		if len(cfg.Proxy.TLS.Names) == 0 {
+			v.add("proxy.tls.names", "at least one listener hostname is required", SeverityError)
+		}
+		for i, name := range cfg.Proxy.TLS.Names {
+			if !ValidListenerName(name) {
+				v.add(fmt.Sprintf("proxy.tls.names[%d]", i), "invalid listener hostname", SeverityError)
+			}
+		}
+	}
+	if cfg.Proxy.ClientAuth == "required" && cfg.Proxy.TLS == nil && !cfg.Proxy.ExternallyProtected {
 		host, _, err := net.SplitHostPort(cfg.Proxy.Listen)
 		ip := net.ParseIP(host)
 		if err == nil && (ip == nil || !ip.IsLoopback()) {
-			v.add("proxy.listen", "authenticated plaintext currently requires loopback", SeverityError)
+			v.add("proxy.externally_protected", "network authentication requires TLS or an explicitly protected external path", SeverityError)
 		}
 	}
 	mode := cfg.Proxy.ClientAuth
@@ -51,4 +62,23 @@ func (v *validator) checkAgents(cfg *Config) {
 		}
 		digests[string(digest)] = true
 	}
+}
+
+// ValidListenerName accepts bounded ASCII DNS names without wildcards or ports.
+func ValidListenerName(name string) bool {
+	if name == "" || len(name) > 253 || strings.HasSuffix(name, ".") {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range []byte(label) {
+			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }

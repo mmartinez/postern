@@ -75,7 +75,7 @@ func resolveBootstrapListen(configPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if cfg != nil && cfg.Proxy.ClientAuth == "required" {
+	if cfg != nil && (cfg.Proxy.ClientAuth == "required" || cfg.Proxy.TLS != nil) {
 		return "", errors.New("use agent add NAME --exec PROGRAM for authenticated or TLS proxy clients")
 	}
 	if cfg != nil && cfg.Proxy.Listen != "" {
