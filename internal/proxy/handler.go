@@ -11,6 +11,7 @@ import (
 	"github.com/elazarl/goproxy"
 
 	"github.com/mmartinez/postern/internal/broker"
+	"github.com/mmartinez/postern/internal/identity"
 	"github.com/mmartinez/postern/internal/logging"
 )
 
@@ -107,6 +108,12 @@ func installInnerGuard(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 // speaks HTTP.
 func installConnectionErrHandler(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 	gp.ConnectionErrHandler = func(w io.Writer, ctx *goproxy.ProxyCtx, err error) {
+		if ctx != nil && ctx.Req != nil && tunnelMustClose(ctx.Req) {
+			if conn, ok := w.(io.Closer); ok {
+				_ = conn.Close()
+			}
+			return
+		}
 		host := ""
 		if ctx != nil && ctx.Req != nil && ctx.Req.URL != nil {
 			host = ctx.Req.URL.Host
@@ -199,6 +206,7 @@ const redactionValue = "<redacted>"
 func installHandlers(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 	gp.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		logger.Info("proxy request",
+			slog.String("agent", requestAgent(req)),
 			slog.Int64("session", ctx.Session),
 			slog.String("method", req.Method),
 			slog.String("host", req.URL.Host),
@@ -219,6 +227,7 @@ func installHandlers(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 		// resp.Request.Context() is the request-scoped ctx so any future
 		// trace/correlation handler can read it.
 		logging.Summary(resp.Request.Context(), logger, "proxy response",
+			slog.String("agent", requestAgent(resp.Request)),
 			slog.Int64("session", ctx.Session),
 			slog.String("method", resp.Request.Method),
 			slog.String("host", resp.Request.URL.Host),
@@ -226,6 +235,13 @@ func installHandlers(gp *goproxy.ProxyHttpServer, logger *slog.Logger) {
 		)
 		return resp
 	})
+}
+
+func requestAgent(req *http.Request) string {
+	if p := identity.FromContext(req.Context()); p != nil {
+		return p.Name()
+	}
+	return ""
 }
 
 // installResponseScrubber wires the response-path credential filter onto gp.

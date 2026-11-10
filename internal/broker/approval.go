@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/mmartinez/postern/internal/config"
+	"github.com/mmartinez/postern/internal/identity"
 )
 
 // errRefusalBudget explains a request refused because the refusal budget is
@@ -120,8 +121,9 @@ type flight struct {
 // (FromConfigRules allocates a fresh approval block per rule per load) and
 // the route the request selected, "" for rules without routes.
 type gateKey struct {
-	approval *config.Approval
-	route    string
+	principal *identity.Principal
+	approval  *config.Approval
+	route     string
 }
 
 // NewGate returns a gate whose dialogs live as long as ctx. Cancelling ctx
@@ -174,7 +176,7 @@ func (g *Gate) allow(req *http.Request, rule Rule, route, secretRef string) bool
 		return false
 	}
 
-	key := gateKey{approval: rule.Approval, route: route}
+	key := gateKey{approval: rule.Approval, route: route, principal: identity.FromContext(req.Context())}
 	g.mu.Lock()
 	if err := g.base.Err(); err != nil {
 		g.mu.Unlock()
@@ -355,7 +357,7 @@ func (g *Gate) decide(ctx context.Context, key gateKey, rule string, ttl time.Du
 		return OutcomeCooldown, errRefusalBudget
 	}
 
-	outcome, err := g.ask(reason)
+	outcome, err := g.ask(reason, key.principal)
 	g.logOutcome("broker approval dialog", outcome, err, slog.String("rule", rule), slog.String("route", key.route))
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -402,9 +404,13 @@ func (g *Gate) logOutcome(msg string, o Outcome, err error, attrs ...slog.Attr) 
 
 // ask shows one dialog. The dialog's context derives from the gate, not the
 // request, so it stays open when the client leaves.
-func (g *Gate) ask(reason string) (Outcome, error) {
+func (g *Gate) ask(reason string, principal *identity.Principal) (Outcome, error) {
 	dctx, dcancel := context.WithCancel(g.base)
 	defer dcancel()
+	var revoked <-chan struct{}
+	if principal != nil {
+		revoked = principal.Done()
+	}
 	timeout := g.after(promptTimeout)
 	type result struct {
 		outcome Outcome
@@ -426,6 +432,10 @@ func (g *Gate) ask(reason string) (Outcome, error) {
 			return OutcomeUnavailable, r.err
 		}
 		return r.outcome, nil
+	case <-revoked:
+		dcancel()
+		<-done
+		return outcomeCanceled, context.Canceled
 	case <-timeout:
 		dcancel()
 		<-done
@@ -460,7 +470,7 @@ func (g *Gate) refusalsSpentLocked() bool {
 // approvalReason renders what the dialog asks the user to allow for one
 // request.
 func approvalReason(req *http.Request, secretRef, route string) string {
-	return "send " + secretRef + " to " + requestLine(req) + " for " + who(route)
+	return "send " + secretRef + " to " + requestLine(req) + " for " + requestWho(req, route)
 }
 
 // grantReason renders what the dialog asks the user to grant: everything
@@ -486,7 +496,7 @@ func grantReason(req *http.Request, rule Rule, route, secretRef string) string {
 	if strings.HasSuffix(ttl, "h0m") {
 		ttl = ttl[:len(ttl)-2]
 	}
-	return "let " + who(route) + " use " + secretRef + " for " + methods + " requests to " + rule.Host +
+	return "let " + requestWho(req, route) + " use " + secretRef + " for " + methods + " requests to " + rule.Host +
 		" on " + paths + " for " + ttl + " (first request: " + requestLine(req) + ")"
 }
 
@@ -514,4 +524,11 @@ func who(route string) string {
 		return "any client"
 	}
 	return "agent " + route
+}
+
+func requestWho(req *http.Request, route string) string {
+	if p := identity.FromContext(req.Context()); p != nil {
+		return "agent " + p.Name()
+	}
+	return who(route)
 }

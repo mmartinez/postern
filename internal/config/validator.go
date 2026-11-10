@@ -80,6 +80,7 @@ func validateSkipping(cfg *Config, root *yaml.Node, skipRule map[int]struct{}) [
 	}
 	v := newValidator(root)
 	v.checkProxy(&cfg.Proxy)
+	v.checkAgents(cfg)
 	v.checkCredStores(cfg.CredStores)
 	v.checkRulesSkipping(cfg.Rules, skipRule)
 	// Rules without any credstore can never be brokered. Flagging this at

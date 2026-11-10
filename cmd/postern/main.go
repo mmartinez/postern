@@ -85,6 +85,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(cli.NewRulesCmd(reg))
 	cmd.AddCommand(cli.NewBootstrapCmd(defaultCADir()))
 	cmd.AddCommand(cli.NewApprovalCmd())
+	cmd.AddCommand(cli.NewAgentCmd())
 
 	return cmd
 }

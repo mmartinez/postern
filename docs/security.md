@@ -1,5 +1,38 @@
 # Security model
 
+## Proxy identity boundary
+
+Client authentication is opt-in. Both generated configurations and omitted
+`proxy.client_auth` keep it off for compatibility; that mode provides no
+authenticated-agent guarantee. Set `required` explicitly and restart to activate
+the identity boundary below.
+
+Agent proxy keys grant agent identity, never operator access or vault credentials.
+Only `agents[].key_sha256` and hash-only enrollment artifacts may persist identity
+verifiers: this is the narrow exception to the ban on credential hashes in files.
+No keys or verifier fingerprints belong in logs, diagnostics or telemetry. Protect
+configuration/backups: restoring a stale verifier re-enables that key for new
+sessions, although previously revoked incarnation handles remain invalid.
+
+The selected launcher recipient holds its key in its process environment. Other
+processes able to inspect that environment can impersonate it. Loss of the process
+and key requires rotation/re-enrollment; there is no export/recovery command.
+Recipients must protect their environment and output. Enrollment artifacts are
+owner-only and contain no usable proxy key.
+
+Destination TLS does not protect plaintext CONNECT credentials. Network clients
+must use TLS to the proxy, or explicitly declare a protected path backed by
+operator-controlled encryption/peer isolation such as SSH forwarding or WireGuard.
+A private subnet/shared container network is insufficient. There is no automatic
+TLS downgrade. Loopback alone does not isolate processes able to read keys.
+
+Revocation force-closes busy streams, uploads, upgrades, approvals and opaque
+relays, including upstream sockets. EOF/reset and truncated responses are possible;
+upstream effects cannot be undone or automatically replayed. Passthrough enforces
+connection identity/revocation, not inspection of encrypted tool calls. Deployment
+egress containment is required to prevent direct bypass. Failure throttling does
+not promise availability under arbitrary connection floods.
+
 Postern brokers credentials, so it is built to be paranoid about leakage. This
 document describes what postern guarantees, what it logs, the threats it does
 and does not defend against, and how it handles keys.

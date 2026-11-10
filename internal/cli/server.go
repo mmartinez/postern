@@ -29,6 +29,7 @@ import (
 	_ "github.com/mmartinez/postern/internal/credstore/oauth2"
 	_ "github.com/mmartinez/postern/internal/credstore/onepassword"
 	"github.com/mmartinez/postern/internal/logging"
+	"github.com/mmartinez/postern/internal/proxy"
 	"github.com/mmartinez/postern/internal/runtime"
 	"github.com/mmartinez/postern/internal/token"
 )
@@ -107,15 +108,18 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 			addr = resolveListenAddr(cmd.Flags().Changed("addr"), addr, bundle.listen)
 
 			rt, err := runtime.New(runtime.Options{
-				CA:                 authority,
-				Addr:               addr,
-				Logger:             logger,
-				PreUpstreamHandler: bundle.hook,
-				ShouldIntercept:    bundle.shouldIntercept,
-				BlockNonBrokered:   bundle.blockNonBrokered,
-				AdminListen:        bundle.adminListen,
-				HealthStatus:       bundle.healthStatus(),
-				ScrubResponses:     bundle.scrubResponses,
+				CA:                  authority,
+				Authenticator:       bundle.authenticator,
+				ListenerTLSNames:    bundle.listenerTLSNames,
+				ExternallyProtected: bundle.externallyProtected,
+				Addr:                addr,
+				Logger:              logger,
+				PreUpstreamHandler:  bundle.hook,
+				ShouldIntercept:     bundle.shouldIntercept,
+				BlockNonBrokered:    bundle.blockNonBrokered,
+				AdminListen:         bundle.adminListen,
+				HealthStatus:        bundle.healthStatus(),
+				ScrubResponses:      bundle.scrubResponses,
 			})
 			if err != nil {
 				return fmt.Errorf("init runtime: %w", err)
@@ -167,12 +171,15 @@ func NewServerCmd(caDir string, reg *credstore.Registry, store token.Store) *cob
 // captures proxy + token at boot so the reloader can warn when an edit
 // touches a field that needs a restart.
 type brokerBundle struct {
-	hook           func(*http.Request) *http.Response
-	engine         *broker.Engine
-	scrubResponses *bool
-	cfgPath        string
-	listen         string
-	baseline       *broker.Baseline
+	authenticator       proxy.Authenticator
+	listenerTLSNames    []string
+	externallyProtected bool
+	hook                func(*http.Request) *http.Response
+	engine              *broker.Engine
+	scrubResponses      *bool
+	cfgPath             string
+	listen              string
+	baseline            *broker.Baseline
 
 	// shouldIntercept reports whether a host is brokered, so the proxy MITMs
 	// only those and tunnels the rest. nil (the no-broker bundle) leaves the
@@ -262,6 +269,22 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		// read when there is a config to read it from; nil means scrubbing on.
 		if cfg != nil {
 			b.scrubResponses = cfg.Proxy.ScrubResponses
+			b.externallyProtected = cfg.Proxy.ExternallyProtected
+			if cfg.Proxy.TLS != nil {
+				b.listenerTLSNames = cfg.Proxy.TLS.Names
+			}
+			if cfg.Proxy.ClientAuth == "required" {
+				engine := broker.NewEngine(nil)
+				if err := engine.Publish(nil, cfg.Agents); err != nil {
+					return brokerBundle{}, err
+				}
+				b.engine, b.authenticator, b.cfgPath = engine, engine, cfgPath
+				b.baseline = &broker.Baseline{Proxy: cfg.Proxy, CredStores: cfg.CredStores}
+				b.version = broker.NewVersionCounter()
+				b.shouldIntercept = func(host string) bool { _, ok := engine.Match(host); return ok }
+				b.blockNonBrokered = cfg.Proxy.OnNoMatch == config.OnNoMatchBlock
+				b.hook = broker.Hook(engine, nil, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger) //nolint:bodyclose // hook is a closure; proxy closes synthetic response bodies
+			}
 		}
 		return b, nil
 	}
@@ -271,6 +294,13 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 		return brokerBundle{}, fmt.Errorf("translate rules: %w", err)
 	}
 	engine := broker.NewEngine(rules)
+	if err := engine.Publish(rules, cfg.Agents); err != nil {
+		return brokerBundle{}, err
+	}
+	var authenticator proxy.Authenticator
+	if cfg.Proxy.ClientAuth == "required" {
+		authenticator = engine
+	}
 
 	version := broker.NewVersionCounter()
 	health := NewHealthTracker(true, version.Load)
@@ -316,10 +346,13 @@ func buildBrokerHook(ctx context.Context, reg *credstore.Registry, cfgPath strin
 	)
 	gate := broker.NewGate(ctx, broker.GateConfig{Approver: newApprover(), Logger: logger})
 	return brokerBundle{
-		hook:    broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger, gate), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
-		engine:  engine,
-		cfgPath: cfgPath,
-		listen:  cfg.Proxy.Listen,
+		authenticator:       authenticator,
+		listenerTLSNames:    listenerNames(cfg.Proxy),
+		externallyProtected: cfg.Proxy.ExternallyProtected,
+		hook:                broker.Hook(engine, cached, cfg.Proxy.OnNoMatch, cfg.Proxy.MaxBodyBytes, cfg.Proxy.ScrubResponsesEnabled(), logger, gate), //nolint:bodyclose // hook is a closure; broker owns the synthetic body
+		engine:              engine,
+		cfgPath:             cfgPath,
+		listen:              cfg.Proxy.Listen,
 		baseline: &broker.Baseline{
 			Proxy:      cfg.Proxy,
 			CredStores: cfg.CredStores,
@@ -652,4 +685,11 @@ func daemonize() error {
 	_, _ = fmt.Fprintf(os.Stdout, "postern: started in background (pid=%d)\n", child.Process.Pid)
 	os.Exit(0)
 	return errors.New("unreachable")
+}
+
+func listenerNames(p config.Proxy) []string {
+	if p.TLS == nil {
+		return nil
+	}
+	return p.TLS.Names
 }

@@ -1,18 +1,38 @@
 package broker
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+
+	"github.com/mmartinez/postern/internal/identity"
+)
 
 // Engine holds the active ruleset and serves first-match lookups. The
 // ruleset is loaded atomically so the proxy's hot path can call Match
 // concurrently with the config watcher swapping in a new ruleset.
 type Engine struct {
-	rules atomic.Pointer[[]Rule]
+	snapshot atomic.Pointer[engineSnapshot]
+	mu       sync.Mutex
+	work     map[*activeWork]struct{}
+}
+
+type enrolledAgent struct {
+	verifier  identity.Verifier
+	principal *identity.Principal
+}
+
+type authorizationEpoch [1]byte
+
+type engineSnapshot struct {
+	epoch  *authorizationEpoch
+	rules  []Rule
+	agents map[string]enrolledAgent
 }
 
 // NewEngine constructs an Engine with the given ruleset. The slice is
 // copied so subsequent caller mutations do not leak into the engine.
 func NewEngine(rules []Rule) *Engine {
-	e := &Engine{}
+	e := &Engine{work: make(map[*activeWork]struct{})}
 	e.Swap(rules)
 	return e
 }
@@ -23,7 +43,7 @@ func NewEngine(rules []Rule) *Engine {
 func (e *Engine) Match(host string) (Rule, bool) {
 	// Index rather than range-by-value: Rule is large enough that copying it
 	// per iteration trips gocritic's rangeValCopy.
-	rules := *e.rules.Load()
+	rules := e.snapshot.Load().rules
 	for i := range rules {
 		if rules[i].Match(host) {
 			return rules[i], true
@@ -37,11 +57,17 @@ func (e *Engine) Match(host string) (Rule, bool) {
 // observe either the previous or the new ruleset, never a torn read.
 func (e *Engine) Swap(rules []Rule) {
 	cp := append([]Rule(nil), rules...)
-	e.rules.Store(&cp)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	agents := make(map[string]enrolledAgent)
+	if previous := e.snapshot.Load(); previous != nil {
+		agents = previous.agents
+	}
+	e.snapshot.Store(&engineSnapshot{rules: cp, agents: agents, epoch: &authorizationEpoch{}})
 }
 
 // Len reports how many rules the active ruleset holds. The reloader reads it
 // to refuse a swap that would empty a working ruleset.
 func (e *Engine) Len() int {
-	return len(*e.rules.Load())
+	return len(e.snapshot.Load().rules)
 }

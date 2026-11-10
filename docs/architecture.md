@@ -1,5 +1,80 @@
 # Architecture
 
+## Named identity decision
+
+Identity enrollment and broker rules form one immutable engine snapshot with one
+atomic publication point. Strict YAML stores `agents: [{name, key_sha256}]`;
+names are unique, case-sensitive ASCII identifiers and digests decode to 32 bytes.
+Duplicate names/digests and malformed values are refused without reproducing
+values. A separate identity database was rejected to avoid cross-file consistency
+and migration problems before per-agent policy arrives.
+
+`internal/identity` owns generation, verifiers, opaque incarnation handles and
+context access. Proxy and broker define their consumer interfaces; runtime/CLI
+wire the engine. Authentication precedes routing, approval, resolution and dialing
+for every outer CONNECT and plain HTTP request. MITM requests inherit the CONNECT
+identity and retain the existing full host/port guard; inner headers cannot switch
+identity. The only authentication mechanism is one bounded Basic proxy header.
+Keys contain 32 random bytes, encoded as `pst_` plus unpadded base64url; SHA-256
+hashes the complete canonical string. Fixed-size constant-time comparisons include
+unknown names. Query parameters never authenticate. Proxy credentials are stripped
+before logging/forwarding; invalid authentication gets a generic 407 challenge.
+
+`proxy.client_auth: required|off` is bound at startup. Omission retains legacy
+`off`; new configs also select `off` so activation remains opt-in. This
+compatibility default supersedes the original D3 new-config default. Operators
+explicitly select `required` and restart before enrollment. Required mode with zero identities denies
+all authentication; list length never enables/disables auth. Identities with
+effective off are invalid. Auth/listener edits are reported as requiring restart.
+
+The lifecycle lock serializes session registration, request admission and reload
+publication. Work is registered before leaving the lock, which is never held
+during network I/O or dialogs. Every request rechecks identity/current policy,
+including after approval and at credential/upstream admission. Removing or rotating
+an identity permanently revokes its old handle, even after re-adding the same
+verifier. Reload marks revoked handles under the lock, then cancels approvals,
+requests and both client/upstream sockets outside it, completing teardown before
+reporting application/version advancement. Busy streams are terminated. Invalid
+reloads retain the complete old snapshot; the passthrough empty-rules guard remains.
+Approval grants, cooldowns and prompt flights include incarnation and loaded
+approval policy. Diagnostics/dialogs receive the validated name, never digests.
+
+Network clients use an HTTP/1.1 TLS proxy listener or explicitly externally
+protected plaintext. TLS uses the existing CA minter's renewal cache, configured
+hostname selection and TLS 1.2 minimum; no listener private key is persisted.
+HTTP/2 is disabled on listener and MITM paths. Tracking sits below TLS;
+`ConnContext` uses `tls.Conn.NetConn` only to recover the lifecycle handle, keeping
+`*tls.Conn` visible to `net/http`. Raw hangup peeking is disabled on TLS, so idle
+client-disconnect detection during approval can be delayed; bounded approval
+timeouts and explicit revocation still apply. TLS passthrough does not guarantee
+TCP half-close. See the [Go TLS API](https://pkg.go.dev/crypto/tls#Conn.NetConn),
+[server lifecycle](https://pkg.go.dev/net/http#Server.Shutdown) and
+[goproxy v1.9.3 relay](https://raw.githubusercontent.com/elazarl/goproxy/v1.9.3/https.go).
+
+Failure throttling uses actual peer IPs, IPv4-mapped normalization and one shared
+loopback budget. Constants: burst 5, refill 1/second, exponential delay 100ms–2s,
+4 delayed failures/source, 256 globally, 4096 source entries and 10-minute expiry.
+Overflow uses a shared fallback budget. Timers are cancellable and failure writes
+bounded; above capacity the proxy attempts 407 then closes. Valid credentials
+bypass delays. Only aggregate throttle transitions are logged. Source lockouts
+were rejected because a local/NAT attacker could lock out working agents.
+
+Provisioning keeps keys in memory and launches an explicitly selected child with
+its authenticated proxy URL in its environment, using structured process APIs.
+Only verifiers may be persisted. No print-once, clipboard, shell snippets,
+key-bearing arguments, plaintext key files or recovery/export commands exist.
+Remote issuance produces an owner-only hash-only artifact for protected operator
+installation, mutually exclusive with live config mutation. Config edits validate,
+preserve comments, detect concurrent edits and replace atomically. Read-only
+config is an error. Launch failure never restores a rotated key. Persistent client
+secret storage, remote operator APIs and full connect/disconnect remain deferred.
+
+Graceful completion of busy revoked streams was rejected: it permits indefinite
+retained access. Forced teardown may truncate responses or yield EOF/reset. At a
+response boundary an inner refusal uses generic 502 and connection close; no
+HTTP error is inserted into an already-started/opaque stream. Already-admitted
+upstream effects cannot be rolled back and are never automatically replayed.
+
 Postern is a TLS-intercepting forward HTTP proxy that injects credentials into
 outbound requests on behalf of an agent, so the agent never holds the real
 secret. This document traces a request through the system and describes the

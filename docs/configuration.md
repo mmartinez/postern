@@ -1,5 +1,32 @@
 # Configuration
 
+## Named proxy clients
+
+Client authentication is opt-in. New configs select `proxy.client_auth: off`;
+omission also means `off`. To enable named identities, set `required`, restart
+the server, then enroll clients. Enabling it intentionally rejects unauthenticated
+clients, including when no identities are enrolled.
+Required mode with no agents denies every request with 407. Identities with auth
+off are invalid. Names match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` and are unique and
+case-sensitive. Verifiers decode to exactly 32 bytes; duplicates are rejected.
+
+```yaml
+proxy:
+  listen: 0.0.0.0:1701
+  client_auth: required
+  tls:
+    names: [proxy.example.test]
+  cache_ttl: 1h
+agents: [] # populated through the launcher/operator enrollment workflow
+```
+
+The alternative to TLS is `proxy.externally_protected: true`, an explicit operator
+declaration of encryption/peer isolation on the proxy path. Plain loopback is
+permitted. Auth/listener settings require restart; identities and rules hot-reload
+together. Bad reloads keep the old snapshot. Removing the last agent is valid and
+never disables auth. Use hostname URLs for TLS and distribute only the public CA
+bundle to clients, trusting both proxy and intercepted destination hops.
+
 Postern reads a single YAML file, by default `~/.postern/config.yaml`. Write a
 starter file with `postern config init` and check it with `postern config
 validate` (errors are reported with line numbers). Parsing is strict: an unknown

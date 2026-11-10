@@ -83,3 +83,12 @@ func TestDefaultYAML_ReturnsIndependentCopy(t *testing.T) {
 	c := config.DefaultYAML()
 	require.NotEqual(t, byte('X'), c[0], "mutating one copy must not affect the embedded source")
 }
+
+func TestGeneratedConfigKeepsAuthenticationOptIn(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, config.WriteDefault(path, false))
+	cfg, err := config.LoadForCLI(path, true)
+	require.NoError(t, err)
+	require.Equal(t, "off", cfg.Proxy.ClientAuth)
+}
