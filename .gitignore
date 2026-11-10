@@ -2,6 +2,8 @@
 PRD-*.md
 SPEC.md
 tasks/
+/docs/proposals.md
+/postern-roadmap.html
 
 # Go build output
 /postern
@@ -15,6 +17,9 @@ coverage.html
 vendor/
 
 # Local contributor, editor, and OS files
+/AGENTS.md
+/CLAUDE.md
+/.omp/
 .DS_Store
 .idea/
 .vscode/

@@ -104,32 +104,22 @@ Before committing or publishing, run the publication gate in the devcontainer:
 make publication
 ```
 
-This runs the focused gate tests, then scans the tracked working tree and current branch name.
-Hooks also check staged content from the index, commit messages, and outgoing commits before a push.
-The publication push check also runs when the push has no file changes.
-The gate reports only the location and category of a finding, never the rejected text.
-If the filename itself contains rejected text, the diagnostic omits it.
+This runs small text-check tests and scans the Git index, so stage the intended changes first.
+Existing hooks check staged text, commit messages, and outgoing ref names.
+The push check also runs when no files changed.
+CI checks the current tree and pull request title, body, and branch name.
+Diagnostics report a category without printing the rejected text.
 
-For a specific input, enter `make shell` and run:
+For a prepared description or release note, enter `make shell` and run:
 
 ```sh
-node scripts/check-publication.mjs --staged
-node scripts/check-publication.mjs --message-file .git/COMMIT_EDITMSG
-node scripts/check-publication.mjs --range origin/main..HEAD
+node scripts/check-publication.mjs path/to/text.txt
 ```
 
-The commit-range check covers newly published commit metadata and file contents, not historical commits outside that range.
-The pre-push hook reads Git's outgoing ref updates; new branches require an up-to-date remote-tracking `main` ref.
-CI uses `--event PATH` to check event titles, bodies, branch names, and the event's commit range.
-
-Release preflight uses `--release-inputs` to check the committed tree and release-note inputs since the latest released tag.
-It checks effective commit messages, merged pull request titles and bodies, and supported commit-message overrides.
-It reads GitHub through `gh` and requires `GITHUB_REPOSITORY` and `GH_TOKEN` with read access to contents and pull requests.
-It does not change remote state or scan historical pull request branch names.
+The check recognizes common tracker identifiers and execution attribution.
+It does not walk commit history or query release APIs.
+Review private links, older commit metadata, and generated release notes before publication.
 Release draft text uses the header and footer in `release-please-config.json`.
-
-Review release notes and other publication text manually before sending them.
-Pattern checks cannot identify every private domain or execution reference and do not replace that review.
 
 Repository-owner authorization is required for merges, tags, releases, publishing workflows, and history changes.
 Do not force-push or rewrite published history without that authorization.

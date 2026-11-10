@@ -1,264 +1,36 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const script = fileURLToPath(new URL('./check-publication.mjs', import.meta.url));
-const ticket = ['EXAMPLE', '742'].join('-');
-const zero = '0'.repeat(40);
+const reference = ['EXAMPLE', '742'].join('-');
+const cases = [
+  ['product text', 'Agent enrollment, model_id: example, and test harnesses are supported.', 0],
+  ['standards', 'SHA-256 UTF-8 RFC-3986 BSD-3-Clause GPL-3.0-or-later', 0],
+  ['human credit', ['Co-Authored', 'By'].join('-') + ': Example Person <person@example.test>', 0],
+  ['tracker reference', reference, 1],
+  ['generated attribution', ['Generated', 'with Example Assistant'].join(' '), 1],
+  ['execution credit', ['Co-Authored', 'By'].join('-') + ': Example Agent <example@example.test>', 1],
+  ['role branch', ['refs/heads/agent', '/example'].join('') + ' ' + '0'.repeat(40), 1],
+  ['execution URI', ['agent:', '//example'].join(''), 1],
+];
 
-function repository(t) {
-  const cwd = mkdtempSync(join(tmpdir(), 'publication-'));
-  t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
-  delete env.GIT_DIR;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_INDEX_FILE;
-  delete env.GITHUB_EVENT_NAME;
-  function git(...args) {
-    const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd, env, encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr);
-    return result.stdout.trim();
-  }
-  function put(path, text) {
-    mkdirSync(dirname(join(cwd, path)), { recursive: true });
-    writeFileSync(join(cwd, path), text);
-  }
-  function commit(message = 'fix: update public behavior') {
-    git('add', '.');
-    git('commit', '--allow-empty', '-qm', message);
-    return git('rev-parse', 'HEAD');
-  }
-  function check(args = [], input, extraEnv = {}) {
-    return spawnSync(process.execPath, [script, ...args], {
-      cwd, env: { ...env, ...extraEnv }, input, encoding: 'utf8',
-    });
-  }
-  git('init', '-q', '-b', 'main');
-  git('config', 'user.name', 'Example Contributor');
-  git('config', 'user.email', 'contributor@example.test');
-  put('README.md', 'Public product documentation.\n');
-  const base = commit();
-  git('update-ref', 'refs/remotes/origin/main', base);
-  return { cwd, git, put, commit, check, base };
+for (const [name, input, status] of cases) {
+  test(name, () => {
+    const result = spawnSync(process.execPath, [script], { input, encoding: 'utf8' });
+    assert.equal(result.status, status, result.stderr);
+    if (status) {
+      assert.match(result.stderr, new RegExp(`publication: ${name}$`, 'm'));
+      assert.ok(!result.stderr.includes(input), 'diagnostics must not repeat rejected input');
+    }
+  });
 }
 
-function rejects(result, category) {
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stderr, new RegExp(category));
-  assert.ok(!result.stderr.includes(ticket), 'diagnostics must not repeat rejected text');
-}
-
-test('scans staged blobs, not their working copies; handles staged deletions', (t) => {
-  const r = repository(t);
-  r.put('README.md', ticket);
-  r.git('add', 'README.md');
-  r.put('README.md', 'Clean working copy');
-  rejects(r.check(['--staged']), 'tracker');
-  r.git('add', 'README.md');
-  r.put('README.md', ticket);
-  assert.equal(r.check(['--staged']).status, 0);
-  rejects(r.check(), 'tracker');
-  r.git('rm', '-f', 'README.md');
-  assert.equal(r.check(['--staged']).status, 0);
-});
-
-test('scans docs, tests, changelogs, and filenames without directory exemptions', (t) => {
-  const r = repository(t);
-  for (const path of ['docs/public.md', 'test/example.txt', 'CHANGELOG.md']) {
-    r.put(path, ticket);
-    r.git('add', path);
-    rejects(r.check(['--staged']), 'tracker');
-    r.git('rm', '-f', path);
-  }
-  r.put(`docs/${ticket}.txt`, 'Public text');
-  r.git('add', '.');
-  rejects(r.check(['--staged']), 'tracker');
-});
-
-test('rejects private artifacts while allowing supported skill installation paths', (t) => {
-  const r = repository(t);
-  for (const path of [ ['AGENTS', 'md'].join('.'), ['CLAUDE', 'md'].join('.'), ['.assistant', 'settings.json'].join('/'), ['.assistant', 'agents/helper.md'].join('/'), ['docs', 'proposals.md'].join('/'), ['PRD', 'work.md'].join('-') ]) {
-    r.put(path, 'Private planning');
-    r.git('add', path);
-    rejects(r.check(['--staged']), 'private-path');
-    r.git('rm', '-f', path);
-  }
-  r.put('.assistant/skills/product', '../../skills/product');
-  r.put('skills/product/SKILL.md', 'Use the supported agent CLI and test harness.');
-  r.put('docs/ideas/design.md', 'Public design rationale.');
-  r.put('docs/agents.md', 'Supported client enrollment.');
-  r.put('README.md', 'Read docs/agents.md for client enrollment.');
-  r.git('add', '.');
-  assert.equal(r.check(['--staged']).status, 0);
-});
-
-test('accepts standards, public issue links, human authorship, and product agent prose', (t) => {
-  const r = repository(t);
-  r.put('README.md', [
-    'SHA-256 UTF-8 RFC-3986 BSD-3-Clause GPL-3.0-or-later TEST-NET-1 LICENSE-2.0',
-    'https://github.com/example/product/issues/42',
-    'An agent runs in a container. Model endpoints and nonpersistent sessions use a test harness.',
-    'http://127.0.0.1:%s/ https://example.test/%s',
-    'https://registry.npmjs.org/example/-/example-1.2.3.tgz',
-    'https://registry.npmjs.org/fnv1a-64/-/fnv1a-64-0.1.2.tgz',
-    'postern agent add worker --exec PROGRAM',
-    'Generated configuration is supported. Files generated by the bootstrap process are public.',
-  ].join('\n'));
-  r.git('add', '.');
-  assert.equal(r.check(['--staged']).status, 0);
-  r.put('message', ['fix: improve enrollment', '', ['Co-Authored', 'By'].join('-') + ': Example Person <person@example.test>'].join('\n'));
-  assert.equal(r.check(['--message-file', 'message']).status, 0);
-  r.put('message', ['fix: improve enrollment', '', ['Co-Authored', 'By'].join('-') + ': Contributor <123+contributor@users.noreply.github.com>'].join('\n'));
-  assert.equal(r.check(['--message-file', 'message']).status, 0);
-});
-
-test('rejects generic tracker links and execution provenance without printing contents', (t) => {
-  const r = repository(t);
-  for (const [text, category] of [
-    [ticket, 'tracker'],
-    [['https:/', '/tracker.example.test/workspaces/example/tasks/42'].join(''), 'private-link'],
-    [['Generated', 'with Example Assistant'].join(' '), 'provenance'],
-    [['Co-Authored', 'By'].join('-') + ': Example Bot <bot@example.test>', 'provenance'],
-    [['Co-Authored', 'By'].join('-') + ': Example <noreply@assistant.example.test>', 'provenance'],
-    [['Session', 'ID: abcdef123456'].join(' '), 'provenance'],
-    [['Model', ': example-large'].join(''), 'provenance'],
-    [['agent:', '//example-worker'].join(''), 'provenance'],
-    [['Fresh-context', 'reviewer'].join(' '), 'provenance'],
-    [['Second-opinion audit (', 'provider/example-model via', ' runner)'].join(''), 'provenance'],
-  ]) {
-    r.put('message', `fix: improve checks\n\n${text}\n`);
-    const result = r.check(['--message-file', 'message']);
-    rejects(result, category);
-    assert.ok(!result.stderr.includes(text));
-  }
-});
-
-test('rejects execution identities in commit authorship', (t) => {
-  const r = repository(t);
-  r.git('config', 'user.name', ['Example', 'Agent'].join(' '));
-  const head = r.commit();
-  rejects(r.check(['--range', `${r.base}..${head}`]), 'provenance');
-});
-
-test('checks current and outgoing branch names', (t) => {
-  const r = repository(t);
-  r.git('switch', '-qc', ['agent', 'example'].join('/'));
-  rejects(r.check(), 'branch');
-  r.git('switch', 'main');
-  rejects(r.check(['--pre-push', 'origin'], `refs/heads/main ${r.base} refs/heads/${ticket.toLowerCase()} ${zero}\n`), 'tracker');
-});
-
-test('preserves old metadata but checks every new commit and removed intermediate content', (t) => {
-  const r = repository(t);
-  const old = r.commit(`fix: ${ticket}`);
-  const clean = r.commit();
-  assert.equal(r.check(['--range', `${old}..${clean}`]).status, 0);
-  rejects(r.check(['--range', `${r.base}..${clean}`]), 'tracker');
-  r.put('temporary.txt', ticket);
-  r.commit();
-  r.git('rm', 'temporary.txt');
-  const tip = r.commit();
-  rejects(r.check(['--range', `${clean}..${tip}`]), 'tracker');
-});
-
-test('pre-push checks advertised tips, all updates, tag messages, and new branch ranges', (t) => {
-  const r = repository(t);
-  const bad = r.commit(`fix: ${ticket}`);
-  r.git('switch', '-qc', 'clean', r.base);
-  const clean = r.commit();
-  rejects(r.check(['--pre-push', 'origin'], `refs/heads/main ${bad} refs/heads/main ${r.base}\n`), 'tracker');
-  rejects(r.check(['--pre-push', 'origin'], `refs/heads/clean ${clean} refs/heads/clean ${zero}\nrefs/heads/main ${bad} refs/heads/other ${zero}\n`), 'tracker');
-  assert.equal(r.check(['--pre-push', 'origin'], `refs/heads/clean ${clean} refs/heads/new ${zero}\n`).status, 0);
-  r.git('tag', '-a', 'v1.0.0', '-m', ticket, clean);
-  const tag = r.git('rev-parse', 'refs/tags/v1.0.0');
-  rejects(r.check(['--pre-push', 'origin'], `refs/tags/v1.0.0 ${tag} refs/tags/v1.0.0 ${zero}\n`), 'tracker');
-  assert.equal(r.check(['--pre-push', 'origin'], `(delete) ${zero} refs/heads/old ${r.base}\n`).status, 0);
-});
-
-test('PR edited events check metadata and fork head commits without a shell', (t) => {
-  const r = repository(t);
-  const head = r.commit();
-  const event = { action: 'edited', pull_request: { title: 'fix: public behavior', body: '$(touch should-not-exist)', base: { sha: r.base }, head: { sha: head, ref: 'fix/public-behavior' } } };
-  const check = () => {
-    r.put('event.json', JSON.stringify(event));
-    return r.check(['--event', 'event.json'], undefined, { GITHUB_EVENT_NAME: 'pull_request' });
-  };
-  assert.equal(check().status, 0);
-  assert.equal(existsSync(join(r.cwd, 'should-not-exist')), false);
-  event.pull_request.title = ticket;
-  rejects(check(), 'tracker');
-  event.pull_request.title = 'fix: public behavior';
-  event.pull_request.body = ticket;
-  rejects(check(), 'tracker');
-  event.pull_request.body = null;
-  event.pull_request.head.ref = ['run', 'example'].join('/');
-  rejects(check(), 'branch');
-  event.pull_request.head.ref = 'fix/public-behavior';
-  event.pull_request.head.sha = r.commit(`fix: ${ticket}`);
-  rejects(check(), 'tracker');
-});
-
-test('push events use before/after rather than historical main commits', (t) => {
-  const r = repository(t);
-  const before = r.commit(`fix: ${ticket}`);
-  const after = r.commit();
-  r.put('event.json', JSON.stringify({ before, after, ref: 'refs/heads/main' }));
-  assert.equal(r.check(['--event', 'event.json'], undefined, { GITHUB_EVENT_NAME: 'push' }).status, 0);
-});
-
-test('missing, malformed, unresolved, and empty boundary inputs fail closed', (t) => {
-  const r = repository(t);
-  for (const args of [ ['--unknown'], ['--staged', 'extra'], ['--message-file'], ['--message-file', 'absent'], ['--event', 'absent'], ['--range', 'main'], ['--range', 'absent..HEAD'], ['--range', '..HEAD'], ['--pre-push', 'origin'] ]) {
-    rejects(r.check(args, ''), 'input|unavailable');
-  }
-  r.put('event.json', '{}');
-  rejects(r.check(['--event', 'event.json']), 'input');
-  r.put('event.json', '{');
-  rejects(r.check(['--event', 'event.json']), 'input');
-  rejects(r.check(['--pre-push', 'origin'], 'malformed\n'), 'input');
-  rejects(r.check(['--pre-push', 'origin'], `refs/heads/main invalid refs/heads/main ${r.base}\n`), 'input');
-  r.put('event.json', JSON.stringify({ before: zero, after: r.base, ref: 'refs/heads/main' }));
-  rejects(r.check(['--event', 'event.json'], undefined, { GITHUB_EVENT_NAME: 'push' }), 'input');
-  r.put('event.json', JSON.stringify({ pull_request: { title: 'fix: public', body: null, head: { sha: r.base, ref: 'main' } } }));
-  rejects(r.check(['--event', 'event.json'], undefined, { GITHUB_EVENT_NAME: 'pull_request' }), 'input');
-  r.git('update-ref', '-d', 'refs/remotes/origin/main');
-  rejects(r.check(['--pre-push', 'origin'], `refs/heads/main ${r.base} refs/heads/new ${zero}\n`), 'unavailable');
-});
-
-test('release preflight honors merged squash overrides without rewriting old commits', (t) => {
-  const r = repository(t);
-  r.git('tag', 'v1.0.0', r.base);
-  const head = r.commit(`feat: ${ticket}`);
-  r.put('bin/gh', `#!${process.execPath}\nconst { readFileSync } = require('node:fs');\nconst path = process.argv.at(-1);\nconst fixture = path.endsWith('/releases/latest') ? 'release.json' : 'pulls.json';\nprocess.stdout.write(readFileSync(fixture, 'utf8'));\n`);
-  chmodSync(join(r.cwd, 'bin/gh'), 0o755);
-  r.put('release.json', JSON.stringify([{ tag_name: 'v1.0.0' }]));
-  const pr = { title: 'feat: public behavior', body: 'BEGIN_COMMIT_OVERRIDE\nfeat: public behavior\nEND_COMMIT_OVERRIDE', merged_at: '2026-01-01T00:00:00Z', merge_commit_sha: head, head: { ref: ticket } };
-  function check() {
-    r.put('pulls.json', JSON.stringify([[pr]]));
-    return r.check(['--release-inputs'], undefined, {
-      GITHUB_REPOSITORY: 'example/product', GH_TOKEN: 'fixture-only',
-      PATH: `${join(r.cwd, 'bin')}:${process.env.PATH}`,
-    });
-  }
-  assert.equal(check().status, 0);
-  assert.ok(r.git('show', '-s', '--format=%B', head).includes(ticket));
-  pr.body = 'No override.';
-  rejects(check(), 'tracker');
-  pr.body = `BEGIN_COMMIT_OVERRIDE\nfeat: ${ticket}\nEND_COMMIT_OVERRIDE`;
-  rejects(check(), 'tracker');
-  pr.body = 'BEGIN_COMMIT_OVERRIDE\nfeat: public behavior';
-  rejects(check(), 'input');
-  pr.body = 'BEGIN_COMMIT_OVERRIDE\nfeat: public behavior\nEND_COMMIT_OVERRIDE';
-  pr.merge_commit_sha = r.base;
-  rejects(check(), 'tracker');
-  pr.merge_commit_sha = head;
-  pr.title = ticket;
-  rejects(check(), 'tracker');
-  pr.title = 'feat: public behavior';
-  r.put('release.json', JSON.stringify([{ tag_name: 'v9.0.0' }]));
-  rejects(check(), 'unavailable');
+test('unreadable input fails without printing its path', () => {
+  const path = `${script}/missing`;
+  const result = spawnSync(process.execPath, [script, path], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /publication:/);
+  assert.ok(!result.stderr.includes(path));
 });
