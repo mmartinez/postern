@@ -5,9 +5,11 @@ authentication explicitly with `proxy.client_auth: required`, then restart the
 server. Generated and existing configs otherwise keep authentication off; existing
 bootstrap workflows remain available. Enroll only into a writable, protected configuration. The launcher
 requires its recipient before mutation, keeps the key in memory, commits only the
-verifier and waits up to five seconds for the running server to accept the new
-key before starting the selected program without a shell. A failed confirmation
-leaves the verifier committed and does not launch the recipient or restore a
+verifier and waits up to ten seconds for the running server to accept the new
+key before starting the selected program without a shell. This budget covers the
+watcher’s five-second polling fallback, debounce, reload and confirmation request.
+A failed confirmation leaves the verifier committed and does not launch the
+recipient or restore a
 rotated key. Inspect safe reload diagnostics and re-enroll after correcting the
 server or trust configuration:
 

@@ -15,7 +15,9 @@ import (
 // waitForEnrollment confirms the live server accepts this exact incarnation.
 // Probes terminate locally at the proxy and never invoke routing or a resolver.
 func waitForEnrollment(ctx context.Context, endpoint *url.URL, name, key, caPath string) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// The watcher can take 5s to poll, then 100ms to debounce. Leave room
+	// for applying the snapshot and a bounded (1s) confirmation request.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil

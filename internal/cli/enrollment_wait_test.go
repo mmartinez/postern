@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mmartinez/postern/internal/config"
 	"github.com/mmartinez/postern/internal/identity"
@@ -65,4 +67,33 @@ func TestUnconfirmedEnrollmentDoesNotLaunchOrRollback(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, cfg.Agents, 1)
 	require.False(t, strings.Contains(launchErr.Error(), cfg.Agents[0].KeySHA256))
+}
+
+func TestEnrollmentWaitSurvivesFallbackReloadDelay(t *testing.T) {
+	t.Parallel()
+	key, _, err := identity.Generate()
+	require.NoError(t, err)
+	// The first probe starts the worst-case poll plus debounce delay, so
+	// setup/scheduling before that probe cannot make the old deadline pass.
+	ready := make(chan struct{})
+	var first sync.Once
+	var timer *time.Timer
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		first.Do(func() { timer = time.AfterFunc(5200*time.Millisecond, func() { close(ready) }) })
+		select {
+		case <-ready:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusProxyAuthRequired)
+		}
+	}))
+	defer func() {
+		server.Close()
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	require.NoError(t, waitForEnrollment(t.Context(), endpoint, "agent", key, ""))
 }
