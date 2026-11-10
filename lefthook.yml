@@ -37,13 +37,13 @@ pre-commit:
     banned-strings:
       run: bash scripts/check-banned-strings.sh {staged_files}
 
-    internal-refs:
-      # Maintainer-local de-jargon gate; not tracked in the repo, so skip when
-      # absent (e.g. a fresh clone) but propagate its exit when present.
-      run: if [ -f scripts/check-internal-refs.sh ]; then bash scripts/check-internal-refs.sh; fi
+    publication:
+      run: node scripts/check-publication.mjs --staged
 
 commit-msg:
   commands:
+    publication:
+      run: node scripts/check-publication.mjs --message-file "{1}"
     conventional:
       # Conventional Commits: type(scope?): subject.
       run: |
@@ -57,6 +57,10 @@ commit-msg:
 pre-push:
   parallel: false
   commands:
+    publication:
+      priority: 1
+      use_stdin: true
+      run: node scripts/check-publication.mjs --pre-push "{1}"
     full-lint:
       run: golangci-lint run ./...
     typecheck:

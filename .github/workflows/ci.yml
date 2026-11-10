@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -38,6 +39,22 @@ env:
   NODE_VERSION: "24.21.0"
 
 jobs:
+  publication:
+    name: publication
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: publication guard tests
+        run: node --test scripts/check-publication.test.mjs
+      - name: public content and metadata
+        run: node scripts/check-publication.mjs --event "$GITHUB_EVENT_PATH"
+
   # Decides which components a run has to cover. Go jobs are skipped only
   # when every changed file is under web/site/, and only on an explicit
   # "false": a failed classifier runs everything.
@@ -101,13 +118,6 @@ jobs:
           args: --timeout=5m
       - name: banned strings
         run: bash scripts/check-banned-strings.sh
-      - name: internal refs
-        run: |
-          if [ -f scripts/check-internal-refs.sh ]; then
-            bash scripts/check-internal-refs.sh
-          else
-            echo "::notice::internal-refs gate is maintainer-local tooling, not tracked in the repo; skipping"
-          fi
 
   typecheck:
     name: typecheck (go ${{ matrix.go }})
@@ -507,11 +517,13 @@ jobs:
   # cancelled one fails.
   ci-ok:
     if: ${{ always() }}
-    needs: [changes, lint, typecheck, test, test-macos, vuln, licenses, e2e, gitleaks, devcontainer-build, snapshot, site]
+    needs: [publication, changes, lint, typecheck, test, test-macos, vuln, licenses, e2e, gitleaks, devcontainer-build, snapshot, site]
     runs-on: ubuntu-latest
     steps:
       - env:
           RESULTS: ${{ toJSON(needs.*.result) }}
+          PUBLICATION_RESULT: ${{ needs.publication.result }}
         run: |
+          test "$PUBLICATION_RESULT" = success
           echo "$RESULTS"
           if echo "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then exit 1; fi
