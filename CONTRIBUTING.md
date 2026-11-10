@@ -106,6 +106,7 @@ make publication
 
 This runs the focused gate tests, then scans the tracked working tree and current branch name.
 Hooks also check staged content from the index, commit messages, and outgoing commits before a push.
+The publication push check also runs when the push has no file changes.
 The gate reports only the location and category of a finding, never the rejected text.
 If the filename itself contains rejected text, the diagnostic omits it.
 
