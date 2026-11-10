@@ -21,7 +21,9 @@ unknown names. Query parameters never authenticate. Proxy credentials are stripp
 before logging/forwarding; invalid authentication gets a generic 407 challenge.
 
 `proxy.client_auth: required|off` is bound at startup. Omission retains legacy
-`off`; new configs select `required`. Required mode with zero identities denies
+`off`; new configs also select `off` so activation remains opt-in. This
+compatibility default supersedes the original D3 new-config default. Operators
+explicitly select `required` and restart before enrollment. Required mode with zero identities denies
 all authentication; list length never enables/disables auth. Identities with
 effective off are invalid. Auth/listener edits are reported as requiring restart.
 

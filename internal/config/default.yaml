@@ -20,8 +20,9 @@ token:
   keychain_account: default
 
 proxy:
-  # Enroll each client with postern agent add NAME --exec PROGRAM [ARGS...].
-  client_auth: required
+  # Authentication is opt-in. Set required, restart, then enroll each client
+  # with postern agent add NAME --exec PROGRAM [ARGS...].
+  client_auth: off
   # host:port the proxy listens on. Set HTTPS_PROXY to this in your agent shell.
   listen: 127.0.0.1:1701
   # Credential cache. Resolution is a background concern: the request path reads

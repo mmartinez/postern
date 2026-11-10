@@ -2,7 +2,10 @@
 
 ## Named proxy clients
 
-New configs select `proxy.client_auth: required`; legacy omission means `off`.
+Client authentication is opt-in. New configs select `proxy.client_auth: off`;
+omission also means `off`. To enable named identities, set `required`, restart
+the server, then enroll clients. Enabling it intentionally rejects unauthenticated
+clients, including when no identities are enrolled.
 Required mode with no agents denies every request with 407. Identities with auth
 off are invalid. Names match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` and are unique and
 case-sensitive. Verifiers decode to exactly 32 bytes; duplicates are rejected.

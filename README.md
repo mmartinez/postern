@@ -129,16 +129,19 @@ postern token set --stdin # store your 1Password service-account token (legacy s
 # edit ~/.postern/config.yaml to add rules for the APIs your agent calls, then:
 postern server            # run the proxy
 
-# in another terminal, enroll and launch the selected agent:
-postern agent add worker --ca "$HOME/.postern/ca.pem" --exec YOUR_AGENT
+# in another terminal, configure your existing client shell:
+eval "$(postern bootstrap)"
+YOUR_AGENT
 ```
 
-New configs require a named proxy identity. The launcher keeps its key in memory
-and passes proxy/trust settings only to the selected child, including Node's
-`NODE_USE_ENV_PROXY=1`. Use `agent rotate` to replace a key and `agent remove` to
-revoke live access. See [Agent enrollment](docs/agents.md) for remote enrollment,
-supported clients and the TLS proxy hop. Legacy `bootstrap` snippets apply only
-to plaintext configurations with authentication off.
+Client authentication is opt-in: new and existing configs keep it off. To use
+named identities, set `proxy.client_auth: required`, restart the server, then run
+`postern agent add worker --ca "$HOME/.postern/ca.pem" --exec YOUR_AGENT`.
+The launcher confirms the server accepts the new key before starting the client,
+keeps the key in memory and passes proxy/trust settings only to the selected child.
+Use `agent rotate` to replace a key and `agent remove` to revoke live access.
+See [Agent enrollment](docs/agents.md) for enrollment, supported clients and TLS.
+`bootstrap` remains available for plaintext configurations with authentication off.
 
 On macOS, `postern ca install` triggers an authorization prompt and trusts the
 CA in your user login keychain — no `sudo`. `postern ca uninstall` revokes the

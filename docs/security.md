@@ -2,6 +2,11 @@
 
 ## Proxy identity boundary
 
+Client authentication is opt-in. Both generated configurations and omitted
+`proxy.client_auth` keep it off for compatibility; that mode provides no
+authenticated-agent guarantee. Set `required` explicitly and restart to activate
+the identity boundary below.
+
 Agent proxy keys grant agent identity, never operator access or vault credentials.
 Only `agents[].key_sha256` and hash-only enrollment artifacts may persist identity
 verifiers: this is the narrow exception to the ban on credential hashes in files.
