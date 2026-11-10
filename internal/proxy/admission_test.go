@@ -3,9 +3,11 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/elazarl/goproxy"
@@ -35,4 +37,23 @@ func TestLateUpstreamAcquisitionIsClosedAfterRevocation(t *testing.T) {
 	slot.attach(client)
 	_, err := server.Write([]byte("data"))
 	require.Error(t, err)
+}
+
+func TestAdmissionBodyPreservesScrubbingEligibility(t *testing.T) {
+	t.Parallel()
+	body := &admissionBody{ReadCloser: io.NopCloser(strings.NewReader("response")), release: func() {}}
+	defer func() { _ = body.Close() }()
+	require.True(t, bodyIsScrubbable(&http.Response{Body: body, StatusCode: http.StatusOK, Request: httptest.NewRequest(http.MethodGet, "http://example.test", nil)}))
+}
+
+func TestAdmissionBodyPreservesWritableUpgrade(t *testing.T) {
+	t.Parallel()
+	client, server := net.Pipe()
+	defer func() { _ = server.Close() }()
+	released := false
+	body := wrapAdmissionBody(client, func() { released = true })
+	_, writable := body.(io.ReadWriter)
+	require.True(t, writable, "upgrade lost duplex interface")
+	require.NoError(t, body.Close())
+	require.True(t, released, "upgrade close did not release admission")
 }

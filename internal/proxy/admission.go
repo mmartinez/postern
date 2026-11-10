@@ -49,11 +49,19 @@ func (b *admissionBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
-func (b *admissionBody) Write(p []byte) (int, error) {
-	if w, ok := b.ReadCloser.(io.Writer); ok {
-		return w.Write(p)
+// admissionDuplexBody preserves writable upgrade streams without making ordinary
+// response bodies look like tunnels to the credential scrubber.
+type admissionDuplexBody struct {
+	*admissionBody
+	io.Writer
+}
+
+func wrapAdmissionBody(body io.ReadCloser, release func()) io.ReadCloser {
+	wrapped := &admissionBody{ReadCloser: body, release: release}
+	if writer, ok := body.(io.Writer); ok {
+		return &admissionDuplexBody{admissionBody: wrapped, Writer: writer}
 	}
-	return 0, errors.New("upstream response is not writable")
+	return wrapped
 }
 
 type admissionConn struct {
@@ -93,7 +101,7 @@ func installAdmission(gp *goproxy.ProxyHttpServer, auth Authenticator) {
 				return nil, err
 			}
 			slot.attach(resp.Body)
-			resp.Body = &admissionBody{ReadCloser: resp.Body, release: release}
+			resp.Body = wrapAdmissionBody(resp.Body, release)
 			return resp, nil
 		})
 		return req, nil

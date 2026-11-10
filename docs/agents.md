@@ -1,9 +1,15 @@
 # Agent enrollment and launch
 
 Start from `postern config init`, install the proxy CA, and enable required client
-authentication. Enroll only into a writable, protected configuration. The launcher
+authentication explicitly with `proxy.client_auth: required`, then restart the
+server. Generated and existing configs otherwise keep authentication off; existing
+bootstrap workflows remain available. Enroll only into a writable, protected configuration. The launcher
 requires its recipient before mutation, keeps the key in memory, commits only the
-verifier and starts the selected program without a shell:
+verifier and waits up to five seconds for the running server to accept the new
+key before starting the selected program without a shell. A failed confirmation
+leaves the verifier committed and does not launch the recipient or restore a
+rotated key. Inspect safe reload diagnostics and re-enroll after correcting the
+server or trust configuration:
 
 ```sh
 postern agent add worker --ca /trusted/postern-ca.pem --exec PROGRAM ARGUMENTS
@@ -82,3 +88,9 @@ CLI fixtures use nonpersistent sessions and a local mock endpoint. Codex's
 [noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode) and
 [endpoint override](https://learn.chatgpt.com/docs/config-file/config-advanced)
 settings were checked against official documentation and the installed CLI.
+
+Live enrollment uses an authenticated, origin-form `OPTIONS
+/.well-known/postern/client-auth` probe on the proxy listener. It returns 204 only
+after authentication and lifecycle admission, without invoking policy, credential
+resolution or upstream dialing. Redirects are never followed. Remote artifact
+issuance deliberately skips this wait because operator installation happens later.

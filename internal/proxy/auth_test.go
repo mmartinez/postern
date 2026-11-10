@@ -3,6 +3,7 @@ package proxy_test
 import (
 	"bytes"
 	"encoding/base64"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -70,4 +71,72 @@ func TestProxyAuthenticationBeforeAllExecution(t *testing.T) {
 	require.True(t, strings.Contains(logs.String(), `"agent":"agent"`), "validated agent missing from logs")
 	require.False(t, strings.Contains(logs.String(), key), "log exposed proxy key")
 	require.False(t, strings.Contains(logs.String(), verifier), "log exposed verifier")
+}
+
+func TestAuthenticatedResponseScrubsCredentialEcho(t *testing.T) {
+	t.Parallel()
+	key, verifier, err := identity.Generate()
+	require.NoError(t, err)
+	secret, _, err := identity.Generate()
+	require.NoError(t, err)
+	engine := broker.NewEngine(nil)
+	require.NoError(t, engine.Publish(nil, []config.Agent{{Name: "agent", KeySHA256: verifier}}))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("compressed") {
+			w.Header().Set("Content-Encoding", "br")
+		}
+		_, _ = io.WriteString(w, secret)
+	}))
+	defer upstream.Close()
+	root := fixtureCA(t)
+	p, err := proxy.New(proxy.Config{
+		CA: root, Minter: fixtureMinter(t, root), Authenticator: engine,
+		PreUpstreamHandler: func(r *http.Request) *http.Response {
+			*r = *r.WithContext(broker.WithInjectedCredentials(r.Context(), secret))
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, upstream.URL, nil)
+	req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("agent:"+key)))
+	recorder := httptest.NewRecorder()
+	p.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.False(t, strings.Contains(recorder.Body.String(), secret), "response exposed injected credential")
+	require.Contains(t, recorder.Body.String(), "<redacted>")
+	req = httptest.NewRequest(http.MethodGet, upstream.URL+"?compressed", nil)
+	req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("agent:"+key)))
+	recorder = httptest.NewRecorder()
+	p.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusBadGateway, recorder.Code)
+	require.False(t, strings.Contains(recorder.Body.String(), secret), "compressed response exposed injected credential")
+}
+
+func TestEnrollmentProbeRequiresAuthenticationAndBypassesRouting(t *testing.T) {
+	t.Parallel()
+	key, verifier, err := identity.Generate()
+	require.NoError(t, err)
+	engine := broker.NewEngine(nil)
+	require.NoError(t, engine.Publish(nil, []config.Agent{{Name: "agent", KeySHA256: verifier}}))
+	root := fixtureCA(t)
+	var hooks atomic.Int32
+	p, err := proxy.New(proxy.Config{
+		CA: root, Minter: fixtureMinter(t, root), Authenticator: engine,
+		PreUpstreamHandler: func(_ *http.Request) *http.Response { hooks.Add(1); return nil },
+	})
+	require.NoError(t, err)
+	for _, authenticated := range []bool{false, true} {
+		req := httptest.NewRequest(http.MethodOptions, "/.well-known/postern/client-auth", nil)
+		if authenticated {
+			req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("agent:"+key)))
+		}
+		recorder := httptest.NewRecorder()
+		p.Handler().ServeHTTP(recorder, req)
+		expected := http.StatusProxyAuthRequired
+		if authenticated {
+			expected = http.StatusNoContent
+		}
+		require.Equal(t, expected, recorder.Code)
+	}
+	require.Zero(t, hooks.Load())
 }

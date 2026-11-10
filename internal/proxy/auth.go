@@ -89,6 +89,10 @@ func (p *Proxy) serveHTTP(w http.ResponseWriter, req *http.Request) {
 		defer release()
 	}
 	ctx = identity.WithPrincipal(ctx, principal)
+	if req.Method == http.MethodOptions && req.URL.Host == "" && req.URL.Path == "/.well-known/postern/client-auth" && req.URL.RawQuery == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	p.server.ServeHTTP(w, req.WithContext(ctx))
 }
 

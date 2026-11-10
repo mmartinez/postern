@@ -122,6 +122,11 @@ func runAgent(cmd *cobra.Command, action string, args []string) error {
 	} else if err := editAgentConfig(path, action, agent); err != nil {
 		return err
 	}
+	if out == "" {
+		if err := waitForEnrollment(cmd.Context(), u, name, key, caPath); err != nil {
+			return fmt.Errorf("agent %s: %w", name, err)
+		}
+	}
 	u.User = url.UserPassword(name, key)
 	child := exec.CommandContext(cmd.Context(), recipient[0], recipient[1:]...) //nolint:gosec // explicitly selected recipient, never a shell
 	child.Env = launcherEnv(os.Environ(), u.String())

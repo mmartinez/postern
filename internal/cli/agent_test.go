@@ -3,13 +3,17 @@ package cli
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -57,6 +61,8 @@ func TestAgentChild(_ *testing.T) {
 }
 
 func TestAgentLauncherLifecycle(t *testing.T) {
+	var probes atomic.Int32
+
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("# operator comment\nproxy:\n  listen: 127.0.0.1:1701\n  cache_ttl: 1h\n  client_auth: required\n"), 0o600))
 	t.Setenv("POSTERN_LAUNCHER_TEST", "1")
@@ -74,11 +80,14 @@ func TestAgentLauncherLifecycle(t *testing.T) {
 		require.False(t, strings.Contains(output.String(), "pst_"), "key appeared in command output")
 		return output.String()
 	}
-	run("add", "agent", "--config", path, "--exec", executable, "-test.run=^TestAgentChild$")
+	proxy := enrollmentTestServer(t, path, &probes)
+	defer proxy.Close()
+	run("add", "agent", "--config", path, "--proxy", proxy.URL, "--exec", executable, "-test.run=^TestAgentChild$")
+	require.GreaterOrEqual(t, probes.Load(), int32(2), "client launched before server confirmed enrollment")
 	before, err := config.LoadForCLI(path, true)
 	require.NoError(t, err)
 	require.Equal(t, "agent\n", run("list", "--config", path))
-	run("rotate", "agent", "--config", path, "--exec", executable, "-test.run=^TestAgentChild$")
+	run("rotate", "agent", "--config", path, "--proxy", proxy.URL, "--exec", executable, "-test.run=^TestAgentChild$")
 	after, err := config.LoadForCLI(path, true)
 	require.NoError(t, err)
 	require.True(t, before.Agents[0].KeySHA256 != after.Agents[0].KeySHA256, "rotation did not replace verifier")
@@ -121,7 +130,10 @@ func TestAgentLaunchFailureRetainsEnrollment(t *testing.T) {
 	cmd := NewAgentCmd()
 	cmd.SetOut(&output)
 	cmd.SetErr(&output)
-	cmd.SetArgs([]string{"add", "agent", "--config", path, "--exec", filepath.Join(t.TempDir(), "missing")})
+	var probes atomic.Int32
+	proxy := enrollmentTestServer(t, path, &probes)
+	defer proxy.Close()
+	cmd.SetArgs([]string{"add", "agent", "--config", path, "--proxy", proxy.URL, "--exec", filepath.Join(t.TempDir(), "missing")})
 	err := cmd.Execute()
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "pst_")
@@ -134,4 +146,37 @@ func TestAgentLaunchFailureRetainsEnrollment(t *testing.T) {
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "# operator comment")
+}
+
+func enrollmentTestServer(t *testing.T, path string, probes *atomic.Int32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if probes.Add(1) == 1 {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		if r.Method != http.MethodOptions || r.URL.Path != "/.well-known/postern/client-auth" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(r.Header.Get("Proxy-Authorization"), "Basic "))
+		if err != nil {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		name, key, ok := strings.Cut(string(raw), ":")
+		cfg, err := config.LoadForCLI(path, true)
+		if err != nil || !ok {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		digest := sha256.Sum256([]byte(key))
+		for _, agent := range cfg.Agents {
+			if agent.Name == name && agent.KeySHA256 == hex.EncodeToString(digest[:]) {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusProxyAuthRequired)
+	}))
 }
