@@ -71,7 +71,7 @@ licenses: ## Regenerate THIRD_PARTY_NOTICES.md from current go.sum.
 .PHONY: publication
 publication: ## Check public content and publication guard behavior.
 	$(RUN) node --test scripts/check-publication.test.mjs
-	$(RUN) node scripts/check-publication.mjs
+	$(RUN) bash -o pipefail -c 'git grep --cached -I -h --no-color -e "" | node scripts/check-publication.mjs'
 
 .PHONY: ci
 ci: publication lint test vuln licenses ## Run the full CI pipeline locally.
