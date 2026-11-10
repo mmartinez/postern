@@ -11,10 +11,7 @@ import (
 	"github.com/mmartinez/postern/internal/version"
 )
 
-// providerName is the human-readable identifier the credstore registry
-// surfaces in config and logs. It is intentionally lowercase and brand-
-// neutral in the source line that registers it so banned-strings gating
-// elsewhere in the tree does not need to be revisited.
+// providerName identifies the provider in config and logs.
 const (
 	providerName   = "1password"
 	providerScheme = "op"

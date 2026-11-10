@@ -49,14 +49,38 @@ concurrency:
 
 env:
   GO_VERSION: "1.27.3"
+  NODE_VERSION: "24.21.0"
   # Kept in lockstep with .github/workflows/ci.yml and .mise.toml.
   GORELEASER_VERSION: "v2.18.2"
   ZIG_VERSION: "0.14.0"
   ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
 
 jobs:
+  publication:
+    name: publication
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: public release inputs
+        run: node scripts/check-publication.mjs --event "$GITHUB_EVENT_PATH"
+      - name: effective release messages
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-publication.mjs --release-inputs
+
   release-please:
     name: release-please
+    needs: publication
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

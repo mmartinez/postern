@@ -68,8 +68,13 @@ vuln: ## Run govulncheck against all packages.
 licenses: ## Regenerate THIRD_PARTY_NOTICES.md from current go.sum.
 	$(RUN) bash scripts/gen-third-party-notices.sh
 
+.PHONY: publication
+publication: ## Check public content and publication guard behavior.
+	$(RUN) node --test scripts/check-publication.test.mjs
+	$(RUN) node scripts/check-publication.mjs
+
 .PHONY: ci
-ci: lint test vuln licenses ## Run the full CI pipeline locally.
+ci: publication lint test vuln licenses ## Run the full CI pipeline locally.
 
 # Web components. One target set per component; the app gets app-* targets
 # when it exists.
