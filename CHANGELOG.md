@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/mmartinez/postern/compare/v0.12.0...v0.13.0) (2026-11-10)
+
+
+### Features
+
+* **identity:** authenticate proxy clients and revoke live access (STA-53) ([#148](https://github.com/mmartinez/postern/issues/148)) ([a31f993](https://github.com/mmartinez/postern/commit/a31f9931119ecd84a46ee823d8a0db279d735983))
+
 ## [0.12.0](https://github.com/mmartinez/postern/compare/v0.11.1...v0.12.0) (2026-11-08)
 
 
