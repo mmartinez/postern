@@ -8,6 +8,19 @@ coverage.html
 PRD-*.md
 SPEC.md
 tasks/
+docs/proposals.md
+postern-roadmap.html
+
+# Local contributor instructions and settings are not build inputs.
+AGENTS.md
+CLAUDE.md
+.omp/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 
 # Editor / OS noise
 .DS_Store
@@ -23,7 +36,5 @@ web/
 .env
 .env.*
 
-# The git directory is large and not needed for the production image; keep
-# .gitignore visible for tooling that needs it.
-.git/objects
-.git/lfs
+# Repository metadata and local Git configuration are not build inputs.
+.git

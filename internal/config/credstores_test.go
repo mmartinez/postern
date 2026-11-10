@@ -11,8 +11,8 @@ import (
 
 // Fixtures below use `provider: op` purely because the validator
 // intentionally does NOT check provider names against the credstore
-// registry (config cannot import credstore — see the import-cycle note
-// in MEMORY.md). Any non-empty string passes; "op" is convenient.
+// registry, which would create an import cycle.
+// Any non-empty string passes; "op" is convenient.
 // Production configs need the registered Provider.Name(); see
 // docs/providers.md for a worked example.
 
