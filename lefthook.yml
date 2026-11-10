@@ -56,11 +56,12 @@ commit-msg:
 
 pre-push:
   parallel: false
-  commands:
-    publication:
+  scripts:
+    publication.sh:
+      runner: sh
       priority: 1
       use_stdin: true
-      run: node scripts/check-publication.mjs --pre-push "{1}"
+  commands:
     full-lint:
       run: golangci-lint run ./...
     typecheck:
