@@ -2,12 +2,8 @@
 PRD-*.md
 SPEC.md
 tasks/
-
-# Maintainer-local de-jargon gate — kept out of the repo because it enumerates
-# the internal planning-doc names it guards against. Runs locally via lefthook;
-# CI and the hook skip it when absent.
-scripts/check-internal-refs.sh
-scripts/internal-refs-allowlist.txt
+/docs/proposals.md
+/postern-roadmap.html
 
 # Go build output
 /postern
@@ -20,14 +16,19 @@ coverage.html
 # Go tooling
 vendor/
 
-# Editor / OS / agent-tooling noise
+# Local contributor, editor, and OS files
+/AGENTS.md
+/CLAUDE.md
+/.omp/
 .DS_Store
 .idea/
 .vscode/
 .claude/*
-!.claude/settings.json
 !.claude/skills/
 !.claude/skills/**
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 *.swp
 *.swo
 

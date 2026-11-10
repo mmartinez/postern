@@ -4,6 +4,8 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
   "include-component-in-tag": false,
+  "pull-request-header": "Release changes.",
+  "pull-request-footer": "See CHANGELOG.md for release history.",
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
     { "type": "feature", "section": "Features" },
